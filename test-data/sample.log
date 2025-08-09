@@ -1,0 +1,10 @@
+2025-01-08 10:15:23 [INFO] Server startup complete
+2025-01-08 10:15:24 [DEBUG] Loading configuration from /etc/config
+2025-01-08 10:15:25 [ERROR] Database connection failed for user_id=1234
+2025-01-08 10:15:26 [INFO] Retrying connection from 192.168.1.10
+2025-01-08 10:15:27 [WARN] Authentication failed for user john@company.com
+2025-01-08 10:15:28 [DEBUG] Trace: method_call(param1, param2)
+2025-01-08 10:15:29 [ERROR] Permission denied for user_id=5678
+2025-01-08 10:15:30 [INFO] Connection established from 192.168.1.15
+2025-01-08 10:15:31 [INFO] User login successful: alice@company.com
+2025-01-08 10:15:32 [DEBUG] Session created with ID: abc123def456

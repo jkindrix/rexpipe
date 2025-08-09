@@ -1,0 +1,48 @@
+name = "Customer Data ETL Pipeline"
+description = "Standardizes and anonymizes customer records for data warehouse"
+version = "1.2.0"
+
+[[step]]
+type = "substitute"
+description = "Normalize phone numbers to (XXX) XXX-XXXX format"
+pattern = '(\d{3})[\s.-]?(\d{3})[\s.-]?(\d{4})'
+replacement = '(${1}) ${2}-${3}'
+flags = ["global"]
+enabled = true
+
+[[step]]
+type = "substitute"
+description = "Standardize email addresses to lowercase"
+pattern = '([A-Z0-9._%+-]+)@([A-Z0-9.-]+\.[A-Z]{2,})'
+replacement = '${1}@${2}'
+flags = ["global", "case_insensitive"]
+enabled = true
+
+[[step]]
+type = "substitute"
+description = "Format currency amounts"
+pattern = '\$(\d+)\.(\d{2})'
+replacement = '$${1}.${2}'
+flags = ["global"]
+enabled = true
+
+[[step]]
+type = "filter"
+description = "Remove rows with missing essential data"
+pattern = '^[^,]*,[^,]*,[^,]*$'
+action = "drop_line"
+enabled = true
+
+[[step]]
+type = "substitute"
+description = "Normalize state abbreviations"
+pattern = 'California|CA|Calif\.'
+replacement = 'CA'
+flags = ["global", "case_insensitive"]
+enabled = true
+
+[[step]]
+type = "validate"
+description = "Ensure all records have valid format"
+pattern = '^[^,]+,[^,]+@[^,]+\.[^,]+,\(\d{3}\) \d{3}-\d{4}'
+enabled = true

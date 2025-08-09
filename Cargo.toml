@@ -1,0 +1,35 @@
+[package]
+name = "rexpipe"
+version = "1.0.0"
+edition = "2021"
+authors = ["Strategic Collaboration Agent"]
+description = "Unified regex pipeline processor with COMPASS framework integration"
+license = "MIT"
+homepage = "https://github.com/example/rexpipe"
+repository = "https://github.com/example/rexpipe"
+keywords = ["regex", "pipeline", "text-processing", "streaming", "compass"]
+categories = ["command-line-utilities", "text-processing"]
+
+[dependencies]
+clap = { version = "4.0", features = ["derive"] }
+regex = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+toml = "0.8"
+termcolor = "1.0"
+tokio = { version = "1.0", features = ["full"], optional = true }
+
+[dev-dependencies]
+tempfile = "3.0"
+criterion = "0.5"
+
+[features]
+default = []
+async = ["tokio"]
+
+[[bin]]
+name = "rexpipe"
+path = "src/main.rs"
+
+[[bench]]
+name = "processing_benchmark"
+harness = false

@@ -1,0 +1,48 @@
+name = "Log Cleanup Pipeline"
+description = "Standardizes and sanitizes server logs"
+version = "1.0.0"
+
+[[step]]
+type = "substitute"
+description = "Normalize error levels"
+pattern = '\[ERROR\]'
+replacement = '[ERR]'
+flags = ["global"]
+enabled = true
+
+[[step]]
+type = "filter"
+description = "Remove debug messages"
+pattern = 'DEBUG'
+action = "drop_line"
+enabled = true
+
+[[step]]
+type = "substitute"
+description = "Standardize user ID format"
+pattern = 'user_id=(\d+)'
+replacement = 'uid=${1}'
+flags = ["global"]
+enabled = true
+
+[[step]]
+type = "substitute" 
+description = "Anonymize IP addresses"
+pattern = '192\.168\.'
+replacement = '10.0.'
+flags = ["global"]
+enabled = true
+
+[[step]]
+type = "substitute"
+description = "Replace company domain"
+pattern = '@company\.com'
+replacement = '@domain.com'
+flags = ["global"]
+enabled = true
+
+[[step]]
+type = "validate"
+description = "Ensure all lines have timestamps"
+pattern = '^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}'
+enabled = false
