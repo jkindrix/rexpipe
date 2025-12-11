@@ -1,5 +1,5 @@
 use rexpipe::compass::CompassAgent;
-use rexpipe::pipeline::{PipelineConfig, PipelineStep, StepType, FilterAction, RegexFlag};
+use rexpipe::pipeline::{PipelineConfig, PipelineSettings, PipelineStep, StepType, FilterAction, RegexFlag};
 use rexpipe::processor::StreamProcessor;
 use rexpipe::inspector::{Inspector, InspectorOptions};
 use std::io::Cursor;
@@ -44,6 +44,7 @@ fn test_end_to_end_log_processing() {
         name: Some("Integration Test".to_string()),
         description: None,
         version: None,
+        settings: PipelineSettings::default(),
         step: vec![
             PipelineStep {
                 step_type: StepType::Substitute,
@@ -152,6 +153,7 @@ another DEBUG to drop"#;
         name: Some("Filter Test".to_string()),
         description: None,
         version: None,
+        settings: PipelineSettings::default(),
         step: vec![
             PipelineStep {
                 step_type: StepType::Filter,
@@ -207,6 +209,7 @@ Invalid line without timestamp
         name: Some("Validation Test".to_string()),
         description: None,
         version: None,
+        settings: PipelineSettings::default(),
         step: vec![
             PipelineStep {
                 step_type: StepType::Validate,
@@ -245,6 +248,7 @@ fn test_extract_step_type() {
         name: Some("Extract Test".to_string()),
         description: None,
         version: None,
+        settings: PipelineSettings::default(),
         step: vec![
             PipelineStep {
                 step_type: StepType::Extract,
@@ -277,6 +281,7 @@ fn test_error_handling() {
         name: Some("Error Test".to_string()),
         description: None,
         version: None,
+        settings: PipelineSettings::default(),
         step: vec![
             PipelineStep {
                 step_type: StepType::Substitute,
@@ -302,6 +307,7 @@ fn test_disabled_steps() {
         name: Some("Disabled Step Test".to_string()),
         description: None,
         version: None,
+        settings: PipelineSettings::default(),
         step: vec![
             PipelineStep {
                 step_type: StepType::Substitute,

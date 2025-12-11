@@ -1,8 +1,11 @@
-use crate::pipeline::{PipelineConfig, StepType, FilterAction, RegexFlag, PipelineResult, StepResult, PipelineError, ErrorType};
+use crate::pipeline::{PipelineConfig, PipelineSettings, StepType, FilterAction, RegexFlag, PipelineResult, StepResult, PipelineError, ErrorType};
 use regex::{Regex, RegexBuilder};
 use std::io::{BufRead, Write};
 use std::collections::HashMap;
 use std::time::Instant;
+
+#[cfg(feature = "pcre")]
+use fancy_regex::Regex as FancyRegex;
 
 pub struct StreamProcessor {
     config: PipelineConfig,
@@ -10,12 +13,130 @@ pub struct StreamProcessor {
     stats: ProcessorStats,
 }
 
+/// Abstraction over different regex engines
+#[derive(Clone)]
+pub enum CompiledPattern {
+    /// Standard Rust regex (fast, but no lookahead/lookbehind)
+    Standard(Regex),
+    /// Fixed string matching (fastest, no regex interpretation)
+    Fixed(String),
+    /// PCRE-compatible regex via fancy-regex (supports lookahead/lookbehind)
+    #[cfg(feature = "pcre")]
+    Pcre(FancyRegex),
+}
+
+impl std::fmt::Debug for CompiledPattern {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CompiledPattern::Standard(re) => write!(f, "Standard({})", re.as_str()),
+            CompiledPattern::Fixed(s) => write!(f, "Fixed({})", s),
+            #[cfg(feature = "pcre")]
+            CompiledPattern::Pcre(re) => write!(f, "Pcre({})", re.as_str()),
+        }
+    }
+}
+
+impl CompiledPattern {
+    pub fn is_match(&self, text: &str) -> bool {
+        match self {
+            CompiledPattern::Standard(re) => re.is_match(text),
+            CompiledPattern::Fixed(s) => text.contains(s),
+            #[cfg(feature = "pcre")]
+            CompiledPattern::Pcre(re) => re.is_match(text).unwrap_or(false),
+        }
+    }
+
+    pub fn replace_all(&self, text: &str, replacement: &str) -> String {
+        match self {
+            CompiledPattern::Standard(re) => re.replace_all(text, replacement).to_string(),
+            CompiledPattern::Fixed(s) => text.replace(s, replacement),
+            #[cfg(feature = "pcre")]
+            CompiledPattern::Pcre(re) => re.replace_all(text, replacement).to_string(),
+        }
+    }
+
+    pub fn replace(&self, text: &str, replacement: &str) -> String {
+        match self {
+            CompiledPattern::Standard(re) => re.replace(text, replacement).to_string(),
+            CompiledPattern::Fixed(s) => text.replacen(s, replacement, 1),
+            #[cfg(feature = "pcre")]
+            CompiledPattern::Pcre(re) => re.replace(text, replacement).to_string(),
+        }
+    }
+
+    pub fn find_iter<'a>(&'a self, text: &'a str) -> Vec<(usize, usize, String)> {
+        match self {
+            CompiledPattern::Standard(re) => {
+                re.find_iter(text)
+                    .map(|m| (m.start(), m.end(), m.as_str().to_string()))
+                    .collect()
+            }
+            CompiledPattern::Fixed(s) => {
+                text.match_indices(s)
+                    .map(|(start, matched)| (start, start + matched.len(), matched.to_string()))
+                    .collect()
+            }
+            #[cfg(feature = "pcre")]
+            CompiledPattern::Pcre(re) => {
+                re.find_iter(text)
+                    .filter_map(|m| m.ok())
+                    .map(|m| (m.start(), m.end(), m.as_str().to_string()))
+                    .collect()
+            }
+        }
+    }
+
+    pub fn captures_iter<'a>(&'a self, text: &'a str) -> Vec<CaptureGroup> {
+        match self {
+            CompiledPattern::Standard(re) => {
+                re.captures_iter(text)
+                    .map(|caps| {
+                        let groups: Vec<Option<String>> = (0..caps.len())
+                            .map(|i| caps.get(i).map(|m| m.as_str().to_string()))
+                            .collect();
+                        let full_match = caps.get(0).map(|m| (m.start(), m.end(), m.as_str().to_string()));
+                        CaptureGroup { groups, full_match }
+                    })
+                    .collect()
+            }
+            CompiledPattern::Fixed(s) => {
+                text.match_indices(s)
+                    .map(|(start, matched)| CaptureGroup {
+                        groups: vec![Some(matched.to_string())],
+                        full_match: Some((start, start + matched.len(), matched.to_string())),
+                    })
+                    .collect()
+            }
+            #[cfg(feature = "pcre")]
+            CompiledPattern::Pcre(re) => {
+                re.captures_iter(text)
+                    .filter_map(|caps| caps.ok())
+                    .map(|caps| {
+                        let groups: Vec<Option<String>> = (0..caps.len())
+                            .map(|i| caps.get(i).map(|m| m.as_str().to_string()))
+                            .collect();
+                        let full_match = caps.get(0).map(|m| (m.start(), m.end(), m.as_str().to_string()));
+                        CaptureGroup { groups, full_match }
+                    })
+                    .collect()
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct CaptureGroup {
+    pub groups: Vec<Option<String>>,
+    pub full_match: Option<(usize, usize, String)>,
+}
+
 struct CompiledStep {
     step_index: usize,
-    regex: Regex,
+    pattern: CompiledPattern,
     replacement: Option<String>,
     action: Option<FilterAction>,
     step_type: StepType,
+    is_global: bool,
 }
 
 #[derive(Debug, Default)]
@@ -43,7 +164,7 @@ impl StreamProcessor {
         }
 
         let compiled_steps = Self::compile_steps(&config)?;
-        
+
         Ok(Self {
             config,
             compiled_steps,
@@ -53,27 +174,59 @@ impl StreamProcessor {
 
     fn compile_steps(config: &PipelineConfig) -> Result<Vec<CompiledStep>, Box<dyn std::error::Error>> {
         let mut compiled_steps = Vec::new();
+        let settings = &config.settings;
 
         for (index, step) in config.enabled_steps().enumerate() {
-            let regex = Self::build_regex(&step.pattern, &step.flags)?;
-            
+            let is_global = step.flags.as_ref()
+                .map(|f| f.iter().any(|flag| matches!(flag, RegexFlag::Global)))
+                .unwrap_or(false);
+
+            let pattern = Self::build_pattern(&step.pattern, &step.flags, settings)?;
             let replacement = step.replacement.clone();
 
             compiled_steps.push(CompiledStep {
                 step_index: index,
-                regex,
+                pattern,
                 replacement,
                 action: step.action.clone(),
                 step_type: step.step_type.clone(),
+                is_global,
             });
         }
 
         Ok(compiled_steps)
     }
 
+    fn build_pattern(
+        pattern: &str,
+        flags: &Option<Vec<RegexFlag>>,
+        settings: &PipelineSettings,
+    ) -> Result<CompiledPattern, Box<dyn std::error::Error>> {
+        // Fixed string mode - no regex interpretation
+        if settings.fixed_strings {
+            return Ok(CompiledPattern::Fixed(pattern.to_string()));
+        }
+
+        // PCRE mode - use fancy-regex for advanced features
+        #[cfg(feature = "pcre")]
+        if settings.pcre_mode {
+            let re = FancyRegex::new(pattern)?;
+            return Ok(CompiledPattern::Pcre(re));
+        }
+
+        #[cfg(not(feature = "pcre"))]
+        if settings.pcre_mode {
+            return Err("PCRE mode requested but the 'pcre' feature is not enabled. Rebuild with --features pcre".into());
+        }
+
+        // Standard regex mode
+        let regex = Self::build_regex(pattern, flags)?;
+        Ok(CompiledPattern::Standard(regex))
+    }
+
     fn build_regex(pattern: &str, flags: &Option<Vec<RegexFlag>>) -> Result<Regex, regex::Error> {
         let mut builder = RegexBuilder::new(pattern);
-        
+
         if let Some(flags) = flags {
             for flag in flags {
                 match flag {
@@ -135,7 +288,7 @@ impl StreamProcessor {
             let mut step_result = StepResult::new(
                 compiled_step.step_index,
                 compiled_step.step_type.clone(),
-                format!("{:?}", compiled_step.regex),
+                format!("{:?}", compiled_step.pattern),
             );
 
             match compiled_step.step_type {
@@ -143,19 +296,20 @@ impl StreamProcessor {
                     if let Some(ref replacement) = compiled_step.replacement {
                         let original = current_line.clone();
                         current_line = self.apply_substitution(
-                            &compiled_step.regex,
+                            &compiled_step.pattern,
                             &current_line,
                             replacement,
+                            compiled_step.is_global,
                             &mut step_result,
                         )?;
-                        
+
                         if current_line != original {
                             step_result.add_transformation();
                         }
                     }
                 }
                 StepType::Filter => {
-                    let matches = compiled_step.regex.is_match(&current_line);
+                    let matches = compiled_step.pattern.is_match(&current_line);
                     if matches {
                         step_result.add_match();
                     }
@@ -175,16 +329,17 @@ impl StreamProcessor {
                 }
                 StepType::Extract => {
                     // Extract matched content only
-                    if let Some(caps) = compiled_step.regex.captures(&current_line) {
-                        if let Some(mat) = caps.get(0) {
-                            current_line = mat.as_str().to_string();
+                    let captures = compiled_step.pattern.captures_iter(&current_line);
+                    if let Some(cap) = captures.first() {
+                        if let Some((_, _, matched)) = &cap.full_match {
+                            current_line = matched.clone();
                             step_result.add_match();
                             step_result.add_transformation();
                         }
                     }
                 }
                 StepType::Validate => {
-                    let is_valid = compiled_step.regex.is_match(&current_line);
+                    let is_valid = compiled_step.pattern.is_match(&current_line);
                     if !is_valid {
                         result.add_error(PipelineError::new(
                             compiled_step.step_index,
@@ -199,7 +354,7 @@ impl StreamProcessor {
                 StepType::Transform => {
                     // Custom transformation logic would go here
                     // For now, just check if pattern matches
-                    if compiled_step.regex.is_match(&current_line) {
+                    if compiled_step.pattern.is_match(&current_line) {
                         step_result.add_match();
                     }
                 }
@@ -220,14 +375,19 @@ impl StreamProcessor {
 
     fn apply_substitution(
         &self,
-        regex: &Regex,
+        pattern: &CompiledPattern,
         input: &str,
         replacement: &str,
+        is_global: bool,
         step_result: &mut StepResult,
     ) -> Result<String, Box<dyn std::error::Error>> {
-        let result = regex.replace_all(input, replacement);
+        let result = if is_global {
+            pattern.replace_all(input, replacement)
+        } else {
+            pattern.replace(input, replacement)
+        };
         step_result.add_match();
-        Ok(result.to_string())
+        Ok(result)
     }
 
     pub fn inspect_line(
@@ -243,28 +403,20 @@ impl StreamProcessor {
         };
 
         for step in steps_to_inspect {
-            for caps in step.regex.captures_iter(line) {
-                if let Some(full_match) = caps.get(0) {
-                    let mut captures = Vec::new();
-                    for i in 0..caps.len() {
-                        captures.push(
-                            caps.get(i).map(|m| m.as_str().to_string())
-                        );
-                    }
-
+            for cap in step.pattern.captures_iter(line) {
+                if let Some((start, end, matched)) = cap.full_match {
                     let replacement_preview = if let Some(ref replacement) = step.replacement {
-                        let preview = step.regex.replace(line, replacement);
-                        Some(preview.to_string())
+                        Some(step.pattern.replace(line, replacement))
                     } else {
                         None
                     };
 
                     matches.push(MatchInfo {
                         line_number: 1, // Will be set by caller
-                        byte_start: full_match.start(),
-                        byte_end: full_match.end(),
-                        full_match: full_match.as_str().to_string(),
-                        captures,
+                        byte_start: start,
+                        byte_end: end,
+                        full_match: matched,
+                        captures: cap.groups,
                         replacement_preview,
                     });
                 }
@@ -368,10 +520,11 @@ mod tests {
 
     #[test]
     fn test_filter_processing() {
-        let mut config = PipelineConfig {
+        let config = PipelineConfig {
             name: Some("Test Filter".to_string()),
             description: None,
             version: None,
+            settings: PipelineSettings::default(),
             step: vec![PipelineStep {
                 step_type: StepType::Filter,
                 pattern: "keep".to_string(),
@@ -384,7 +537,7 @@ mod tests {
         };
 
         let mut processor = StreamProcessor::new(config).unwrap();
-        
+
         let input = "keep this line\ndrop this line\nkeep this too";
         let reader = Cursor::new(input);
         let mut output = Vec::new();

@@ -1,6 +1,6 @@
 [package]
 name = "rexpipe"
-version = "1.0.0"
+version = "1.1.0"
 edition = "2021"
 authors = ["Strategic Collaboration Agent"]
 description = "Unified regex pipeline processor with COMPASS framework integration"
@@ -14,9 +14,14 @@ categories = ["command-line-utilities", "text-processing"]
 clap = { version = "4.0", features = ["derive"] }
 regex = "1.0"
 serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 toml = "0.8"
 termcolor = "1.0"
 tokio = { version = "1.0", features = ["full"], optional = true }
+rayon = "1.8"
+glob = "0.3"
+ignore = "0.4"
+fancy-regex = { version = "0.13", optional = true }
 
 [dev-dependencies]
 tempfile = "3.0"
@@ -25,6 +30,7 @@ criterion = "0.5"
 [features]
 default = []
 async = ["tokio"]
+pcre = ["fancy-regex"]
 
 [[bin]]
 name = "rexpipe"

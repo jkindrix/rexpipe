@@ -7,7 +7,25 @@ pub struct PipelineConfig {
     pub name: Option<String>,
     pub description: Option<String>,
     pub version: Option<String>,
+    #[serde(default)]
+    pub settings: PipelineSettings,
     pub step: Vec<PipelineStep>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct PipelineSettings {
+    /// Use PCRE2-compatible regex engine (requires pcre feature)
+    #[serde(default)]
+    pub pcre_mode: bool,
+    /// Treat patterns as fixed strings (no regex interpretation)
+    #[serde(default)]
+    pub fixed_strings: bool,
+    /// Number of context lines to show before matches
+    #[serde(default)]
+    pub context_before: usize,
+    /// Number of context lines to show after matches
+    #[serde(default)]
+    pub context_after: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -98,6 +116,14 @@ impl PipelineConfig {
     }
 
     pub fn from_inline_pattern(pattern: &str, replacement: Option<&str>) -> Self {
+        Self::from_inline_pattern_with_settings(pattern, replacement, PipelineSettings::default())
+    }
+
+    pub fn from_inline_pattern_with_settings(
+        pattern: &str,
+        replacement: Option<&str>,
+        settings: PipelineSettings,
+    ) -> Self {
         let step_type = if replacement.is_some() {
             StepType::Substitute
         } else {
@@ -118,8 +144,26 @@ impl PipelineConfig {
             name: Some("Inline Pipeline".to_string()),
             description: Some("Generated from command line pattern".to_string()),
             version: Some("1.0.0".to_string()),
+            settings,
             step: vec![step],
         }
+    }
+
+    pub fn with_settings(mut self, settings: PipelineSettings) -> Self {
+        self.settings = settings;
+        self
+    }
+
+    pub fn to_toml(&self) -> Result<String, toml::ser::Error> {
+        toml::to_string_pretty(self)
+    }
+
+    pub fn to_json(&self) -> Result<String, serde_json::Error> {
+        serde_json::to_string_pretty(self)
+    }
+
+    pub fn from_json(json: &str) -> Result<Self, serde_json::Error> {
+        serde_json::from_str(json)
     }
 
     pub fn validate(&self) -> Result<(), Vec<String>> {
@@ -319,6 +363,7 @@ mod tests {
             name: Some("Test".to_string()),
             description: None,
             version: None,
+            settings: PipelineSettings::default(),
             step: vec![],
         };
 
