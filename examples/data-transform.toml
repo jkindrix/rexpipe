@@ -11,11 +11,11 @@ flags = ["global"]
 enabled = true
 
 [[step]]
-type = "substitute"
+type = "transform"
 description = "Standardize email addresses to lowercase"
-pattern = '([A-Z0-9._%+-]+)@([A-Z0-9.-]+\.[A-Z]{2,})'
-replacement = '${1}@${2}'
-flags = ["global", "case_insensitive"]
+pattern = '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}'
+transform = "lowercase"
+flags = ["global"]
 enabled = true
 
 [[step]]

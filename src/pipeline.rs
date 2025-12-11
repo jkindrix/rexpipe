@@ -14,7 +14,7 @@ pub struct PipelineConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PipelineSettings {
-    /// Use PCRE2-compatible regex engine (requires pcre feature)
+    /// Use PCRE-compatible regex engine via fancy-regex (requires pcre feature)
     #[serde(default)]
     pub pcre_mode: bool,
     /// Treat patterns as fixed strings (no regex interpretation)
@@ -28,21 +28,31 @@ pub struct PipelineSettings {
     pub context_after: usize,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PipelineStep {
-    #[serde(rename = "type")]
+    #[serde(rename = "type", default)]
     pub step_type: StepType,
+    #[serde(default)]
     pub pattern: String,
+    #[serde(default)]
     pub replacement: Option<String>,
+    #[serde(default)]
     pub action: Option<FilterAction>,
+    /// Transform action for Transform step type
+    #[serde(default)]
+    pub transform: Option<TransformAction>,
+    #[serde(default)]
     pub flags: Option<Vec<RegexFlag>>,
+    #[serde(default)]
     pub description: Option<String>,
+    #[serde(default)]
     pub enabled: Option<bool>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum StepType {
+    #[default]
     Substitute,
     Filter,
     Extract,
@@ -57,6 +67,28 @@ pub enum FilterAction {
     DropLine,
     KeepMatch,
     DropMatch,
+}
+
+/// Actions for Transform step type
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TransformAction {
+    /// Convert matched text to uppercase
+    Uppercase,
+    /// Convert matched text to lowercase
+    Lowercase,
+    /// Trim whitespace from matched text
+    Trim,
+    /// Prepend text to matched content
+    Prepend,
+    /// Append text to matched content
+    Append,
+    /// Reverse the matched text
+    Reverse,
+    /// Remove all whitespace from matched text
+    RemoveWhitespace,
+    /// Capitalize first letter of each word
+    TitleCase,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -81,24 +113,32 @@ pub struct PipelineResult {
 
 #[derive(Debug, Clone)]
 pub struct StepResult {
+    #[allow(dead_code)]
     pub step_index: usize,
+    #[allow(dead_code)]
     pub step_type: StepType,
+    #[allow(dead_code)]
     pub pattern: String,
     pub matches: u64,
     pub transformations: u64,
     pub processing_time_ms: u64,
+    #[allow(dead_code)]
     pub errors: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
 pub struct PipelineError {
+    #[allow(dead_code)]
     pub step_index: usize,
+    #[allow(dead_code)]
     pub line_number: u64,
     pub error_type: ErrorType,
     pub message: String,
+    #[allow(dead_code)]
     pub context: Option<String>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub enum ErrorType {
     RegexCompilation,
@@ -115,6 +155,7 @@ impl PipelineConfig {
         Ok(config)
     }
 
+    #[allow(dead_code)]
     pub fn from_inline_pattern(pattern: &str, replacement: Option<&str>) -> Self {
         Self::from_inline_pattern_with_settings(pattern, replacement, PipelineSettings::default())
     }
@@ -135,6 +176,7 @@ impl PipelineConfig {
             pattern: pattern.to_string(),
             replacement: replacement.map(|s| s.to_string()),
             action: if replacement.is_none() { Some(FilterAction::KeepMatch) } else { None },
+            transform: None,
             flags: Some(vec![RegexFlag::Global]),
             description: None,
             enabled: Some(true),
@@ -149,6 +191,7 @@ impl PipelineConfig {
         }
     }
 
+    #[allow(dead_code)]
     pub fn with_settings(mut self, settings: PipelineSettings) -> Self {
         self.settings = settings;
         self
@@ -162,6 +205,7 @@ impl PipelineConfig {
         serde_json::to_string_pretty(self)
     }
 
+    #[allow(dead_code)]
     pub fn from_json(json: &str) -> Result<Self, serde_json::Error> {
         serde_json::from_str(json)
     }
@@ -223,6 +267,12 @@ impl PipelineConfig {
     }
 }
 
+impl Default for PipelineResult {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PipelineResult {
     pub fn new() -> Self {
         Self {
@@ -240,6 +290,7 @@ impl PipelineResult {
         self.step_results.push(result);
     }
 
+    #[allow(dead_code)]
     pub fn add_error(&mut self, error: PipelineError) {
         self.errors.push(error);
     }
@@ -297,6 +348,7 @@ impl StepResult {
         self.transformations += 1;
     }
 
+    #[allow(dead_code)]
     pub fn add_error(&mut self, error: String) {
         self.errors.push(error);
     }
@@ -374,6 +426,7 @@ mod tests {
             pattern: "test".to_string(),
             replacement: None,
             action: None,
+            transform: None,
             flags: None,
             description: None,
             enabled: Some(true),

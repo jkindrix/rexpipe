@@ -27,6 +27,7 @@ pub struct LineMatch {
     pub line_number: u64,
     pub original_line: String,
     pub matches: Vec<MatchInfo>,
+    #[allow(dead_code)]
     pub transformed_line: Option<String>,
 }
 
@@ -76,39 +77,44 @@ impl Inspector {
         };
 
         let mut line_number = 0u64;
+        let mut total_bytes = 0u64;
         let start_time = std::time::Instant::now();
 
         for line_result in reader.lines() {
             let line = line_result?;
             line_number += 1;
             result.total_lines += 1;
+            total_bytes += line.len() as u64 + 1; // +1 for newline
 
             let matches = self.processor.inspect_line(&line, None)?;
-            
+
             if !matches.is_empty() {
-                let limited_matches = if let Some(limit) = self.max_matches_per_line {
+                let limited_matches: Vec<_> = if let Some(limit) = self.max_matches_per_line {
                     matches.into_iter().take(limit).collect()
                 } else {
                     matches
                 };
 
                 result.total_matches += limited_matches.len() as u64;
-                
-                // Update per-step counters
-                for _match_info in &limited_matches {
-                    *result.matches_per_step.entry(0).or_insert(0) += 1;
+
+                // Update per-step counters using the actual step index from each match
+                for match_info in &limited_matches {
+                    *result.matches_per_step.entry(match_info.step_index).or_insert(0) += 1;
                 }
+
+                // Calculate transformed line by applying all replacements
+                let transformed_line = self.calculate_transformed_line(&line, &limited_matches);
 
                 result.line_matches.push(LineMatch {
                     line_number,
                     original_line: line.clone(),
                     matches: limited_matches,
-                    transformed_line: None, // Would be calculated in a full processing run
+                    transformed_line,
                 });
 
                 if self.interactive_mode {
-                    self.display_interactive_match(&line, line_number, &result.line_matches.last().unwrap())?;
-                    
+                    self.display_interactive_match(&line, line_number, result.line_matches.last().unwrap())?;
+
                     if self.should_pause()? {
                         break;
                     }
@@ -118,14 +124,28 @@ impl Inspector {
 
         let total_time = start_time.elapsed().as_millis() as u64;
         result.performance_data.total_processing_time_ms = total_time;
-        
+
         if total_time > 0 {
             result.performance_data.lines_per_second = (result.total_lines * 1000) / total_time;
+            result.performance_data.bytes_per_second = (total_bytes * 1000) / total_time;
         }
 
         Ok(result)
     }
 
+    /// Calculate the transformed line by applying all replacement previews
+    fn calculate_transformed_line(&self, _original: &str, matches: &[crate::processor::MatchInfo]) -> Option<String> {
+        // If any match has a replacement preview, use the first one as the transformed line
+        // In a real pipeline, all steps would be applied sequentially
+        for match_info in matches {
+            if let Some(ref preview) = match_info.replacement_preview {
+                return Some(preview.clone());
+            }
+        }
+        None
+    }
+
+    #[allow(dead_code)]
     pub fn inspect_single_line(&self, line: &str) -> Result<Vec<MatchInfo>, Box<dyn std::error::Error>> {
         self.processor.inspect_line(line, None)
     }
@@ -327,6 +347,7 @@ impl InspectorOptions {
         self
     }
 
+    #[allow(dead_code)]
     pub fn max_matches_per_line(mut self, max: Option<usize>) -> Self {
         self.max_matches_per_line = max;
         self

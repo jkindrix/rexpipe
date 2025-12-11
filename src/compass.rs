@@ -1,6 +1,63 @@
 use std::collections::HashMap;
 use std::fmt;
 
+use crate::pipeline::{PipelineConfig, StepType};
+
+/// Context for COMPASS analysis - can analyze either rexpipe itself or a user's pipeline
+#[derive(Debug, Clone)]
+pub struct AnalysisContext {
+    /// Subject being analyzed
+    pub subject: String,
+    /// Problem statement or goal
+    pub problem_statement: String,
+    /// Pipeline configuration to analyze (if applicable)
+    pub pipeline: Option<PipelineConfig>,
+    /// Additional context or requirements
+    #[allow(dead_code)]
+    pub additional_context: Vec<String>,
+}
+
+impl Default for AnalysisContext {
+    fn default() -> Self {
+        Self {
+            subject: "rexpipe - Unified Regex Pipeline Processor".to_string(),
+            problem_statement: "Build unified regex pipeline processor".to_string(),
+            pipeline: None,
+            additional_context: Vec::new(),
+        }
+    }
+}
+
+impl AnalysisContext {
+    /// Create context for analyzing a pipeline configuration
+    pub fn from_pipeline(config: &PipelineConfig) -> Self {
+        let name = config.name.as_deref().unwrap_or("Unnamed Pipeline");
+        let description = config.description.as_deref().unwrap_or("No description");
+
+        Self {
+            subject: name.to_string(),
+            problem_statement: format!("Analyze and validate pipeline: {}", description),
+            pipeline: Some(config.clone()),
+            additional_context: vec![
+                format!("Pipeline has {} steps", config.step.len()),
+                format!("Enabled steps: {}", config.enabled_steps().count()),
+            ],
+        }
+    }
+
+    /// Create context with custom subject and problem
+    #[allow(dead_code)]
+    pub fn custom(subject: impl Into<String>, problem: impl Into<String>) -> Self {
+        Self {
+            subject: subject.into(),
+            problem_statement: problem.into(),
+            pipeline: None,
+            additional_context: Vec::new(),
+        }
+    }
+}
+
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub enum PhaseStatus {
     NotStarted,
@@ -14,12 +71,14 @@ pub enum PhaseStatus {
 pub struct QualityGate {
     pub name: String,
     pub passed: bool,
+    #[allow(dead_code)]
     pub details: Option<String>,
 }
 
 #[derive(Debug)]
 pub struct CompassPhase {
     pub name: String,
+    #[allow(dead_code)]
     pub description: String,
     pub status: PhaseStatus,
     pub quality_gates: Vec<QualityGate>,
@@ -59,10 +118,23 @@ pub struct CompassAgent {
     pub current_phase_index: usize,
     pub confidence_level: f32,
     pub escalation_triggers: Vec<String>,
+    /// Context for the current analysis
+    pub context: AnalysisContext,
+}
+
+impl Default for CompassAgent {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl CompassAgent {
     pub fn new() -> Self {
+        Self::with_context(AnalysisContext::default())
+    }
+
+    /// Create a new COMPASS agent with specific analysis context
+    pub fn with_context(context: AnalysisContext) -> Self {
         let phases = vec![
             CompassPhase::new("Clarify", "Clarify Core Intent - Understanding the fundamental problem"),
             CompassPhase::new("Orient", "Orient Through Research - Gathering evidence and context"),
@@ -77,9 +149,16 @@ impl CompassAgent {
             current_phase_index: 0,
             confidence_level: 1.0,
             escalation_triggers: Vec::new(),
+            context,
         }
     }
 
+    /// Create an agent to analyze a pipeline configuration
+    pub fn for_pipeline(config: &PipelineConfig) -> Self {
+        Self::with_context(AnalysisContext::from_pipeline(config))
+    }
+
+    #[allow(dead_code)]
     pub fn current_phase(&self) -> &CompassPhase {
         &self.phases[self.current_phase_index]
     }
@@ -90,7 +169,7 @@ impl CompassAgent {
 
     pub fn advance_phase(&mut self) -> Result<(), String> {
         let current = &self.phases[self.current_phase_index];
-        
+
         if !current.all_gates_passed() {
             return Err(format!(
                 "Cannot advance from {} phase: quality gates not met",
@@ -113,41 +192,69 @@ impl CompassAgent {
         self.current_phase_mut().status = PhaseStatus::RequiresEscalation(reason);
     }
 
+    #[allow(dead_code)]
     pub fn set_confidence(&mut self, level: f32) {
         self.confidence_level = level.clamp(0.0, 1.0);
     }
 
     pub fn clarify_intent(&mut self, problem_statement: &str) -> Result<String, String> {
+        // Extract context data before mutably borrowing phase
+        let interpretation = if let Some(ref pipeline) = self.context.pipeline {
+            let step_summary: Vec<String> = pipeline.enabled_steps()
+                .map(|s| format!("{:?}", s.step_type))
+                .collect();
+            format!(
+                "Analyzing pipeline '{}' with {} enabled steps: [{}]. \
+                 Goal: {}",
+                self.context.subject,
+                step_summary.len(),
+                step_summary.join(", "),
+                self.context.problem_statement
+            )
+        } else {
+            format!(
+                "Understanding goal: {} for subject '{}'. \
+                 This will enable efficient text processing with unified pipeline architecture.",
+                problem_statement,
+                self.context.subject
+            )
+        };
+
+        let has_problem = !problem_statement.is_empty() || !self.context.problem_statement.is_empty();
+        let problem_desc = if problem_statement.is_empty() {
+            self.context.problem_statement.clone()
+        } else {
+            problem_statement.to_string()
+        };
+        let scope_clear = self.context.pipeline.is_some() || !self.context.subject.is_empty();
+        let subject = self.context.subject.clone();
+        let core_intent = self.context.problem_statement.clone();
+
+        // Now mutably borrow phase
         let phase = self.current_phase_mut();
         phase.status = PhaseStatus::InProgress;
-        
-        let interpretation = format!(
-            "I understand you want to create a unified regex pipeline processor \
-             to achieve efficient text processing because current multi-tool approaches \
-             are fragmented, slow, and difficult to debug."
-        );
-        
+
         phase.add_quality_gate(
             "Clear problem statement",
-            !problem_statement.is_empty(),
-            Some("Problem statement is well-defined".to_string()),
+            has_problem,
+            Some(format!("Problem: {}", problem_desc)),
         );
-        
+
         phase.add_quality_gate(
             "Success criteria defined",
             true,
             Some("Success metrics are measurable".to_string()),
         );
-        
+
         phase.add_quality_gate(
             "Scope boundaries clear",
-            true,
-            Some("Scope is focused on regex pipeline processing".to_string()),
+            scope_clear,
+            Some(format!("Subject: {}", subject)),
         );
-        
+
         phase.set_output("interpretation", interpretation.clone());
-        phase.set_output("core_intent", "Unified, efficient regex pipeline processing");
-        
+        phase.set_output("core_intent", core_intent);
+
         if phase.all_gates_passed() {
             phase.status = PhaseStatus::Completed;
             Ok(interpretation)
@@ -156,39 +263,73 @@ impl CompassAgent {
         }
     }
 
-    pub fn orient_research(&mut self, _research_context: &str) -> Result<String, String> {
+    pub fn orient_research(&mut self, research_context: &str) -> Result<String, String> {
+        // Generate dynamic research synthesis based on context - before mutable borrow
+        let synthesis = if let Some(ref pipeline) = self.context.pipeline {
+            // Analyze the pipeline for potential issues
+            let mut findings = Vec::new();
+
+            // Check for common patterns
+            let has_substitute = pipeline.enabled_steps().any(|s| matches!(s.step_type, StepType::Substitute));
+            let has_filter = pipeline.enabled_steps().any(|s| matches!(s.step_type, StepType::Filter));
+            let has_transform = pipeline.enabled_steps().any(|s| matches!(s.step_type, StepType::Transform));
+            let step_count = pipeline.enabled_steps().count();
+
+            if step_count > 5 {
+                findings.push("Complex pipeline - consider breaking into smaller, reusable components");
+            }
+            if has_substitute && has_filter {
+                findings.push("Mixed substitution and filtering - order matters for correct results");
+            }
+            if has_transform {
+                findings.push("Transform steps detected - ensure transformations are idempotent if re-run");
+            }
+
+            if findings.is_empty() {
+                findings.push("Pipeline structure appears well-organized");
+            }
+
+            format!(
+                "Pipeline analysis for '{}': {}",
+                self.context.subject,
+                findings.join("; ")
+            )
+        } else {
+            format!(
+                "Research on '{}': {}. Key findings: \
+                 1) Multi-process overhead reduces performance by 3-5x \
+                 2) Unified processing eliminates context switching \
+                 3) Streaming architecture provides constant memory usage",
+                self.context.subject,
+                if research_context.is_empty() { "Evidence gathered" } else { research_context }
+            )
+        };
+
+        // Now mutably borrow phase
         let phase = self.current_phase_mut();
         phase.status = PhaseStatus::InProgress;
-        
-        let synthesis = format!(
-            "Research confirms that existing tools (sed, grep, awk) create \
-             fragmentation and performance issues. Key findings: \
-             1) Multi-process overhead reduces performance by 3-5x \
-             2) Debugging requires context switching to external tools \
-             3) Memory usage scales linearly with pipeline complexity"
-        );
-        
+
         phase.add_quality_gate(
             "Sufficient evidence gathered",
             true,
-            Some("Multiple pain points documented".to_string()),
+            Some("Analysis based on configuration and patterns".to_string()),
         );
-        
+
         phase.add_quality_gate(
             "Sources credible",
             true,
-            Some("Based on real-world usage patterns".to_string()),
+            Some("Based on pipeline configuration analysis".to_string()),
         );
-        
+
         phase.add_quality_gate(
             "Gaps identified",
             true,
-            Some("Clear gaps in existing solutions identified".to_string()),
+            Some("Potential improvements documented".to_string()),
         );
-        
+
         phase.set_output("synthesis", synthesis.clone());
-        phase.set_output("key_gap", "No unified streaming regex processor exists");
-        
+        phase.set_output("key_gap", "Identified through systematic analysis");
+
         if phase.all_gates_passed() {
             phase.status = PhaseStatus::Completed;
             Ok(synthesis)
@@ -198,39 +339,56 @@ impl CompassAgent {
     }
 
     pub fn map_solution(&mut self) -> Result<String, String> {
-        let phase = self.current_phase_mut();
-        phase.status = PhaseStatus::InProgress;
-        
-        let solution_map = format!(
+        // Generate dynamic solution map based on context - before mutable borrow
+        let solution_map = if let Some(ref pipeline) = self.context.pipeline {
+            let step_types: Vec<String> = pipeline.enabled_steps()
+                .map(|s| format!("{:?}", s.step_type))
+                .collect();
+
+            format!(
+                "Pipeline Solution Map for '{}':\n\
+                 Steps to execute: {}\n\
+                 Processing order: sequential (top to bottom)\n\
+                 Data flow: input -> {} -> output\n\
+                 Verification: Use --inspect flag to preview matches",
+                self.context.subject,
+                step_types.join(" -> "),
+                step_types.join(" -> ")
+            )
+        } else {
             "Solution Architecture: \
              1) Rust-based streaming processor for performance and safety \
              2) TOML configuration for portable workflows \
-             3) PCRE regex engine for consistent syntax \
+             3) PCRE-compatible regex via fancy-regex for advanced patterns \
              4) Interactive debugging mode with match inspection \
-             5) Constant memory usage via streaming architecture"
-        );
-        
+             5) Constant memory usage via streaming architecture".to_string()
+        };
+
+        // Now mutably borrow phase
+        let phase = self.current_phase_mut();
+        phase.status = PhaseStatus::InProgress;
+
         phase.add_quality_gate(
             "Solution addresses problem",
             true,
-            Some("Directly solves fragmentation and performance".to_string()),
+            Some("Directly addresses the stated goal".to_string()),
         );
-        
+
         phase.add_quality_gate(
             "Value proposition clear",
             true,
-            Some("3-5x performance improvement documented".to_string()),
+            Some("Clear benefits documented".to_string()),
         );
-        
+
         phase.add_quality_gate(
             "Feasibility validated",
             true,
-            Some("Rust ecosystem supports requirements".to_string()),
+            Some("Implementation path is clear".to_string()),
         );
-        
+
         phase.set_output("solution_map", solution_map.clone());
         phase.set_output("core_components", "streaming_engine,config_parser,regex_processor,cli");
-        
+
         if phase.all_gates_passed() {
             phase.status = PhaseStatus::Completed;
             Ok(solution_map)
@@ -258,7 +416,7 @@ impl CompassAgent {
         phase.add_quality_gate(
             "Risks identified and acceptable",
             risk_acceptable,
-            Some("Main risk: PCRE complexity, mitigated by pcre2 crate".to_string()),
+            Some("Main risk: PCRE complexity, mitigated by fancy-regex crate".to_string()),
         );
         
         phase.add_quality_gate(
@@ -282,9 +440,8 @@ impl CompassAgent {
     pub fn architect_implementation(&mut self) -> Result<String, String> {
         let phase = self.current_phase_mut();
         phase.status = PhaseStatus::InProgress;
-        
-        let architecture = format!(
-            "Implementation Architecture:\n\
+
+        let architecture = "Implementation Architecture:\n\
              Core Modules:\n\
              - compass.rs: Strategic agent framework\n\
              - pipeline.rs: Pipeline configuration and execution\n\
@@ -296,11 +453,9 @@ impl CompassAgent {
              stdin -> StreamProcessor -> RegexEngine -> TransformPipeline -> stdout\n\
              \n\
              Key Dependencies:\n\
-             - pcre2: Regex engine\n\
-             - tokio: Async streaming\n\
+             - fancy-regex: Regex engine with PCRE features\n\
              - clap: CLI parsing\n\
-             - toml: Configuration"
-        );
+             - toml: Configuration".to_string();
         
         phase.add_quality_gate(
             "Requirements specified",
@@ -409,7 +564,7 @@ impl CompassAgent {
             
             if !phase.outputs.is_empty() {
                 report.push_str("   Key Outputs:\n");
-                for (key, _) in &phase.outputs {
+                for key in phase.outputs.keys() {
                     report.push_str(&format!("   - {}\n", key));
                 }
             }

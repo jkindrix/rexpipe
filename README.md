@@ -97,7 +97,20 @@ enabled = true
 - **filter**: Keep or drop lines based on pattern matching
 - **extract**: Extract only the matched portions
 - **validate**: Ensure lines match required patterns
-- **transform**: Custom transformation logic
+- **transform**: Apply text transformations to matched content
+
+### Transform Actions
+
+The transform step type supports the following actions:
+
+- **uppercase**: Convert matched text to uppercase
+- **lowercase**: Convert matched text to lowercase
+- **trim**: Remove whitespace from matched text
+- **prepend**: Add text before matched content
+- **append**: Add text after matched content
+- **reverse**: Reverse the matched text
+- **remove_whitespace**: Remove all whitespace from matched text
+- **title_case**: Capitalize first letter of each word
 
 ## Filter Actions
 
@@ -115,17 +128,83 @@ OPTIONS:
     -c, --config <FILE>         TOML configuration file
     -p, --pattern <REGEX>       Inline regex pattern
     -r, --replacement <TEXT>    Replacement text for substitution
+    -F, --fixed                 Treat pattern as fixed string (no regex)
+    -P, --pcre                  Use PCRE-compatible regex (lookahead/lookbehind)
+    -B, --before <N>            Show N lines before each match
+    -A, --after <N>             Show N lines after each match
+    -C, --context <N>           Show N lines before and after each match
         --inspect               Enable inspection mode
         --interactive           Enable interactive inspection
-        --dry-run               Validate configuration without processing
+        --dry-run               Validate config, or show diff preview with -I
+        --progress              Show progress indicator for multi-file processing
         --performance           Show performance metrics
         --compass               Run COMPASS strategic analysis
         --validate              Validate configuration only
+        --export <FORMAT>       Export configuration to TOML or JSON
+        --completions <SHELL>   Generate shell completion script
     -i, --input <FILE>          Input file (default: stdin)
     -o, --output <FILE>         Output file (default: stdout)
     -h, --help                  Print help information
     -V, --version               Print version information
 ```
+
+## JSON Output
+
+All JSON output uses a standardized schema with metadata for forward compatibility:
+
+```json
+{
+  "metadata": {
+    "schema_version": "1.0",
+    "mode": "count",
+    "tool_version": "1.1.0"
+  },
+  "data": {
+    "lines_processed": 2,
+    "matches_found": 2,
+    "transformations_applied": 0
+  }
+}
+```
+
+Supported modes: `count`, `processing`, `performance`, `multi_file`, `files_with_matches`, `files_without_matches`.
+
+## Shell Completions
+
+rexpipe supports generating shell completion scripts for bash, zsh, fish, PowerShell, and elvish:
+
+```bash
+# Bash - add to ~/.bashrc
+rexpipe --completions bash >> ~/.bashrc
+
+# Zsh - add to ~/.zshrc or create a completion file
+rexpipe --completions zsh > ~/.zfunc/_rexpipe
+
+# Fish - save to completions directory
+rexpipe --completions fish > ~/.config/fish/completions/rexpipe.fish
+
+# PowerShell - add to $PROFILE
+rexpipe --completions powershell >> $PROFILE
+
+# Elvish
+rexpipe --completions elvish >> ~/.elvish/rc.elv
+```
+
+After generating, restart your shell or source the completion file to enable completions.
+
+## Exit Codes
+
+rexpipe uses distinct exit codes for different error conditions:
+
+| Code | Meaning |
+|------|---------|
+| 0 | Success |
+| 1 | No matches found (grep-like behavior) |
+| 2 | Invalid usage / missing arguments |
+| 3 | Configuration file error |
+| 4 | Invalid regex pattern |
+| 5 | File I/O error |
+| 6 | Validation error |
 
 ## Performance Benefits
 
@@ -189,6 +268,15 @@ rexpipe --pattern '(\w+),(\w+@[\w.]+)' --inspect --interactive < data.csv
 rexpipe --config pipeline.toml --performance < large-file.txt
 ```
 
+### Dry-Run Preview
+```bash
+# Preview changes before modifying files in-place
+rexpipe -p 'old_value' -r 'new_value' -I --dry-run src/
+
+# Preview shows unified diff of all changes that would be made
+# without actually modifying any files
+```
+
 ## Testing
 
 ```bash
@@ -219,10 +307,67 @@ MIT License - see LICENSE file for details.
 
 Built with:
 - **Rust**: Memory safety and performance
-- **regex crate**: Powerful regex engine
+- **regex crate**: Fast regex engine for standard patterns
+- **fancy-regex crate**: PCRE-compatible regex (lookahead/lookbehind support)
 - **TOML**: Human-readable configuration
 - **clap**: Command-line interface
 - **termcolor**: Colored output for debugging
+
+### Regex Engine Options
+
+rexpipe supports multiple regex modes:
+
+1. **Standard mode** (default): Uses the fast Rust `regex` crate
+2. **PCRE mode** (`-P/--pcre`): Uses `fancy-regex` for PCRE-compatible patterns with lookahead/lookbehind support
+3. **Fixed string mode** (`-F/--fixed`): Treats patterns as literal strings (fastest)
+
+To enable PCRE mode features, build with:
+```bash
+cargo build --release --features pcre
+```
+
+### ReDoS Protection
+
+rexpipe includes protection against Regular Expression Denial of Service (ReDoS) attacks:
+
+**Standard mode** uses the Rust `regex` crate which guarantees **O(m × n) linear time** matching. This eliminates catastrophic backtracking vulnerabilities found in traditional regex engines.
+
+**Built-in safeguards:**
+- **Size limits**: Compiled regex size is limited to 10MB to prevent compilation DoS
+- **DFA size limits**: Deterministic finite automaton size is capped to prevent memory exhaustion
+- **Pattern analysis**: PCRE mode patterns are analyzed for common ReDoS indicators (nested quantifiers, excessive alternations)
+
+**PCRE mode warning**: Unlike standard mode, PCRE mode uses a backtracking engine and can be vulnerable to ReDoS. Patterns like `(a+)+`, `(a*)*`, or deeply nested quantifiers will trigger warnings. For untrusted input, prefer standard mode.
+
+### Named Capture Groups
+
+rexpipe supports named capture groups in patterns, allowing you to reference captured text by name in replacements:
+
+```bash
+# Using named capture groups: (?P<name>pattern)
+echo "John Doe" | rexpipe -p '(?P<first>\w+)\s+(?P<last>\w+)' -r '${last}, ${first}'
+# Output: Doe, John
+
+# Mixing named and numbered captures
+echo "user: admin, id: 12345" | rexpipe -p '(?P<role>\w+), id: (\d+)' -r 'ID $2 is ${role}'
+# Output: user: ID 12345 is admin
+```
+
+**Reference syntax in replacements:**
+- `${name}` - Reference a named capture group
+- `$1`, `$2`, etc. - Reference numbered capture groups
+- `$0` - Reference the entire match
+
+Named capture groups work in both standard mode and PCRE mode.
+
+### Async Processing (Optional)
+
+For non-blocking async file processing, build with the `async` feature:
+```bash
+cargo build --release --features async
+```
+
+This enables the `AsyncMultiFileProcessor` for concurrent file operations using tokio.
 
 ## Acknowledgments
 

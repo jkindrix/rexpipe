@@ -1,14 +1,16 @@
 //! Multi-file processing module for rexpipe
 //!
 //! Provides directory recursion, in-place editing, parallel processing,
-//! and VCS-aware file discovery.
+//! progress indicators, dry-run preview, and VCS-aware file discovery.
 
 use crate::pipeline::PipelineConfig;
 use crate::processor::StreamProcessor;
+use diffy::{create_patch, PatchFormatter};
 use ignore::WalkBuilder;
+use indicatif::{ProgressBar, ProgressStyle};
 use rayon::prelude::*;
 use std::fs::{self, File};
-use std::io::BufReader;
+use std::io::{BufReader, IsTerminal};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -61,6 +63,8 @@ pub struct FileProcessingOptions {
     pub files_without_matches: bool,
     /// Quiet mode - no output, only exit code
     pub quiet: bool,
+    /// Show progress indicator for multi-file processing
+    pub show_progress: bool,
 }
 
 impl Default for FileProcessingOptions {
@@ -78,6 +82,7 @@ impl Default for FileProcessingOptions {
             files_with_matches: false,
             files_without_matches: false,
             quiet: false,
+            show_progress: false,
         }
     }
 }
@@ -146,6 +151,35 @@ impl FileProcessingOptions {
         self.quiet = quiet;
         self
     }
+
+    pub fn show_progress(mut self, show: bool) -> Self {
+        self.show_progress = show;
+        self
+    }
+}
+
+/// Create a progress bar for file processing
+/// Returns None if progress should not be shown (quiet mode, non-TTY, etc.)
+fn create_progress_bar(file_count: u64, show_progress: bool, quiet: bool) -> Option<ProgressBar> {
+    // Don't show progress if quiet mode or progress disabled
+    if quiet || !show_progress {
+        return None;
+    }
+
+    // Only show progress if stderr is a terminal
+    if !std::io::stderr().is_terminal() {
+        return None;
+    }
+
+    let pb = ProgressBar::new(file_count);
+    pb.set_style(
+        ProgressStyle::default_bar()
+            .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} files ({per_sec}, ETA: {eta})")
+            .expect("Invalid progress bar template")
+            .progress_chars("█▓▒░  ")
+    );
+    pb.set_message("Processing files...");
+    Some(pb)
 }
 
 /// Multi-file processor for batch operations
@@ -240,6 +274,11 @@ impl MultiFileProcessor {
 
     fn process_files_sequential(&self, files: &[PathBuf]) -> Result<MultiFileResult, Box<dyn std::error::Error>> {
         let mut result = MultiFileResult::default();
+        let progress = create_progress_bar(
+            files.len() as u64,
+            self.options.show_progress,
+            self.options.quiet,
+        );
 
         for file in files {
             match self.process_single_file(file) {
@@ -268,6 +307,17 @@ impl MultiFileProcessor {
                     });
                 }
             }
+
+            if let Some(ref pb) = progress {
+                pb.inc(1);
+            }
+        }
+
+        if let Some(pb) = progress {
+            pb.finish_with_message(format!(
+                "Processed {} files ({} matches)",
+                result.files_processed, result.total_matches
+            ));
         }
 
         Ok(result)
@@ -280,10 +330,16 @@ impl MultiFileProcessor {
         let total_matches = AtomicU64::new(0);
         let total_lines = AtomicU64::new(0);
 
+        let progress = create_progress_bar(
+            files.len() as u64,
+            self.options.show_progress,
+            self.options.quiet,
+        );
+
         let file_results: Vec<FileResult> = files
             .par_iter()
             .map(|file| {
-                match self.process_single_file(file) {
+                let result = match self.process_single_file(file) {
                     Ok(file_result) => {
                         files_processed.fetch_add(1, Ordering::Relaxed);
                         total_lines.fetch_add(file_result.lines_processed, Ordering::Relaxed);
@@ -305,7 +361,13 @@ impl MultiFileProcessor {
                         modified: false,
                         error: Some(e.to_string()),
                     },
+                };
+
+                if let Some(ref pb) = progress {
+                    pb.inc(1);
                 }
+
+                result
             })
             .collect();
 
@@ -314,7 +376,7 @@ impl MultiFileProcessor {
             .filter_map(|r| r.error.as_ref().map(|e| format!("{}: {}", r.path.display(), e)))
             .collect();
 
-        Ok(MultiFileResult {
+        let result = MultiFileResult {
             files_processed: files_processed.load(Ordering::Relaxed),
             files_matched: files_matched.load(Ordering::Relaxed),
             files_modified: files_modified.load(Ordering::Relaxed),
@@ -322,7 +384,16 @@ impl MultiFileProcessor {
             total_lines: total_lines.load(Ordering::Relaxed),
             file_results,
             errors,
-        })
+        };
+
+        if let Some(pb) = progress {
+            pb.finish_with_message(format!(
+                "Processed {} files ({} matches)",
+                result.files_processed, result.total_matches
+            ));
+        }
+
+        Ok(result)
     }
 
     fn process_single_file(&self, path: &Path) -> Result<FileResult, Box<dyn std::error::Error>> {
@@ -463,6 +534,73 @@ impl MultiFileProcessor {
             .map(|r| r.path)
             .collect())
     }
+
+    /// Preview changes that would be made during in-place editing (dry-run mode)
+    /// Returns a string containing unified diff output for all files that would be modified
+    pub fn preview_changes(&self, files: &[PathBuf], use_color: bool) -> Result<String, Box<dyn std::error::Error>> {
+        let mut output = String::new();
+        let mut files_with_changes = 0;
+
+        for file in files {
+            match self.preview_single_file(file) {
+                Ok(Some((original, modified))) => {
+                    if original != modified {
+                        files_with_changes += 1;
+                        let patch = create_patch(&original, &modified);
+
+                        // Add file header
+                        output.push_str(&format!("--- {}\n", file.display()));
+                        output.push_str(&format!("+++ {}\n", file.display()));
+
+                        // Format the patch
+                        if use_color && std::io::stderr().is_terminal() {
+                            let formatter = PatchFormatter::new().with_color();
+                            output.push_str(&format!("{}", formatter.fmt_patch(&patch)));
+                        } else {
+                            output.push_str(&format!("{}", patch));
+                        }
+                        output.push('\n');
+                    }
+                }
+                Ok(None) => {
+                    // No changes for this file
+                }
+                Err(e) => {
+                    output.push_str(&format!("Error processing {}: {}\n", file.display(), e));
+                }
+            }
+        }
+
+        if files_with_changes == 0 {
+            output.push_str("No changes would be made.\n");
+        } else {
+            output.push_str(&format!("\n{} file(s) would be modified.\n", files_with_changes));
+        }
+
+        Ok(output)
+    }
+
+    /// Preview changes for a single file
+    /// Returns (original_content, modified_content) if the file has matches
+    fn preview_single_file(&self, path: &Path) -> Result<Option<(String, String)>, Box<dyn std::error::Error>> {
+        let mut processor = StreamProcessor::new(self.config.clone())?;
+
+        // Read the original file
+        let original = fs::read_to_string(path)?;
+
+        // Process through the pipeline
+        let reader = std::io::Cursor::new(original.as_bytes());
+        let mut output = Vec::new();
+        let result = processor.process_stream(reader, &mut output)?;
+
+        // If no transformations, return None
+        if result.transformations_applied == 0 {
+            return Ok(None);
+        }
+
+        let modified = String::from_utf8_lossy(&output).to_string();
+        Ok(Some((original, modified)))
+    }
 }
 
 impl MultiFileResult {
@@ -485,10 +623,281 @@ impl MultiFileResult {
         self.total_matches > 0
     }
 
+    #[allow(dead_code)]
     pub fn has_errors(&self) -> bool {
         !self.errors.is_empty()
     }
 }
+
+// ============================================================================
+// Async Processing Support (requires `async` feature)
+// ============================================================================
+
+#[cfg(feature = "async")]
+#[allow(dead_code)]
+pub mod async_processing {
+    //! Async file processing using tokio
+    //!
+    //! This module provides async versions of the file processing functions
+    //! for non-blocking I/O operations.
+
+    use super::*;
+    use tokio::fs as async_fs;
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader as AsyncBufReader};
+
+    /// Async multi-file processor for non-blocking batch operations
+    pub struct AsyncMultiFileProcessor {
+        config: PipelineConfig,
+        options: FileProcessingOptions,
+    }
+
+    impl AsyncMultiFileProcessor {
+        pub fn new(config: PipelineConfig, options: FileProcessingOptions) -> Self {
+            Self { config, options }
+        }
+
+        /// Asynchronously process multiple files
+        pub async fn process_files_async(
+            &self,
+            files: &[PathBuf],
+        ) -> Result<MultiFileResult, String> {
+            let mut result = MultiFileResult::default();
+            let mut handles = Vec::new();
+
+            // Clone config and options for each task
+            for file in files.iter().cloned() {
+                let config = self.config.clone();
+                let options = self.options.clone();
+                let file_clone = file.clone();
+
+                let handle = tokio::spawn(async move {
+                    process_single_file_async(&file_clone, &config, &options).await
+                });
+
+                handles.push((file, handle));
+            }
+
+            // Await all results
+            for (file, handle) in handles {
+                match handle.await {
+                    Ok(Ok(file_result)) => {
+                        result.files_processed += 1;
+                        result.total_lines += file_result.lines_processed;
+                        result.total_matches += file_result.matches_found;
+
+                        if file_result.matches_found > 0 {
+                            result.files_matched += 1;
+                        }
+                        if file_result.modified {
+                            result.files_modified += 1;
+                        }
+
+                        result.file_results.push(file_result);
+                    }
+                    Ok(Err(e)) => {
+                        result.errors.push(format!("{}: {}", file.display(), e));
+                        result.file_results.push(FileResult {
+                            path: file.clone(),
+                            matches_found: 0,
+                            lines_processed: 0,
+                            modified: false,
+                            error: Some(e),
+                        });
+                    }
+                    Err(e) => {
+                        result.errors.push(format!("{}: task panicked: {}", file.display(), e));
+                        result.file_results.push(FileResult {
+                            path: file.clone(),
+                            matches_found: 0,
+                            lines_processed: 0,
+                            modified: false,
+                            error: Some(format!("task panicked: {}", e)),
+                        });
+                    }
+                }
+            }
+
+            Ok(result)
+        }
+
+        /// Asynchronously count matches in files
+        pub async fn count_matches_async(
+            &self,
+            files: &[PathBuf],
+        ) -> Result<MultiFileResult, String> {
+            let mut result = MultiFileResult::default();
+            let mut handles = Vec::new();
+
+            for file in files.iter().cloned() {
+                let config = self.config.clone();
+                let file_clone = file.clone();
+
+                let handle = tokio::spawn(async move {
+                    count_matches_single_file_async(&file_clone, &config).await
+                });
+
+                handles.push((file, handle));
+            }
+
+            for (file, handle) in handles {
+                match handle.await {
+                    Ok(Ok((matches, lines))) => {
+                        result.files_processed += 1;
+                        result.total_lines += lines;
+                        result.total_matches += matches;
+
+                        if matches > 0 {
+                            result.files_matched += 1;
+                        }
+
+                        result.file_results.push(FileResult {
+                            path: file,
+                            matches_found: matches,
+                            lines_processed: lines,
+                            modified: false,
+                            error: None,
+                        });
+                    }
+                    Ok(Err(e)) => {
+                        result.errors.push(format!("{}: {}", file.display(), e));
+                        result.file_results.push(FileResult {
+                            path: file,
+                            matches_found: 0,
+                            lines_processed: 0,
+                            modified: false,
+                            error: Some(e),
+                        });
+                    }
+                    Err(e) => {
+                        result.errors.push(format!("{}: {}", file.display(), e));
+                        result.file_results.push(FileResult {
+                            path: file,
+                            matches_found: 0,
+                            lines_processed: 0,
+                            modified: false,
+                            error: Some(e.to_string()),
+                        });
+                    }
+                }
+            }
+
+            Ok(result)
+        }
+    }
+
+    /// Asynchronously process a single file
+    async fn process_single_file_async(
+        path: &Path,
+        config: &PipelineConfig,
+        options: &FileProcessingOptions,
+    ) -> Result<FileResult, String> {
+        let content = async_fs::read_to_string(path)
+            .await
+            .map_err(|e| format!("Failed to read file: {}", e))?;
+
+        let mut processor = StreamProcessor::new(config.clone())
+            .map_err(|e| format!("Failed to create processor: {}", e))?;
+
+        let reader = std::io::Cursor::new(content.as_bytes());
+        let mut output = Vec::new();
+        let pipeline_result = processor
+            .process_stream(reader, &mut output)
+            .map_err(|e| format!("Failed to process stream: {}", e))?;
+
+        if options.in_place {
+            // Create backup if requested
+            if let Some(ref suffix) = options.backup_suffix {
+                let backup_path = format!("{}{}", path.display(), suffix);
+                async_fs::copy(path, &backup_path)
+                    .await
+                    .map_err(|e| format!("Failed to create backup: {}", e))?;
+            }
+
+            // Write the processed content back
+            async_fs::write(path, &output)
+                .await
+                .map_err(|e| format!("Failed to write file: {}", e))?;
+
+            Ok(FileResult {
+                path: path.to_path_buf(),
+                matches_found: pipeline_result.matches_found,
+                lines_processed: pipeline_result.lines_processed,
+                modified: pipeline_result.transformations_applied > 0,
+                error: None,
+            })
+        } else {
+            Ok(FileResult {
+                path: path.to_path_buf(),
+                matches_found: pipeline_result.matches_found,
+                lines_processed: pipeline_result.lines_processed,
+                modified: false,
+                error: None,
+            })
+        }
+    }
+
+    /// Asynchronously count matches in a single file
+    async fn count_matches_single_file_async(
+        path: &Path,
+        config: &PipelineConfig,
+    ) -> Result<(u64, u64), String> {
+        let content = async_fs::read_to_string(path)
+            .await
+            .map_err(|e| format!("Failed to read file: {}", e))?;
+
+        let mut processor = StreamProcessor::new(config.clone())
+            .map_err(|e| format!("Failed to create processor: {}", e))?;
+
+        let reader = std::io::Cursor::new(content.as_bytes());
+        let mut output = std::io::sink();
+        let result = processor
+            .process_stream(reader, &mut output)
+            .map_err(|e| format!("Failed to process stream: {}", e))?;
+
+        Ok((result.matches_found, result.lines_processed))
+    }
+
+    /// Read a file asynchronously and process line by line
+    pub async fn read_lines_async(path: &Path) -> Result<Vec<String>, String> {
+        let file = async_fs::File::open(path)
+            .await
+            .map_err(|e| format!("Failed to open file: {}", e))?;
+        let reader = AsyncBufReader::new(file);
+        let mut lines = reader.lines();
+        let mut result = Vec::new();
+
+        while let Some(line) = lines.next_line().await.map_err(|e| format!("Failed to read line: {}", e))? {
+            result.push(line);
+        }
+
+        Ok(result)
+    }
+
+    /// Write lines to a file asynchronously
+    pub async fn write_lines_async(path: &Path, lines: &[String]) -> Result<(), String> {
+        let mut file = async_fs::File::create(path)
+            .await
+            .map_err(|e| format!("Failed to create file: {}", e))?;
+
+        for line in lines {
+            file.write_all(line.as_bytes())
+                .await
+                .map_err(|e| format!("Failed to write line: {}", e))?;
+            file.write_all(b"\n")
+                .await
+                .map_err(|e| format!("Failed to write newline: {}", e))?;
+        }
+
+        file.flush()
+            .await
+            .map_err(|e| format!("Failed to flush file: {}", e))?;
+        Ok(())
+    }
+}
+
+#[cfg(feature = "async")]
+#[allow(unused_imports)]
+pub use async_processing::*;
 
 #[cfg(test)]
 mod tests {

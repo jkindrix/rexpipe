@@ -1,11 +1,13 @@
 mod compass;
 mod files;
+mod json_schema;
 mod pipeline;
 mod processor;
 mod inspector;
 
-use clap::{Arg, ArgAction, Command};
-use std::io::{self, BufReader};
+use clap::{Arg, ArgAction, Command, ValueHint, value_parser};
+use clap_complete::{generate, Generator, Shell};
+use std::io::{self, BufReader, IsTerminal};
 use std::fs::File;
 use std::path::PathBuf;
 
@@ -15,8 +17,69 @@ use pipeline::{PipelineConfig, PipelineSettings};
 use processor::StreamProcessor;
 use inspector::{Inspector, InspectorOptions};
 
-fn main() {
-    let matches = Command::new("rexpipe")
+/// Exit codes for different error conditions
+mod exit_codes {
+    /// Success - operation completed normally
+    #[allow(dead_code)]
+    pub const SUCCESS: i32 = 0;
+    /// No matches found (used with -q/--quiet mode)
+    pub const NO_MATCHES: i32 = 1;
+    /// General error (unspecified)
+    pub const GENERAL_ERROR: i32 = 1;
+    /// Invalid command line usage or missing arguments
+    pub const USAGE_ERROR: i32 = 2;
+    /// Configuration file error (not found, invalid TOML, etc.)
+    pub const CONFIG_ERROR: i32 = 3;
+    /// Invalid regex pattern
+    pub const PATTERN_ERROR: i32 = 4;
+    /// File I/O error (file not found, permission denied, etc.)
+    pub const IO_ERROR: i32 = 5;
+    /// Validation error (pipeline configuration validation failed)
+    pub const VALIDATION_ERROR: i32 = 6;
+}
+
+/// Categorize error type from error message for exit code selection
+fn categorize_error(error: &str) -> i32 {
+    let error_lower = error.to_lowercase();
+
+    if error_lower.contains("missing required")
+        || error_lower.contains("must specify")
+        || error_lower.contains("invalid argument")
+    {
+        exit_codes::USAGE_ERROR
+    } else if error_lower.contains("no such file")
+        || error_lower.contains("not found")
+        || error_lower.contains("permission denied")
+        || error_lower.contains("cannot open")
+    {
+        exit_codes::IO_ERROR
+    } else if error_lower.contains("invalid regex")
+        || error_lower.contains("regex parse error")
+        || error_lower.contains("pattern")
+        || error_lower.contains("pcre mode requested")
+    {
+        exit_codes::PATTERN_ERROR
+    } else if error_lower.contains("toml")
+        || error_lower.contains("config")
+        || error_lower.contains("parse error")
+        || error_lower.contains("deserialize")
+    {
+        exit_codes::CONFIG_ERROR
+    } else if error_lower.contains("validation")
+        || error_lower.contains("invalid pipeline")
+        || error_lower.contains("requires replacement")
+        || error_lower.contains("requires action")
+    {
+        exit_codes::VALIDATION_ERROR
+    } else {
+        exit_codes::GENERAL_ERROR
+    }
+}
+
+/// Build the CLI command structure
+/// Separated for use with clap_complete shell completion generation
+fn build_cli() -> Command {
+    Command::new("rexpipe")
         .version("1.1.0")
         .author("Strategic Collaboration Agent")
         .about("Unified regex pipeline processor with COMPASS framework integration")
@@ -27,6 +90,7 @@ fn main() {
                 .long("config")
                 .value_name("FILE")
                 .help("TOML configuration file")
+                .value_hint(ValueHint::FilePath)
         )
         .arg(
             Arg::new("pattern")
@@ -54,7 +118,7 @@ fn main() {
             Arg::new("pcre")
                 .short('P')
                 .long("pcre")
-                .help("Use PCRE2-compatible regex (supports lookahead/lookbehind)")
+                .help("Use PCRE-compatible regex via fancy-regex (supports lookahead/lookbehind)")
                 .action(ArgAction::SetTrue)
         )
         // === File Operations ===
@@ -122,6 +186,12 @@ fn main() {
                 .action(ArgAction::SetTrue)
         )
         .arg(
+            Arg::new("progress")
+                .long("progress")
+                .help("Show progress indicator for multi-file processing")
+                .action(ArgAction::SetTrue)
+        )
+        .arg(
             Arg::new("inspect")
                 .long("inspect")
                 .help("Enable inspection mode")
@@ -136,7 +206,7 @@ fn main() {
         .arg(
             Arg::new("dry-run")
                 .long("dry-run")
-                .help("Validate configuration without processing")
+                .help("Validate config, or preview changes with -I (in-place mode)")
                 .action(ArgAction::SetTrue)
         )
         // === Output Modes ===
@@ -220,6 +290,13 @@ fn main() {
                 .value_name("FORMAT")
                 .help("Export configuration (toml or json)")
         )
+        .arg(
+            Arg::new("completions")
+                .long("completions")
+                .value_name("SHELL")
+                .help("Generate shell completion script")
+                .value_parser(value_parser!(Shell))
+        )
         // === I/O ===
         .arg(
             Arg::new("input")
@@ -227,6 +304,7 @@ fn main() {
                 .long("input")
                 .value_name("FILE")
                 .help("Input file (default: stdin)")
+                .value_hint(ValueHint::FilePath)
         )
         .arg(
             Arg::new("output")
@@ -234,6 +312,7 @@ fn main() {
                 .long("output")
                 .value_name("FILE")
                 .help("Output file (default: stdout)")
+                .value_hint(ValueHint::FilePath)
         )
         // === Positional Args ===
         .arg(
@@ -241,23 +320,46 @@ fn main() {
                 .help("Files or directories to process")
                 .action(ArgAction::Append)
                 .num_args(0..)
+                .value_hint(ValueHint::AnyPath)
         )
-        .get_matches();
+}
+
+/// Generate shell completion script for the given shell
+fn print_completions<G: Generator>(gen: G, cmd: &mut Command) {
+    generate(gen, cmd, cmd.get_name().to_string(), &mut io::stdout());
+}
+
+fn main() {
+    let matches = build_cli().get_matches();
+
+    // Handle completions generation first (before any other processing)
+    if let Some(shell) = matches.get_one::<Shell>("completions").copied() {
+        let mut cmd = build_cli();
+        print_completions(shell, &mut cmd);
+        return;
+    }
 
     if let Err(e) = run_application(&matches) {
-        eprintln!("Error: {}", e);
-        std::process::exit(1);
+        let error_msg = e.to_string();
+        eprintln!("Error: {}", error_msg);
+        let exit_code = categorize_error(&error_msg);
+        std::process::exit(exit_code);
     }
 }
 
 fn run_application(matches: &clap::ArgMatches) -> Result<(), Box<dyn std::error::Error>> {
-    // Handle COMPASS mode first
-    if matches.get_flag("compass") {
-        return run_compass_analysis();
-    }
-
     // Build pipeline settings from CLI flags
     let settings = build_pipeline_settings(matches);
+
+    // Handle COMPASS mode - can optionally analyze a config
+    if matches.get_flag("compass") {
+        // Try to load config if provided
+        if matches.contains_id("config") && matches.get_one::<String>("config").is_some() {
+            let config = load_pipeline_config(matches, settings)?;
+            return run_compass_analysis_for_pipeline(&config);
+        }
+        return run_compass_analysis();
+    }
 
     // Load or create pipeline configuration
     let config = load_pipeline_config(matches, settings)?;
@@ -267,8 +369,8 @@ fn run_application(matches: &clap::ArgMatches) -> Result<(), Box<dyn std::error:
         return export_configuration(&config, format);
     }
 
-    // Validate configuration if requested
-    if matches.get_flag("validate") || matches.get_flag("dry-run") {
+    // Validate configuration if requested (unless we have files to preview)
+    if matches.get_flag("validate") {
         return validate_configuration(&config);
     }
 
@@ -281,6 +383,14 @@ fn run_application(matches: &clap::ArgMatches) -> Result<(), Box<dyn std::error:
     let is_multi_file = matches.get_flag("recursive")
         || matches.get_flag("in-place")
         || !paths.is_empty();
+
+    // Handle dry-run: show preview for in-place mode, otherwise just validate
+    if matches.get_flag("dry-run") {
+        if is_multi_file && matches.get_flag("in-place") {
+            return run_dry_run_preview(&config, matches, paths);
+        }
+        return validate_configuration(&config);
+    }
 
     if is_multi_file {
         return run_multi_file_mode(&config, matches, paths);
@@ -354,7 +464,8 @@ fn run_multi_file_mode(
         .count_only(matches.get_flag("count"))
         .files_with_matches(matches.get_flag("files-with-matches"))
         .files_without_matches(matches.get_flag("files-without-matches"))
-        .quiet(quiet);
+        .quiet(quiet)
+        .show_progress(matches.get_flag("progress"));
 
     // Add max depth
     if let Some(depth) = matches.get_one::<String>("max-depth") {
@@ -397,11 +508,11 @@ fn run_multi_file_mode(
     // Process based on mode
     let result = if options.files_with_matches {
         let matching = processor.files_with_matches(&files)?;
-        output_file_list(&matching, quiet, json_output)?;
+        output_file_list(&matching, quiet, json_output, "files_with_matches")?;
         return Ok(());
     } else if options.files_without_matches {
         let non_matching = processor.files_without_matches(&files)?;
-        output_file_list(&non_matching, quiet, json_output)?;
+        output_file_list(&non_matching, quiet, json_output, "files_without_matches")?;
         return Ok(());
     } else if options.count_only {
         let result = processor.count_matches(&files)?;
@@ -420,22 +531,77 @@ fn run_multi_file_mode(
         }
     }
 
-    // Set exit code based on matches
+    // Set exit code based on matches (exit 1 = no matches, for grep-like behavior)
     if !result.has_matches() {
-        std::process::exit(1);
+        std::process::exit(exit_codes::NO_MATCHES);
     }
 
     Ok(())
 }
 
-fn output_file_list(files: &[PathBuf], quiet: bool, json: bool) -> Result<(), Box<dyn std::error::Error>> {
+fn run_dry_run_preview(
+    config: &PipelineConfig,
+    matches: &clap::ArgMatches,
+    paths: Vec<PathBuf>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    // Build file processing options (same as run_multi_file_mode but without in_place)
+    let mut options = FileProcessingOptions::new()
+        .respect_gitignore(!matches.get_flag("no-ignore"))
+        .include_hidden(matches.get_flag("hidden"));
+
+    // Add max depth
+    if let Some(depth) = matches.get_one::<String>("max-depth") {
+        options = options.max_depth(Some(depth.parse()?));
+    }
+
+    // Add glob patterns
+    if let Some(globs) = matches.get_many::<String>("glob") {
+        for glob in globs {
+            options = options.include_pattern(glob.clone());
+        }
+    }
+
+    // Add exclude patterns
+    if let Some(excludes) = matches.get_many::<String>("exclude") {
+        for exclude in excludes {
+            options = options.exclude_pattern(exclude.clone());
+        }
+    }
+
+    let processor = MultiFileProcessor::new(config.clone(), options);
+
+    // Determine paths to process
+    let paths_to_process = if paths.is_empty() {
+        vec![PathBuf::from(".")]
+    } else {
+        paths
+    };
+
+    // Discover files
+    let files = processor.discover_files(&paths_to_process)?;
+
+    if files.is_empty() {
+        eprintln!("No files found matching criteria");
+        return Ok(());
+    }
+
+    // Determine if we should use color
+    let use_color = std::io::stdout().is_terminal();
+
+    // Generate preview
+    let preview = processor.preview_changes(&files, use_color)?;
+    print!("{}", preview);
+
+    Ok(())
+}
+
+fn output_file_list(files: &[PathBuf], quiet: bool, json: bool, mode: &str) -> Result<(), Box<dyn std::error::Error>> {
     if quiet {
         return Ok(());
     }
 
     if json {
-        let json_files: Vec<String> = files.iter().map(|p| p.display().to_string()).collect();
-        println!("{}", serde_json::to_string_pretty(&json_files)?);
+        println!("{}", json_schema::output_file_list_json(files, mode)?);
     } else {
         for file in files {
             println!("{}", file.display());
@@ -450,24 +616,7 @@ fn output_count_results(result: &MultiFileResult, quiet: bool, json: bool) -> Re
     }
 
     if json {
-        #[derive(serde::Serialize)]
-        struct CountResult {
-            file: String,
-            matches: u64,
-            lines: u64,
-        }
-
-        let counts: Vec<CountResult> = result
-            .file_results
-            .iter()
-            .map(|r| CountResult {
-                file: r.path.display().to_string(),
-                matches: r.matches_found,
-                lines: r.lines_processed,
-            })
-            .collect();
-
-        println!("{}", serde_json::to_string_pretty(&counts)?);
+        println!("{}", json_schema::output_multi_file_json(result)?);
     } else {
         for file_result in &result.file_results {
             println!("{}:{}", file_result.path.display(), file_result.matches_found);
@@ -479,26 +628,7 @@ fn output_count_results(result: &MultiFileResult, quiet: bool, json: bool) -> Re
 }
 
 fn output_multi_file_json(result: &MultiFileResult) -> Result<(), Box<dyn std::error::Error>> {
-    #[derive(serde::Serialize)]
-    struct JsonResult {
-        files_processed: u64,
-        files_matched: u64,
-        files_modified: u64,
-        total_matches: u64,
-        total_lines: u64,
-        errors: Vec<String>,
-    }
-
-    let json_result = JsonResult {
-        files_processed: result.files_processed,
-        files_matched: result.files_matched,
-        files_modified: result.files_modified,
-        total_matches: result.total_matches,
-        total_lines: result.total_lines,
-        errors: result.errors.clone(),
-    };
-
-    println!("{}", serde_json::to_string_pretty(&json_result)?);
+    println!("{}", json_schema::output_multi_file_json(result)?);
     Ok(())
 }
 
@@ -534,7 +664,15 @@ fn load_pipeline_config(matches: &clap::ArgMatches, settings: PipelineSettings) 
         let replacement = matches.get_one::<String>("replacement").map(|s| s.as_str());
         Ok(PipelineConfig::from_inline_pattern_with_settings(pattern, replacement, settings))
     } else {
-        Err("Must specify either --config FILE or --pattern REGEX".into())
+        Err("Missing required input.\n\n\
+             You must specify either:\n  \
+             - A config file:  rexpipe --config pipeline.toml < input.txt\n  \
+             - An inline pattern:  rexpipe --pattern '\\d+' < input.txt\n\n\
+             Examples:\n  \
+             rexpipe -p 'ERROR' < log.txt              # Match lines with ERROR\n  \
+             rexpipe -p '\\d+' -r 'NUM' < data.txt     # Replace numbers with NUM\n  \
+             rexpipe -c config.toml --inspect < test   # Preview matches\n\n\
+             Run 'rexpipe --help' for full usage information.".into())
     }
 }
 
@@ -543,18 +681,30 @@ fn validate_configuration(config: &PipelineConfig) -> Result<(), Box<dyn std::er
         Ok(()) => {
             println!("✓ Configuration is valid");
             println!("{}", config.summary());
-            
+
             // Test compilation
-            StreamProcessor::new(config.clone())?;
-            println!("✓ All patterns compile successfully");
-            
-            Ok(())
+            match StreamProcessor::new(config.clone()) {
+                Ok(_) => {
+                    println!("✓ All patterns compile successfully");
+                    Ok(())
+                }
+                Err(e) => {
+                    println!("✗ Pattern compilation failed:");
+                    println!("{}", e);
+                    Err(e)
+                }
+            }
         }
         Err(errors) => {
-            println!("✗ Configuration validation failed:");
-            for error in errors {
-                println!("  - {}", error);
+            println!("✗ Configuration validation failed:\n");
+            for (i, error) in errors.iter().enumerate() {
+                println!("  {}. {}", i + 1, error);
             }
+            println!("\nSuggestions:");
+            println!("  - Check that all substitute steps have 'replacement' defined");
+            println!("  - Check that all filter steps have 'action' defined (keep_line, drop_line, etc.)");
+            println!("  - Verify all patterns are valid regex syntax");
+            println!("  - Use 'rexpipe --inspect' to test patterns interactively");
             Err("Configuration is invalid".into())
         }
     }
@@ -562,42 +712,53 @@ fn validate_configuration(config: &PipelineConfig) -> Result<(), Box<dyn std::er
 
 fn run_compass_analysis() -> Result<(), Box<dyn std::error::Error>> {
     println!("Initializing COMPASS Strategic Collaboration Agent...\n");
-    
+
     let mut agent = CompassAgent::new();
-    
+    run_compass_phases(&mut agent)
+}
+
+fn run_compass_analysis_for_pipeline(config: &PipelineConfig) -> Result<(), Box<dyn std::error::Error>> {
+    println!("Initializing COMPASS Strategic Collaboration Agent for Pipeline Analysis...\n");
+
+    let mut agent = CompassAgent::for_pipeline(config);
+    println!("Analyzing: {}\n", config.name.as_deref().unwrap_or("Unnamed Pipeline"));
+    run_compass_phases(&mut agent)
+}
+
+fn run_compass_phases(agent: &mut CompassAgent) -> Result<(), Box<dyn std::error::Error>> {
     // Execute COMPASS framework
     println!("Phase 1: Clarifying Core Intent");
-    let intent = agent.clarify_intent("Build unified regex pipeline processor")?;
+    let intent = agent.clarify_intent(&agent.context.problem_statement.clone())?;
     println!("✓ {}\n", intent);
     agent.advance_phase()?;
-    
+
     println!("Phase 2: Orienting Through Research");
-    let research = agent.orient_research("Multi-tool fragmentation causes performance issues")?;
+    let research = agent.orient_research("")?;
     println!("✓ {}\n", research);
     agent.advance_phase()?;
-    
+
     println!("Phase 3: Mapping Solution Space");
     let solution = agent.map_solution()?;
     println!("✓ {}\n", solution);
     agent.advance_phase()?;
-    
+
     println!("Phase 4: Pausing for Strategic Validation");
     let should_proceed = agent.validate_strategy()?;
     println!("✓ Strategic validation: {}\n", if should_proceed { "PROCEED" } else { "PIVOT" });
     agent.advance_phase()?;
-    
+
     println!("Phase 5: Architecting Implementation");
     let _architecture = agent.architect_implementation()?;
     println!("✓ Architecture defined\n");
     agent.advance_phase()?;
-    
+
     println!("Phase 6: Synthesizing and Validating");
     let _synthesis = agent.synthesize_final()?;
     println!("✓ Framework execution complete\n");
-    
+
     // Generate final report
     println!("{}", agent.generate_report());
-    
+
     Ok(())
 }
 
@@ -635,7 +796,7 @@ fn run_processing_mode(
         let mut output = std::io::sink();
         let result = processor.process_stream(input, &mut output)?;
         if result.matches_found == 0 {
-            std::process::exit(1);
+            std::process::exit(exit_codes::NO_MATCHES);
         }
         return Ok(());
     }
@@ -646,18 +807,7 @@ fn run_processing_mode(
         let result = processor.process_stream(input, &mut output)?;
 
         if json_output {
-            #[derive(serde::Serialize)]
-            struct CountOutput {
-                lines_processed: u64,
-                matches_found: u64,
-                transformations_applied: u64,
-            }
-            let count = CountOutput {
-                lines_processed: result.lines_processed,
-                matches_found: result.matches_found,
-                transformations_applied: result.transformations_applied,
-            };
-            println!("{}", serde_json::to_string_pretty(&count)?);
+            println!("{}", json_schema::output_count_json(&result)?);
         } else {
             println!("{}", result.matches_found);
         }
@@ -679,20 +829,7 @@ fn run_processing_mode(
 
     if json_output && matches.get_flag("performance") {
         // If both json and performance are requested, output performance as JSON
-        #[derive(serde::Serialize)]
-        struct PerfOutput {
-            lines_processed: u64,
-            matches_found: u64,
-            transformations_applied: u64,
-            success_rate: f64,
-        }
-        let perf = PerfOutput {
-            lines_processed: result.lines_processed,
-            matches_found: result.matches_found,
-            transformations_applied: result.transformations_applied,
-            success_rate: result.success_rate(),
-        };
-        eprintln!("{}", serde_json::to_string_pretty(&perf)?);
+        eprintln!("{}", json_schema::output_performance_json(&result)?);
     }
 
     Ok(())
