@@ -1,19 +1,19 @@
-use criterion::{criterion_group, criterion_main, Criterion, BenchmarkId};
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use rexpipe::pipeline::PipelineConfig;
 use rexpipe::processor::StreamProcessor;
 use std::io::Cursor;
 
 fn benchmark_processing(c: &mut Criterion) {
     let mut group = c.benchmark_group("regex_processing");
-    
+
     // Test data of various sizes
     let small_data = generate_test_data(100);
     let medium_data = generate_test_data(1000);
     let large_data = generate_test_data(10000);
-    
+
     // Simple substitution benchmark
     let substitution_config = PipelineConfig::from_inline_pattern(r"\d+", Some("NUMBER"));
-    
+
     group.bench_with_input(
         BenchmarkId::new("substitution", "small"),
         &small_data,
@@ -26,7 +26,7 @@ fn benchmark_processing(c: &mut Criterion) {
             })
         },
     );
-    
+
     group.bench_with_input(
         BenchmarkId::new("substitution", "medium"),
         &medium_data,
@@ -39,7 +39,7 @@ fn benchmark_processing(c: &mut Criterion) {
             })
         },
     );
-    
+
     group.bench_with_input(
         BenchmarkId::new("substitution", "large"),
         &large_data,
@@ -52,10 +52,10 @@ fn benchmark_processing(c: &mut Criterion) {
             })
         },
     );
-    
+
     // Complex pipeline benchmark (simulating multi-tool equivalent)
     let complex_config = create_complex_pipeline();
-    
+
     group.bench_with_input(
         BenchmarkId::new("complex_pipeline", "medium"),
         &medium_data,
@@ -68,16 +68,16 @@ fn benchmark_processing(c: &mut Criterion) {
             })
         },
     );
-    
+
     group.finish();
 }
 
 fn benchmark_inspection(c: &mut Criterion) {
     let mut group = c.benchmark_group("pattern_inspection");
-    
+
     let test_data = generate_test_data(1000);
     let config = PipelineConfig::from_inline_pattern(r"(\w+)=(\d+)", None);
-    
+
     group.bench_function("inspect_stream", |b| {
         b.iter(|| {
             let mut inspector = rexpipe::inspector::Inspector::new(config.clone()).unwrap();
@@ -85,13 +85,13 @@ fn benchmark_inspection(c: &mut Criterion) {
             inspector.inspect_stream(reader).unwrap();
         })
     });
-    
+
     group.finish();
 }
 
 fn create_complex_pipeline() -> PipelineConfig {
     use rexpipe::pipeline::*;
-    
+
     PipelineConfig {
         name: Some("Complex Benchmark Pipeline".to_string()),
         description: Some("Multi-step processing simulation".to_string()),
@@ -148,14 +148,14 @@ fn generate_test_data(lines: usize) -> String {
         "2025-01-08 10:15:29 [ERROR] Permission denied for user_id=5678",
         "2025-01-08 10:15:30 [INFO] Connection established from 192.168.1.15",
     ];
-    
+
     let mut data = String::new();
     for i in 0..lines {
         let pattern_index = i % log_patterns.len();
         data.push_str(log_patterns[pattern_index]);
         data.push('\n');
     }
-    
+
     data
 }
 

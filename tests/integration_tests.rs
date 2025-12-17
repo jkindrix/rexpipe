@@ -1,17 +1,22 @@
 use rexpipe::compass::CompassAgent;
-use rexpipe::pipeline::{PipelineConfig, PipelineSettings, PipelineStep, StepType, FilterAction, RegexFlag, TransformAction};
-use rexpipe::processor::StreamProcessor;
 use rexpipe::inspector::{Inspector, InspectorOptions};
+use rexpipe::pipeline::{
+    FilterAction, PipelineConfig, PipelineSettings, PipelineStep, RegexFlag, StepType,
+    TransformAction,
+};
+use rexpipe::processor::StreamProcessor;
 use std::io::Cursor;
-use tempfile::NamedTempFile;
 use std::io::Write;
+use tempfile::NamedTempFile;
 
 #[test]
 fn test_compass_agent_full_workflow() {
     let mut agent = CompassAgent::new();
 
     // Execute complete COMPASS workflow
-    assert!(agent.clarify_intent("Build regex pipeline processor").is_ok());
+    assert!(agent
+        .clarify_intent("Build regex pipeline processor")
+        .is_ok());
     assert!(agent.advance_phase().is_ok());
 
     assert!(agent.orient_research("Existing tools fragmented").is_ok());
@@ -159,18 +164,16 @@ another DEBUG to drop"#;
         version: None,
         patterns_include: Vec::new(),
         settings: PipelineSettings::default(),
-        step: vec![
-            PipelineStep {
-                step_type: StepType::Filter,
-                pattern: "DEBUG".to_string(),
-                replacement: None,
-                action: Some(FilterAction::DropLine),
-                transform: None,
-                flags: None,
-                description: None,
-                enabled: Some(true),
-            },
-        ],
+        step: vec![PipelineStep {
+            step_type: StepType::Filter,
+            pattern: "DEBUG".to_string(),
+            replacement: None,
+            action: Some(FilterAction::DropLine),
+            transform: None,
+            flags: None,
+            description: None,
+            enabled: Some(true),
+        }],
     };
 
     let mut processor = StreamProcessor::new(config).unwrap();
@@ -217,18 +220,16 @@ Invalid line without timestamp
         version: None,
         patterns_include: Vec::new(),
         settings: PipelineSettings::default(),
-        step: vec![
-            PipelineStep {
-                step_type: StepType::Validate,
-                pattern: r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}".to_string(),
-                replacement: None,
-                action: None,
-                transform: None,
-                flags: None,
-                description: Some("Validate timestamp format".to_string()),
-                enabled: Some(true),
-            },
-        ],
+        step: vec![PipelineStep {
+            step_type: StepType::Validate,
+            pattern: r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}".to_string(),
+            replacement: None,
+            action: None,
+            transform: None,
+            flags: None,
+            description: Some("Validate timestamp format".to_string()),
+            enabled: Some(true),
+        }],
     };
 
     let mut processor = StreamProcessor::new(config).unwrap();
@@ -241,7 +242,11 @@ Invalid line without timestamp
     assert!(result.errors.len() > 0);
 
     let output_str = String::from_utf8(output).unwrap();
-    let lines: Vec<&str> = output_str.trim().split('\n').filter(|s| !s.is_empty()).collect();
+    let lines: Vec<&str> = output_str
+        .trim()
+        .split('\n')
+        .filter(|s| !s.is_empty())
+        .collect();
 
     // Only valid lines should be in output
     assert_eq!(lines.len(), 2);
@@ -258,18 +263,16 @@ fn test_extract_step_type() {
         version: None,
         patterns_include: Vec::new(),
         settings: PipelineSettings::default(),
-        step: vec![
-            PipelineStep {
-                step_type: StepType::Extract,
-                pattern: r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}".to_string(),
-                replacement: None,
-                action: None,
-                transform: None,
-                flags: None,
-                description: Some("Extract email addresses".to_string()),
-                enabled: Some(true),
-            },
-        ],
+        step: vec![PipelineStep {
+            step_type: StepType::Extract,
+            pattern: r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}".to_string(),
+            replacement: None,
+            action: None,
+            transform: None,
+            flags: None,
+            description: Some("Extract email addresses".to_string()),
+            enabled: Some(true),
+        }],
     };
 
     let mut processor = StreamProcessor::new(config).unwrap();
@@ -293,18 +296,16 @@ fn test_error_handling() {
         version: None,
         patterns_include: Vec::new(),
         settings: PipelineSettings::default(),
-        step: vec![
-            PipelineStep {
-                step_type: StepType::Substitute,
-                pattern: r"[invalid regex(".to_string(), // Invalid regex
-                replacement: Some("replacement".to_string()),
-                action: None,
-                transform: None,
-                flags: None,
-                description: None,
-                enabled: Some(true),
-            },
-        ],
+        step: vec![PipelineStep {
+            step_type: StepType::Substitute,
+            pattern: r"[invalid regex(".to_string(), // Invalid regex
+            replacement: Some("replacement".to_string()),
+            action: None,
+            transform: None,
+            flags: None,
+            description: None,
+            enabled: Some(true),
+        }],
     };
 
     // Should fail to create processor due to invalid regex
@@ -321,18 +322,16 @@ fn test_disabled_steps() {
         version: None,
         patterns_include: Vec::new(),
         settings: PipelineSettings::default(),
-        step: vec![
-            PipelineStep {
-                step_type: StepType::Substitute,
-                pattern: r"\d+".to_string(),
-                replacement: Some("NUMBER".to_string()),
-                action: None,
-                transform: None,
-                flags: Some(vec![RegexFlag::Global]),
-                description: None,
-                enabled: Some(false), // Disabled step
-            },
-        ],
+        step: vec![PipelineStep {
+            step_type: StepType::Substitute,
+            pattern: r"\d+".to_string(),
+            replacement: Some("NUMBER".to_string()),
+            action: None,
+            transform: None,
+            flags: Some(vec![RegexFlag::Global]),
+            description: None,
+            enabled: Some(false), // Disabled step
+        }],
     };
 
     let mut processor = StreamProcessor::new(config).unwrap();
@@ -357,18 +356,16 @@ fn test_transform_uppercase() {
         version: None,
         patterns_include: Vec::new(),
         settings: PipelineSettings::default(),
-        step: vec![
-            PipelineStep {
-                step_type: StepType::Transform,
-                pattern: r"[a-z]+".to_string(),
-                replacement: None,
-                action: None,
-                transform: Some(TransformAction::Uppercase),
-                flags: Some(vec![RegexFlag::Global]),
-                description: Some("Convert lowercase words to uppercase".to_string()),
-                enabled: Some(true),
-            },
-        ],
+        step: vec![PipelineStep {
+            step_type: StepType::Transform,
+            pattern: r"[a-z]+".to_string(),
+            replacement: None,
+            action: None,
+            transform: Some(TransformAction::Uppercase),
+            flags: Some(vec![RegexFlag::Global]),
+            description: Some("Convert lowercase words to uppercase".to_string()),
+            enabled: Some(true),
+        }],
     };
 
     let mut processor = StreamProcessor::new(config).unwrap();
@@ -391,18 +388,16 @@ fn test_transform_lowercase() {
         version: None,
         patterns_include: Vec::new(),
         settings: PipelineSettings::default(),
-        step: vec![
-            PipelineStep {
-                step_type: StepType::Transform,
-                pattern: r"[A-Z]+".to_string(),
-                replacement: None,
-                action: None,
-                transform: Some(TransformAction::Lowercase),
-                flags: Some(vec![RegexFlag::Global]),
-                description: Some("Convert uppercase to lowercase".to_string()),
-                enabled: Some(true),
-            },
-        ],
+        step: vec![PipelineStep {
+            step_type: StepType::Transform,
+            pattern: r"[A-Z]+".to_string(),
+            replacement: None,
+            action: None,
+            transform: Some(TransformAction::Lowercase),
+            flags: Some(vec![RegexFlag::Global]),
+            description: Some("Convert uppercase to lowercase".to_string()),
+            enabled: Some(true),
+        }],
     };
 
     let mut processor = StreamProcessor::new(config).unwrap();
@@ -437,18 +432,16 @@ fn test_pcre_positive_lookahead() {
         version: None,
         patterns_include: Vec::new(),
         settings,
-        step: vec![
-            PipelineStep {
-                step_type: StepType::Substitute,
-                pattern: r"foo(?= bar)".to_string(), // Positive lookahead
-                replacement: Some("MATCHED".to_string()),
-                action: None,
-                transform: None,
-                flags: Some(vec![RegexFlag::Global]),
-                description: Some("Match foo only when followed by bar".to_string()),
-                enabled: Some(true),
-            },
-        ],
+        step: vec![PipelineStep {
+            step_type: StepType::Substitute,
+            pattern: r"foo(?= bar)".to_string(), // Positive lookahead
+            replacement: Some("MATCHED".to_string()),
+            action: None,
+            transform: None,
+            flags: Some(vec![RegexFlag::Global]),
+            description: Some("Match foo only when followed by bar".to_string()),
+            enabled: Some(true),
+        }],
     };
 
     let mut processor = StreamProcessor::new(config).unwrap();
@@ -477,18 +470,16 @@ fn test_pcre_negative_lookahead() {
         version: None,
         patterns_include: Vec::new(),
         settings,
-        step: vec![
-            PipelineStep {
-                step_type: StepType::Substitute,
-                pattern: r"foo(?! bar)".to_string(), // Negative lookahead
-                replacement: Some("MATCHED".to_string()),
-                action: None,
-                transform: None,
-                flags: Some(vec![RegexFlag::Global]),
-                description: Some("Match foo only when NOT followed by bar".to_string()),
-                enabled: Some(true),
-            },
-        ],
+        step: vec![PipelineStep {
+            step_type: StepType::Substitute,
+            pattern: r"foo(?! bar)".to_string(), // Negative lookahead
+            replacement: Some("MATCHED".to_string()),
+            action: None,
+            transform: None,
+            flags: Some(vec![RegexFlag::Global]),
+            description: Some("Match foo only when NOT followed by bar".to_string()),
+            enabled: Some(true),
+        }],
     };
 
     let mut processor = StreamProcessor::new(config).unwrap();
@@ -517,18 +508,16 @@ fn test_pcre_positive_lookbehind() {
         version: None,
         patterns_include: Vec::new(),
         settings,
-        step: vec![
-            PipelineStep {
-                step_type: StepType::Substitute,
-                pattern: r"(?<=\$)\d+".to_string(), // Positive lookbehind for $
-                replacement: Some("XXX".to_string()),
-                action: None,
-                transform: None,
-                flags: Some(vec![RegexFlag::Global]),
-                description: Some("Match numbers preceded by $".to_string()),
-                enabled: Some(true),
-            },
-        ],
+        step: vec![PipelineStep {
+            step_type: StepType::Substitute,
+            pattern: r"(?<=\$)\d+".to_string(), // Positive lookbehind for $
+            replacement: Some("XXX".to_string()),
+            action: None,
+            transform: None,
+            flags: Some(vec![RegexFlag::Global]),
+            description: Some("Match numbers preceded by $".to_string()),
+            enabled: Some(true),
+        }],
     };
 
     let mut processor = StreamProcessor::new(config).unwrap();
@@ -557,18 +546,16 @@ fn test_pcre_negative_lookbehind() {
         version: None,
         patterns_include: Vec::new(),
         settings,
-        step: vec![
-            PipelineStep {
-                step_type: StepType::Substitute,
-                pattern: r"(?<!\$)\b\d+\b".to_string(), // Negative lookbehind for $
-                replacement: Some("XXX".to_string()),
-                action: None,
-                transform: None,
-                flags: Some(vec![RegexFlag::Global]),
-                description: Some("Match numbers NOT preceded by $".to_string()),
-                enabled: Some(true),
-            },
-        ],
+        step: vec![PipelineStep {
+            step_type: StepType::Substitute,
+            pattern: r"(?<!\$)\b\d+\b".to_string(), // Negative lookbehind for $
+            replacement: Some("XXX".to_string()),
+            action: None,
+            transform: None,
+            flags: Some(vec![RegexFlag::Global]),
+            description: Some("Match numbers NOT preceded by $".to_string()),
+            enabled: Some(true),
+        }],
     };
 
     let mut processor = StreamProcessor::new(config).unwrap();
@@ -600,19 +587,17 @@ fn test_pcre_combined_lookaround() {
         version: None,
         patterns_include: Vec::new(),
         settings,
-        step: vec![
-            PipelineStep {
-                step_type: StepType::Substitute,
-                // Match "user" only when preceded by ": " and NOT followed by ","
-                pattern: r"(?<=: )user(?!,)".to_string(),
-                replacement: Some("ROLE".to_string()),
-                action: None,
-                transform: None,
-                flags: Some(vec![RegexFlag::Global]),
-                description: Some("Complex lookaround pattern".to_string()),
-                enabled: Some(true),
-            },
-        ],
+        step: vec![PipelineStep {
+            step_type: StepType::Substitute,
+            // Match "user" only when preceded by ": " and NOT followed by ","
+            pattern: r"(?<=: )user(?!,)".to_string(),
+            replacement: Some("ROLE".to_string()),
+            action: None,
+            transform: None,
+            flags: Some(vec![RegexFlag::Global]),
+            description: Some("Complex lookaround pattern".to_string()),
+            enabled: Some(true),
+        }],
     };
 
     let mut processor = StreamProcessor::new(config).unwrap();
@@ -624,8 +609,16 @@ fn test_pcre_combined_lookaround() {
 
     // "user" in "role: user end" should be replaced (preceded by ": ", not followed by ",")
     // "user:" at start is not preceded by ": " so not affected
-    assert!(output_str.contains("role: ROLE end"), "Expected 'role: ROLE end', got: {}", output_str);
-    assert!(output_str.contains("user: admin"), "Start 'user' should not be affected: {}", output_str);
+    assert!(
+        output_str.contains("role: ROLE end"),
+        "Expected 'role: ROLE end', got: {}",
+        output_str
+    );
+    assert!(
+        output_str.contains("user: admin"),
+        "Start 'user' should not be affected: {}",
+        output_str
+    );
 }
 
 /// Test PCRE mode with filter step
@@ -647,19 +640,17 @@ INFO: Processing complete"#;
         version: None,
         patterns_include: Vec::new(),
         settings,
-        step: vec![
-            PipelineStep {
-                step_type: StepType::Filter,
-                // Drop lines starting with DEBUG followed by anything containing "user"
-                pattern: r"^DEBUG:(?=.*user)".to_string(),
-                replacement: None,
-                action: Some(FilterAction::DropLine),
-                transform: None,
-                flags: Some(vec![RegexFlag::CaseInsensitive]),
-                description: Some("Drop debug lines mentioning user".to_string()),
-                enabled: Some(true),
-            },
-        ],
+        step: vec![PipelineStep {
+            step_type: StepType::Filter,
+            // Drop lines starting with DEBUG followed by anything containing "user"
+            pattern: r"^DEBUG:(?=.*user)".to_string(),
+            replacement: None,
+            action: Some(FilterAction::DropLine),
+            transform: None,
+            flags: Some(vec![RegexFlag::CaseInsensitive]),
+            description: Some("Drop debug lines mentioning user".to_string()),
+            enabled: Some(true),
+        }],
     };
 
     let mut processor = StreamProcessor::new(config).unwrap();
@@ -693,19 +684,17 @@ fn test_fixed_string_basic_replacement() {
         version: None,
         patterns_include: Vec::new(),
         settings,
-        step: vec![
-            PipelineStep {
-                step_type: StepType::Substitute,
-                // This should match literally, not as regex
-                pattern: ".*".to_string(),
-                replacement: Some("WILDCARD".to_string()),
-                action: None,
-                transform: None,
-                flags: Some(vec![RegexFlag::Global]),
-                description: Some("Replace literal .*".to_string()),
-                enabled: Some(true),
-            },
-        ],
+        step: vec![PipelineStep {
+            step_type: StepType::Substitute,
+            // This should match literally, not as regex
+            pattern: ".*".to_string(),
+            replacement: Some("WILDCARD".to_string()),
+            action: None,
+            transform: None,
+            flags: Some(vec![RegexFlag::Global]),
+            description: Some("Replace literal .*".to_string()),
+            enabled: Some(true),
+        }],
     };
 
     let mut processor = StreamProcessor::new(config).unwrap();
@@ -733,19 +722,17 @@ fn test_fixed_string_special_chars() {
         version: None,
         patterns_include: Vec::new(),
         settings,
-        step: vec![
-            PipelineStep {
-                step_type: StepType::Substitute,
-                // Literal brackets - would be char class in regex
-                pattern: "[brackets]".to_string(),
-                replacement: Some("BRACKETS".to_string()),
-                action: None,
-                transform: None,
-                flags: Some(vec![RegexFlag::Global]),
-                description: None,
-                enabled: Some(true),
-            },
-        ],
+        step: vec![PipelineStep {
+            step_type: StepType::Substitute,
+            // Literal brackets - would be char class in regex
+            pattern: "[brackets]".to_string(),
+            replacement: Some("BRACKETS".to_string()),
+            action: None,
+            transform: None,
+            flags: Some(vec![RegexFlag::Global]),
+            description: None,
+            enabled: Some(true),
+        }],
     };
 
     let mut processor = StreamProcessor::new(config).unwrap();
@@ -755,7 +742,10 @@ fn test_fixed_string_special_chars() {
     processor.process_stream(reader, &mut output).unwrap();
     let output_str = String::from_utf8(output).unwrap();
 
-    assert_eq!(output_str.trim(), "Match BRACKETS and (parens) and $dollars");
+    assert_eq!(
+        output_str.trim(),
+        "Match BRACKETS and (parens) and $dollars"
+    );
 }
 
 /// Test fixed string mode with filter step
@@ -775,19 +765,17 @@ Line with ERROR without brackets"#;
         version: None,
         patterns_include: Vec::new(),
         settings,
-        step: vec![
-            PipelineStep {
-                step_type: StepType::Filter,
-                // Match literal [ERROR] including brackets
-                pattern: "[ERROR]".to_string(),
-                replacement: None,
-                action: Some(FilterAction::DropLine),
-                transform: None,
-                flags: None,
-                description: None,
-                enabled: Some(true),
-            },
-        ],
+        step: vec![PipelineStep {
+            step_type: StepType::Filter,
+            // Match literal [ERROR] including brackets
+            pattern: "[ERROR]".to_string(),
+            replacement: None,
+            action: Some(FilterAction::DropLine),
+            transform: None,
+            flags: None,
+            description: None,
+            enabled: Some(true),
+        }],
     };
 
     let mut processor = StreamProcessor::new(config).unwrap();
@@ -818,19 +806,17 @@ fn test_fixed_string_backslashes() {
         version: None,
         patterns_include: Vec::new(),
         settings,
-        step: vec![
-            PipelineStep {
-                step_type: StepType::Substitute,
-                // Literal backslash - would be escape char in regex
-                pattern: r"\".to_string(),
-                replacement: Some("/".to_string()),
-                action: None,
-                transform: None,
-                flags: Some(vec![RegexFlag::Global]),
-                description: None,
-                enabled: Some(true),
-            },
-        ],
+        step: vec![PipelineStep {
+            step_type: StepType::Substitute,
+            // Literal backslash - would be escape char in regex
+            pattern: r"\".to_string(),
+            replacement: Some("/".to_string()),
+            action: None,
+            transform: None,
+            flags: Some(vec![RegexFlag::Global]),
+            description: None,
+            enabled: Some(true),
+        }],
     };
 
     let mut processor = StreamProcessor::new(config).unwrap();
@@ -858,19 +844,17 @@ fn test_fixed_string_multiple_occurrences() {
         version: None,
         patterns_include: Vec::new(),
         settings,
-        step: vec![
-            PipelineStep {
-                step_type: StepType::Substitute,
-                // Literal "+" - would match one or more in regex
-                pattern: "+".to_string(),
-                replacement: Some("PLUS".to_string()),
-                action: None,
-                transform: None,
-                flags: Some(vec![RegexFlag::Global]),
-                description: None,
-                enabled: Some(true),
-            },
-        ],
+        step: vec![PipelineStep {
+            step_type: StepType::Substitute,
+            // Literal "+" - would match one or more in regex
+            pattern: "+".to_string(),
+            replacement: Some("PLUS".to_string()),
+            action: None,
+            transform: None,
+            flags: Some(vec![RegexFlag::Global]),
+            description: None,
+            enabled: Some(true),
+        }],
     };
 
     let mut processor = StreamProcessor::new(config).unwrap();
@@ -898,18 +882,16 @@ fn test_unicode_basic_matching() {
         version: None,
         patterns_include: Vec::new(),
         settings: PipelineSettings::default(),
-        step: vec![
-            PipelineStep {
-                step_type: StepType::Substitute,
-                pattern: r"世界".to_string(),
-                replacement: Some("World".to_string()),
-                action: None,
-                transform: None,
-                flags: Some(vec![RegexFlag::Global]),
-                description: None,
-                enabled: Some(true),
-            },
-        ],
+        step: vec![PipelineStep {
+            step_type: StepType::Substitute,
+            pattern: r"世界".to_string(),
+            replacement: Some("World".to_string()),
+            action: None,
+            transform: None,
+            flags: Some(vec![RegexFlag::Global]),
+            description: None,
+            enabled: Some(true),
+        }],
     };
 
     let mut processor = StreamProcessor::new(config).unwrap();
@@ -933,19 +915,17 @@ fn test_unicode_character_classes() {
         version: None,
         patterns_include: Vec::new(),
         settings: PipelineSettings::default(),
-        step: vec![
-            PipelineStep {
-                step_type: StepType::Substitute,
-                // Match CJK characters (using Unicode property)
-                pattern: r"\p{Han}+".to_string(),
-                replacement: Some("USER".to_string()),
-                action: None,
-                transform: None,
-                flags: Some(vec![RegexFlag::Global]),
-                description: None,
-                enabled: Some(true),
-            },
-        ],
+        step: vec![PipelineStep {
+            step_type: StepType::Substitute,
+            // Match CJK characters (using Unicode property)
+            pattern: r"\p{Han}+".to_string(),
+            replacement: Some("USER".to_string()),
+            action: None,
+            transform: None,
+            flags: Some(vec![RegexFlag::Global]),
+            description: None,
+            enabled: Some(true),
+        }],
     };
 
     let mut processor = StreamProcessor::new(config).unwrap();
@@ -969,18 +949,16 @@ fn test_unicode_emoji() {
         version: None,
         patterns_include: Vec::new(),
         settings: PipelineSettings::default(),
-        step: vec![
-            PipelineStep {
-                step_type: StepType::Substitute,
-                pattern: "👍".to_string(),
-                replacement: Some("[thumbs up]".to_string()),
-                action: None,
-                transform: None,
-                flags: Some(vec![RegexFlag::Global]),
-                description: None,
-                enabled: Some(true),
-            },
-        ],
+        step: vec![PipelineStep {
+            step_type: StepType::Substitute,
+            pattern: "👍".to_string(),
+            replacement: Some("[thumbs up]".to_string()),
+            action: None,
+            transform: None,
+            flags: Some(vec![RegexFlag::Global]),
+            description: None,
+            enabled: Some(true),
+        }],
     };
 
     let mut processor = StreamProcessor::new(config).unwrap();
@@ -1007,19 +985,17 @@ Mixed: English 和 中文"#;
         version: None,
         patterns_include: Vec::new(),
         settings: PipelineSettings::default(),
-        step: vec![
-            PipelineStep {
-                step_type: StepType::Filter,
-                // Keep only lines with CJK characters
-                pattern: r"\p{Han}".to_string(),
-                replacement: None,
-                action: Some(FilterAction::KeepLine),
-                transform: None,
-                flags: None,
-                description: None,
-                enabled: Some(true),
-            },
-        ],
+        step: vec![PipelineStep {
+            step_type: StepType::Filter,
+            // Keep only lines with CJK characters
+            pattern: r"\p{Han}".to_string(),
+            replacement: None,
+            action: Some(FilterAction::KeepLine),
+            transform: None,
+            flags: None,
+            description: None,
+            enabled: Some(true),
+        }],
     };
 
     let mut processor = StreamProcessor::new(config).unwrap();
@@ -1032,7 +1008,7 @@ Mixed: English 和 中文"#;
 
     assert_eq!(lines.len(), 3);
     assert!(lines[0].contains("中文行"));
-    assert!(lines[1].contains("日本語"));  // Japanese also contains Han
+    assert!(lines[1].contains("日本語")); // Japanese also contains Han
     assert!(lines[2].contains("Mixed"));
 }
 
@@ -1048,18 +1024,16 @@ fn test_unicode_transform() {
         version: None,
         patterns_include: Vec::new(),
         settings: PipelineSettings::default(),
-        step: vec![
-            PipelineStep {
-                step_type: StepType::Transform,
-                pattern: r"[A-Z]+".to_string(),  // Match uppercase Latin
-                replacement: None,
-                action: None,
-                transform: Some(TransformAction::Lowercase),
-                flags: Some(vec![RegexFlag::Global]),
-                description: None,
-                enabled: Some(true),
-            },
-        ],
+        step: vec![PipelineStep {
+            step_type: StepType::Transform,
+            pattern: r"[A-Z]+".to_string(), // Match uppercase Latin
+            replacement: None,
+            action: None,
+            transform: Some(TransformAction::Lowercase),
+            flags: Some(vec![RegexFlag::Global]),
+            description: None,
+            enabled: Some(true),
+        }],
     };
 
     let mut processor = StreamProcessor::new(config).unwrap();
@@ -1084,18 +1058,16 @@ fn test_unicode_accented_characters() {
         version: None,
         patterns_include: Vec::new(),
         settings: PipelineSettings::default(),
-        step: vec![
-            PipelineStep {
-                step_type: StepType::Substitute,
-                pattern: r"é".to_string(),
-                replacement: Some("e".to_string()),
-                action: None,
-                transform: None,
-                flags: Some(vec![RegexFlag::Global]),
-                description: None,
-                enabled: Some(true),
-            },
-        ],
+        step: vec![PipelineStep {
+            step_type: StepType::Substitute,
+            pattern: r"é".to_string(),
+            replacement: Some("e".to_string()),
+            action: None,
+            transform: None,
+            flags: Some(vec![RegexFlag::Global]),
+            description: None,
+            enabled: Some(true),
+        }],
     };
 
     let mut processor = StreamProcessor::new(config).unwrap();
@@ -1119,19 +1091,17 @@ fn test_unicode_word_boundaries() {
         version: None,
         patterns_include: Vec::new(),
         settings: PipelineSettings::default(),
-        step: vec![
-            PipelineStep {
-                step_type: StepType::Substitute,
-                // Match word characters (includes Unicode letters)
-                pattern: r"\w+".to_string(),
-                replacement: Some("[WORD]".to_string()),
-                action: None,
-                transform: None,
-                flags: Some(vec![RegexFlag::Global, RegexFlag::Unicode]),
-                description: None,
-                enabled: Some(true),
-            },
-        ],
+        step: vec![PipelineStep {
+            step_type: StepType::Substitute,
+            // Match word characters (includes Unicode letters)
+            pattern: r"\w+".to_string(),
+            replacement: Some("[WORD]".to_string()),
+            action: None,
+            transform: None,
+            flags: Some(vec![RegexFlag::Global, RegexFlag::Unicode]),
+            description: None,
+            enabled: Some(true),
+        }],
     };
 
     let mut processor = StreamProcessor::new(config).unwrap();
@@ -1159,18 +1129,16 @@ fn test_error_invalid_regex_pattern() {
         version: None,
         patterns_include: Vec::new(),
         settings: PipelineSettings::default(),
-        step: vec![
-            PipelineStep {
-                step_type: StepType::Substitute,
-                pattern: r"[invalid((".to_string(), // Unbalanced brackets
-                replacement: Some("test".to_string()),
-                action: None,
-                transform: None,
-                flags: None,
-                description: None,
-                enabled: Some(true),
-            },
-        ],
+        step: vec![PipelineStep {
+            step_type: StepType::Substitute,
+            pattern: r"[invalid((".to_string(), // Unbalanced brackets
+            replacement: Some("test".to_string()),
+            action: None,
+            transform: None,
+            flags: None,
+            description: None,
+            enabled: Some(true),
+        }],
     };
 
     let result = StreamProcessor::new(config);
@@ -1186,18 +1154,16 @@ fn test_error_missing_replacement() {
         version: None,
         patterns_include: Vec::new(),
         settings: PipelineSettings::default(),
-        step: vec![
-            PipelineStep {
-                step_type: StepType::Substitute,
-                pattern: r"\d+".to_string(),
-                replacement: None,  // Missing replacement
-                action: None,
-                transform: None,
-                flags: None,
-                description: None,
-                enabled: Some(true),
-            },
-        ],
+        step: vec![PipelineStep {
+            step_type: StepType::Substitute,
+            pattern: r"\d+".to_string(),
+            replacement: None, // Missing replacement
+            action: None,
+            transform: None,
+            flags: None,
+            description: None,
+            enabled: Some(true),
+        }],
     };
 
     let result = config.validate();
@@ -1215,18 +1181,16 @@ fn test_error_missing_filter_action() {
         version: None,
         patterns_include: Vec::new(),
         settings: PipelineSettings::default(),
-        step: vec![
-            PipelineStep {
-                step_type: StepType::Filter,
-                pattern: r"ERROR".to_string(),
-                replacement: None,
-                action: None,  // Missing action
-                transform: None,
-                flags: None,
-                description: None,
-                enabled: Some(true),
-            },
-        ],
+        step: vec![PipelineStep {
+            step_type: StepType::Filter,
+            pattern: r"ERROR".to_string(),
+            replacement: None,
+            action: None, // Missing action
+            transform: None,
+            flags: None,
+            description: None,
+            enabled: Some(true),
+        }],
     };
 
     let result = config.validate();
@@ -1244,7 +1208,7 @@ fn test_error_empty_pipeline() {
         version: None,
         patterns_include: Vec::new(),
         settings: PipelineSettings::default(),
-        step: vec![],  // Empty steps
+        step: vec![], // Empty steps
     };
 
     let result = config.validate();
@@ -1262,18 +1226,16 @@ fn test_error_empty_pattern() {
         version: None,
         patterns_include: Vec::new(),
         settings: PipelineSettings::default(),
-        step: vec![
-            PipelineStep {
-                step_type: StepType::Substitute,
-                pattern: "".to_string(),  // Empty pattern
-                replacement: Some("test".to_string()),
-                action: None,
-                transform: None,
-                flags: None,
-                description: None,
-                enabled: Some(true),
-            },
-        ],
+        step: vec![PipelineStep {
+            step_type: StepType::Substitute,
+            pattern: "".to_string(), // Empty pattern
+            replacement: Some("test".to_string()),
+            action: None,
+            transform: None,
+            flags: None,
+            description: None,
+            enabled: Some(true),
+        }],
     };
 
     let result = config.validate();
@@ -1344,18 +1306,16 @@ fn test_pcre_mode_disabled_error() {
         version: None,
         patterns_include: Vec::new(),
         settings,
-        step: vec![
-            PipelineStep {
-                step_type: StepType::Substitute,
-                pattern: r"test".to_string(),
-                replacement: Some("TEST".to_string()),
-                action: None,
-                transform: None,
-                flags: None,
-                description: None,
-                enabled: Some(true),
-            },
-        ],
+        step: vec![PipelineStep {
+            step_type: StepType::Substitute,
+            pattern: r"test".to_string(),
+            replacement: Some("TEST".to_string()),
+            action: None,
+            transform: None,
+            flags: None,
+            description: None,
+            enabled: Some(true),
+        }],
     };
 
     // Should fail because pcre_mode is true but feature is not enabled

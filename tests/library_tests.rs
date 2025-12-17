@@ -34,8 +34,7 @@ pattern = 'world'
 "#,
     );
 
-    let library: PatternLibrary =
-        toml::from_str(&fs::read_to_string(&lib_path).unwrap()).unwrap();
+    let library: PatternLibrary = toml::from_str(&fs::read_to_string(&lib_path).unwrap()).unwrap();
 
     assert_eq!(library.name, Some("Test Library".to_string()));
     assert_eq!(library.version, Some("1.0.0".to_string()));
@@ -127,10 +126,7 @@ extended_pattern = 'from_extended'
         .unwrap();
 
     // Both patterns should be available
-    assert_eq!(
-        library.get("base_pattern"),
-        Some(&"from_base".to_string())
-    );
+    assert_eq!(library.get("base_pattern"), Some(&"from_base".to_string()));
     assert_eq!(
         library.get("extended_pattern"),
         Some(&"from_extended".to_string())
@@ -224,9 +220,7 @@ replacement = 'NUMBER'
 
     // Load and resolve patterns
     let mut resolver = LibraryResolver::new(Some(dir.path()));
-    let library = resolver
-        .load_libraries(&config.patterns_include)
-        .unwrap();
+    let library = resolver.load_libraries(&config.patterns_include).unwrap();
 
     config.resolve_pattern_references(&library).unwrap();
 
@@ -267,9 +261,7 @@ exists = 'pattern'
     };
 
     let mut resolver = LibraryResolver::new(Some(dir.path()));
-    let library = resolver
-        .load_libraries(&config.patterns_include)
-        .unwrap();
+    let library = resolver.load_libraries(&config.patterns_include).unwrap();
 
     let result = config.resolve_pattern_references(&library);
 
@@ -312,9 +304,7 @@ suffix = 'END$'
     };
 
     let mut resolver = LibraryResolver::new(Some(dir.path()));
-    let library = resolver
-        .load_libraries(&config.patterns_include)
-        .unwrap();
+    let library = resolver.load_libraries(&config.patterns_include).unwrap();
 
     config.resolve_pattern_references(&library).unwrap();
 
