@@ -2,6 +2,9 @@
 /target/
 **/*.rs.bk
 
+# Local scratch/temp
+/.tmp/
+
 # Editor/IDE
 *.swp
 *.swo
