@@ -27,7 +27,8 @@
 //! pattern = '${category.nested_pattern}'
 //! ```
 
-use anyhow::{anyhow, Context, Result};
+use crate::error::LibraryError;
+use anyhow::{Context, Result};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -203,11 +204,11 @@ impl LibraryResolver {
             .map(|p| p.display().to_string())
             .collect();
 
-        Err(anyhow!(
-            "Pattern library not found: '{}' (searched: {})",
-            name,
-            searched.join(", ")
-        ))
+        Err(LibraryError::NotFound {
+            name: name.to_string(),
+            searched_paths: searched.join(", "),
+        }
+        .into())
     }
 
     /// Load a library file recursively, handling nested includes
@@ -223,11 +224,10 @@ impl LibraryResolver {
                 .iter()
                 .map(|p| p.display().to_string())
                 .collect();
-            return Err(anyhow!(
-                "Circular pattern library include detected: {} -> {}",
-                cycle.join(" -> "),
-                canonical.display()
-            ));
+            return Err(LibraryError::CircularInclude {
+                cycle: format!("{} -> {}", cycle.join(" -> "), canonical.display()),
+            }
+            .into());
         }
 
         // Check cache
@@ -317,11 +317,11 @@ impl LibraryResolver {
         Self::validate_patterns(&library.patterns, "", &mut errors);
 
         if !errors.is_empty() {
-            return Err(anyhow!(
-                "Invalid patterns in library '{}':\n  {}",
-                path.display(),
-                errors.join("\n  ")
-            ));
+            return Err(LibraryError::InvalidPatterns {
+                library: path.display().to_string(),
+                errors: errors.join("\n  "),
+            }
+            .into());
         }
 
         Ok(library)

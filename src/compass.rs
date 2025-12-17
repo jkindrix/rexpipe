@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use std::collections::HashMap;
 use std::fmt;
 
@@ -646,14 +646,18 @@ mod tests {
     fn test_compass_workflow() {
         let mut agent = CompassAgent::new();
 
-        assert!(agent
-            .clarify_intent("Build a regex pipeline processor")
-            .is_ok());
+        assert!(
+            agent
+                .clarify_intent("Build a regex pipeline processor")
+                .is_ok()
+        );
         assert!(agent.advance_phase().is_ok());
 
-        assert!(agent
-            .orient_research("Existing tools are fragmented")
-            .is_ok());
+        assert!(
+            agent
+                .orient_research("Existing tools are fragmented")
+                .is_ok()
+        );
         assert!(agent.advance_phase().is_ok());
 
         assert!(agent.map_solution().is_ok());

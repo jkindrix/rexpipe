@@ -1,4 +1,4 @@
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use rexpipe::pipeline::PipelineConfig;
 use rexpipe::processor::StreamProcessor;
 use std::io::Cursor;
@@ -96,12 +96,15 @@ fn create_complex_pipeline() -> PipelineConfig {
         name: Some("Complex Benchmark Pipeline".to_string()),
         description: Some("Multi-step processing simulation".to_string()),
         version: Some("1.0.0".to_string()),
+        patterns_include: Vec::new(),
+        settings: PipelineSettings::default(),
         step: vec![
             PipelineStep {
                 step_type: StepType::Substitute,
                 pattern: r"\[ERROR\]".to_string(),
                 replacement: Some("[ERR]".to_string()),
                 action: None,
+                transform: None,
                 flags: Some(vec![RegexFlag::Global]),
                 description: Some("Normalize error levels".to_string()),
                 enabled: Some(true),
@@ -111,6 +114,7 @@ fn create_complex_pipeline() -> PipelineConfig {
                 pattern: "DEBUG".to_string(),
                 replacement: None,
                 action: Some(FilterAction::DropLine),
+                transform: None,
                 flags: None,
                 description: Some("Remove debug messages".to_string()),
                 enabled: Some(true),
@@ -120,6 +124,7 @@ fn create_complex_pipeline() -> PipelineConfig {
                 pattern: r"user_id=(\d+)".to_string(),
                 replacement: Some("uid=${1}".to_string()),
                 action: None,
+                transform: None,
                 flags: Some(vec![RegexFlag::Global]),
                 description: Some("Standardize user ID format".to_string()),
                 enabled: Some(true),
@@ -129,6 +134,7 @@ fn create_complex_pipeline() -> PipelineConfig {
                 pattern: r"192\.168\.".to_string(),
                 replacement: Some("10.0.".to_string()),
                 action: None,
+                transform: None,
                 flags: Some(vec![RegexFlag::Global]),
                 description: Some("Anonymize IP addresses".to_string()),
                 enabled: Some(true),
@@ -138,7 +144,7 @@ fn create_complex_pipeline() -> PipelineConfig {
 }
 
 fn generate_test_data(lines: usize) -> String {
-    let log_patterns = vec![
+    let log_patterns = [
         "2025-01-08 10:15:23 [INFO] Server startup complete",
         "2025-01-08 10:15:24 [DEBUG] Loading configuration from /etc/config",
         "2025-01-08 10:15:25 [ERROR] Database connection failed for user_id=1234",

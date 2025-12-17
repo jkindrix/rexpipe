@@ -3,11 +3,14 @@
 //! This module provides structured error types using `thiserror` for clear,
 //! typed error handling throughout the application.
 //!
-//! These types are designed for future refinement of error handling. Currently
-//! the application uses `anyhow` for error propagation with these types available
-//! for more specific error categorization when needed.
-
-#![allow(dead_code)]
+//! The error types follow a hierarchical structure:
+//! - [`RexpipeError`] - Top-level error type for all operations
+//! - [`ConfigError`] - Configuration file handling errors
+//! - [`PatternError`] - Regex pattern compilation errors
+//! - [`LibraryError`] - Pattern library resolution errors
+//! - [`ValidationError`] - Pipeline validation errors
+//!
+//! These types integrate seamlessly with `anyhow` for rich error context.
 
 use std::path::PathBuf;
 use thiserror::Error;
@@ -72,7 +75,9 @@ pub enum PatternError {
     InvalidRegex { pattern: String, message: String },
 
     /// PCRE mode requested but feature not enabled
-    #[error("PCRE mode requested but the 'pcre' feature is not enabled. Rebuild with: cargo build --features pcre")]
+    #[error(
+        "PCRE mode requested but the 'pcre' feature is not enabled. Rebuild with: cargo build --features pcre"
+    )]
     PcreNotEnabled,
 
     /// Pattern reference not found in library

@@ -14,9 +14,11 @@ fn test_compass_agent_full_workflow() {
     let mut agent = CompassAgent::new();
 
     // Execute complete COMPASS workflow
-    assert!(agent
-        .clarify_intent("Build regex pipeline processor")
-        .is_ok());
+    assert!(
+        agent
+            .clarify_intent("Build regex pipeline processor")
+            .is_ok()
+    );
     assert!(agent.advance_phase().is_ok());
 
     assert!(agent.orient_research("Existing tools fragmented").is_ok());
@@ -239,7 +241,7 @@ Invalid line without timestamp
     let result = processor.process_stream(reader, &mut output).unwrap();
 
     // Should have validation errors
-    assert!(result.errors.len() > 0);
+    assert!(!result.errors.is_empty());
 
     let output_str = String::from_utf8(output).unwrap();
     let lines: Vec<&str> = output_str
@@ -423,8 +425,10 @@ fn test_pcre_positive_lookahead() {
     let input_data = "foo bar foo baz foo qux";
 
     // Match "foo" only when followed by " bar"
-    let mut settings = PipelineSettings::default();
-    settings.pcre_mode = true;
+    let settings = PipelineSettings {
+        pcre_mode: true,
+        ..Default::default()
+    };
 
     let config = PipelineConfig {
         name: Some("PCRE Lookahead Test".to_string()),
@@ -461,8 +465,10 @@ fn test_pcre_positive_lookahead() {
 fn test_pcre_negative_lookahead() {
     let input_data = "foo bar foo baz foo qux";
 
-    let mut settings = PipelineSettings::default();
-    settings.pcre_mode = true;
+    let settings = PipelineSettings {
+        pcre_mode: true,
+        ..Default::default()
+    };
 
     let config = PipelineConfig {
         name: Some("PCRE Negative Lookahead Test".to_string()),
@@ -499,8 +505,10 @@ fn test_pcre_negative_lookahead() {
 fn test_pcre_positive_lookbehind() {
     let input_data = "price: $100, discount: $50, total: 150";
 
-    let mut settings = PipelineSettings::default();
-    settings.pcre_mode = true;
+    let settings = PipelineSettings {
+        pcre_mode: true,
+        ..Default::default()
+    };
 
     let config = PipelineConfig {
         name: Some("PCRE Lookbehind Test".to_string()),
@@ -537,8 +545,10 @@ fn test_pcre_positive_lookbehind() {
 fn test_pcre_negative_lookbehind() {
     let input_data = "price: $100, discount: $50, total: 150";
 
-    let mut settings = PipelineSettings::default();
-    settings.pcre_mode = true;
+    let settings = PipelineSettings {
+        pcre_mode: true,
+        ..Default::default()
+    };
 
     let config = PipelineConfig {
         name: Some("PCRE Negative Lookbehind Test".to_string()),
@@ -578,8 +588,10 @@ fn test_pcre_combined_lookaround() {
     // - "role: user end" - "user" preceded by ": " and NOT followed by "," - SHOULD MATCH
     let input_data = "user: admin, role: user end";
 
-    let mut settings = PipelineSettings::default();
-    settings.pcre_mode = true;
+    let settings = PipelineSettings {
+        pcre_mode: true,
+        ..Default::default()
+    };
 
     let config = PipelineConfig {
         name: Some("PCRE Combined Lookaround Test".to_string()),
@@ -631,8 +643,10 @@ DEBUG: Cache hit for user data
 ERROR: Connection failed
 INFO: Processing complete"#;
 
-    let mut settings = PipelineSettings::default();
-    settings.pcre_mode = true;
+    let settings = PipelineSettings {
+        pcre_mode: true,
+        ..Default::default()
+    };
 
     let config = PipelineConfig {
         name: Some("PCRE Filter Test".to_string()),
@@ -675,8 +689,10 @@ INFO: Processing complete"#;
 fn test_fixed_string_basic_replacement() {
     let input_data = "regex.* patterns are .+ complex";
 
-    let mut settings = PipelineSettings::default();
-    settings.fixed_strings = true;
+    let settings = PipelineSettings {
+        fixed_strings: true,
+        ..Default::default()
+    };
 
     let config = PipelineConfig {
         name: Some("Fixed String Test".to_string()),
@@ -713,8 +729,10 @@ fn test_fixed_string_basic_replacement() {
 fn test_fixed_string_special_chars() {
     let input_data = "Match [brackets] and (parens) and $dollars";
 
-    let mut settings = PipelineSettings::default();
-    settings.fixed_strings = true;
+    let settings = PipelineSettings {
+        fixed_strings: true,
+        ..Default::default()
+    };
 
     let config = PipelineConfig {
         name: Some("Fixed String Special Chars Test".to_string()),
@@ -756,8 +774,10 @@ Normal line
 Another [ERROR] line
 Line with ERROR without brackets"#;
 
-    let mut settings = PipelineSettings::default();
-    settings.fixed_strings = true;
+    let settings = PipelineSettings {
+        fixed_strings: true,
+        ..Default::default()
+    };
 
     let config = PipelineConfig {
         name: Some("Fixed String Filter Test".to_string()),
@@ -797,8 +817,10 @@ Line with ERROR without brackets"#;
 fn test_fixed_string_backslashes() {
     let input_data = r"Path: C:\Users\test\file.txt";
 
-    let mut settings = PipelineSettings::default();
-    settings.fixed_strings = true;
+    let settings = PipelineSettings {
+        fixed_strings: true,
+        ..Default::default()
+    };
 
     let config = PipelineConfig {
         name: Some("Fixed String Backslash Test".to_string()),
@@ -835,8 +857,10 @@ fn test_fixed_string_backslashes() {
 fn test_fixed_string_multiple_occurrences() {
     let input_data = "a+b+c = a + b + c";
 
-    let mut settings = PipelineSettings::default();
-    settings.fixed_strings = true;
+    let settings = PipelineSettings {
+        fixed_strings: true,
+        ..Default::default()
+    };
 
     let config = PipelineConfig {
         name: Some("Fixed String Multiple Test".to_string()),
@@ -1297,8 +1321,10 @@ enabled = true
 #[cfg(not(feature = "pcre"))]
 #[test]
 fn test_pcre_mode_disabled_error() {
-    let mut settings = PipelineSettings::default();
-    settings.pcre_mode = true;
+    let settings = PipelineSettings {
+        pcre_mode: true,
+        ..Default::default()
+    };
 
     let config = PipelineConfig {
         name: Some("PCRE Disabled Test".to_string()),

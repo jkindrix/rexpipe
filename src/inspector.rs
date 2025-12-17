@@ -242,7 +242,7 @@ impl Inspector {
             // Show capture groups if enabled
             if self.show_capture_groups && match_info.captures.len() > 1 {
                 for (j, capture) in match_info.captures.iter().enumerate().skip(1) {
-                    if let Some(ref capture_text) = capture {
+                    if let Some(capture_text) = capture {
                         stdout.set_color(ColorSpec::new().set_fg(Some(Color::Magenta)))?;
                         writeln!(stdout, "    Group {}: \"{}\"", j, capture_text)?;
                         stdout.reset()?;
@@ -439,8 +439,8 @@ mod tests {
 
         let inspector = Inspector::new(config).unwrap().with_options(options);
 
-        assert_eq!(inspector.interactive_mode, true);
-        assert_eq!(inspector.show_line_numbers, false);
+        assert!(inspector.interactive_mode);
+        assert!(!inspector.show_line_numbers);
         assert_eq!(inspector.max_matches_per_line, Some(5));
     }
 }
