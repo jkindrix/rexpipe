@@ -1,8 +1,9 @@
+use crate::error::{PatternError, ValidationError};
 use crate::pipeline::{
     ErrorType, FilterAction, PipelineConfig, PipelineError, PipelineResult, PipelineSettings,
     RegexFlag, StepResult, StepType, TransformAction,
 };
-use anyhow::{anyhow, Result};
+use anyhow::{Context, Result};
 use regex::{Regex, RegexBuilder};
 use std::collections::{HashMap, VecDeque};
 use std::io::{BufRead, Write};
@@ -181,10 +182,11 @@ pub struct MatchInfo {
 impl StreamProcessor {
     pub fn new(config: PipelineConfig) -> Result<Self> {
         if let Err(validation_errors) = config.validate() {
-            return Err(anyhow!(
-                "Pipeline validation failed: {}",
-                validation_errors.join("; ")
-            ));
+            let error = ValidationError::Multiple {
+                count: validation_errors.len(),
+                errors: validation_errors.join("\n  - "),
+            };
+            return Err(error).context("Pipeline validation failed");
         }
 
         let compiled_steps = Self::compile_steps(&config)?;
@@ -253,9 +255,14 @@ impl StreamProcessor {
             match FancyRegex::new(pattern) {
                 Ok(re) => return Ok(CompiledPattern::Pcre(re)),
                 Err(e) => {
-                    return Err(anyhow!(
-                        "{}",
-                        Self::format_regex_error(pattern, &e.to_string(), true)
+                    let error = PatternError::InvalidRegex {
+                        pattern: pattern.to_string(),
+                        message: e.to_string(),
+                    };
+                    return Err(error).context(Self::format_regex_error(
+                        pattern,
+                        &e.to_string(),
+                        true,
                     ));
                 }
             }
@@ -263,17 +270,21 @@ impl StreamProcessor {
 
         #[cfg(not(feature = "pcre"))]
         if settings.pcre_mode {
-            return Err(anyhow!("PCRE mode requested but the 'pcre' feature is not enabled.\n\
-                       Suggestion: Rebuild with `cargo build --features pcre` or remove the -P flag"));
+            return Err(PatternError::PcreNotEnabled).context(
+                "Suggestion: Rebuild with `cargo build --features pcre` or remove the -P flag",
+            );
         }
 
         // Standard regex mode
         match Self::build_regex(pattern, flags) {
             Ok(regex) => Ok(CompiledPattern::Standard(regex)),
-            Err(e) => Err(anyhow!(
-                "{}",
-                Self::format_regex_error(pattern, &e.to_string(), false)
-            )),
+            Err(e) => {
+                let error = PatternError::InvalidRegex {
+                    pattern: pattern.to_string(),
+                    message: e.to_string(),
+                };
+                Err(error).context(Self::format_regex_error(pattern, &e.to_string(), false))
+            }
         }
     }
 
@@ -545,8 +556,18 @@ impl StreamProcessor {
     ) -> Result<Option<String>> {
         let mut current_line = line.trim_end_matches('\n').to_string();
         let mut should_output = true;
+        let line_start = Instant::now();
+        let timeout_ms = self.config.settings.timeout_ms;
 
         for compiled_step in &self.compiled_steps {
+            // Check timeout if configured (0 = no timeout)
+            if timeout_ms > 0 && line_start.elapsed().as_millis() as u64 > timeout_ms {
+                return Err(anyhow::anyhow!(
+                    "Processing timeout ({} ms) exceeded at line {}",
+                    timeout_ms,
+                    line_number
+                ));
+            }
             let step_start = Instant::now();
             let mut step_result = StepResult::new(
                 compiled_step.step_index,
@@ -746,6 +767,65 @@ impl StreamProcessor {
                     })
                     .collect::<Vec<_>>()
                     .join(" "),
+                TransformAction::Shell { command } => crate::plugin::PluginRegistry::execute_shell(
+                    command, matched,
+                )
+                .unwrap_or_else(|e| {
+                    eprintln!("Shell transform error: {}", e);
+                    matched.to_string()
+                }),
+                TransformAction::Plugin { name, args } => {
+                    let registry = crate::plugin::PluginRegistry::new();
+                    registry.execute(name, matched, args).unwrap_or_else(|e| {
+                        eprintln!("Plugin error: {}", e);
+                        matched.to_string()
+                    })
+                }
+                TransformAction::Base64Encode => {
+                    use std::io::Write;
+                    let mut buf = Vec::new();
+                    let _ = write!(buf, "{}", matched);
+                    base64_encode(&buf)
+                }
+                TransformAction::Base64Decode => {
+                    base64_decode(matched).unwrap_or_else(|| matched.to_string())
+                }
+                TransformAction::UrlEncode => url_encode(matched),
+                TransformAction::UrlDecode => {
+                    url_decode(matched).unwrap_or_else(|| matched.to_string())
+                }
+                TransformAction::NormalizeWhitespace => {
+                    let mut result = String::new();
+                    let mut last_was_space = false;
+                    for c in matched.chars() {
+                        if c.is_whitespace() {
+                            if !last_was_space {
+                                result.push(' ');
+                                last_was_space = true;
+                            }
+                        } else {
+                            result.push(c);
+                            last_was_space = false;
+                        }
+                    }
+                    result.trim().to_string()
+                }
+                TransformAction::Deduplicate => {
+                    let lines: Vec<&str> = matched.lines().collect();
+                    let mut seen = std::collections::HashSet::new();
+                    lines
+                        .into_iter()
+                        .filter(|line| seen.insert(*line))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                }
+                TransformAction::SortChars => {
+                    let mut chars: Vec<char> = matched.chars().collect();
+                    chars.sort();
+                    chars.into_iter().collect()
+                }
+                TransformAction::CharCount => matched.chars().count().to_string(),
+                TransformAction::WordCount => matched.split_whitespace().count().to_string(),
             }
         };
 
@@ -892,6 +972,117 @@ impl ProcessorStats {
     }
 }
 
+// Helper functions for encoding/decoding transformations
+
+/// Base64 encode bytes using a simple implementation
+fn base64_encode(data: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut result = String::new();
+
+    for chunk in data.chunks(3) {
+        let mut n = (chunk[0] as u32) << 16;
+        if chunk.len() > 1 {
+            n |= (chunk[1] as u32) << 8;
+        }
+        if chunk.len() > 2 {
+            n |= chunk[2] as u32;
+        }
+
+        result.push(ALPHABET[(n >> 18) as usize & 0x3F] as char);
+        result.push(ALPHABET[(n >> 12) as usize & 0x3F] as char);
+
+        if chunk.len() > 1 {
+            result.push(ALPHABET[(n >> 6) as usize & 0x3F] as char);
+        } else {
+            result.push('=');
+        }
+
+        if chunk.len() > 2 {
+            result.push(ALPHABET[n as usize & 0x3F] as char);
+        } else {
+            result.push('=');
+        }
+    }
+
+    result
+}
+
+/// Base64 decode a string
+fn base64_decode(s: &str) -> Option<String> {
+    const DECODE: [i8; 128] = [
+        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 62, -1, -1,
+        -1, 63, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, -1, -1, -1, -1, -1, -1, -1, 0, 1, 2, 3, 4,
+        5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, -1, -1, -1,
+        -1, -1, -1, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45,
+        46, 47, 48, 49, 50, 51, -1, -1, -1, -1, -1,
+    ];
+
+    let s = s.trim_end_matches('=');
+    let mut bytes = Vec::new();
+    let chars: Vec<u8> = s.bytes().collect();
+
+    for chunk in chars.chunks(4) {
+        if chunk.iter().any(|&c| c >= 128 || DECODE[c as usize] < 0) {
+            return None;
+        }
+
+        let n = chunk.iter().enumerate().fold(0u32, |acc, (i, &c)| {
+            acc | ((DECODE[c as usize] as u32) << (18 - i * 6))
+        });
+
+        bytes.push((n >> 16) as u8);
+        if chunk.len() > 2 {
+            bytes.push((n >> 8) as u8);
+        }
+        if chunk.len() > 3 {
+            bytes.push(n as u8);
+        }
+    }
+
+    String::from_utf8(bytes).ok()
+}
+
+/// URL encode a string (percent encoding)
+fn url_encode(s: &str) -> String {
+    s.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' || c == '~' {
+                c.to_string()
+            } else {
+                format!("%{:02X}", c as u32)
+            }
+        })
+        .collect()
+}
+
+/// URL decode a string (percent decoding)
+fn url_decode(s: &str) -> Option<String> {
+    let mut result = String::new();
+    let mut chars = s.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        if c == '%' {
+            let hex: String = chars.by_ref().take(2).collect();
+            if hex.len() == 2 {
+                if let Ok(byte) = u8::from_str_radix(&hex, 16) {
+                    result.push(byte as char);
+                } else {
+                    return None;
+                }
+            } else {
+                return None;
+            }
+        } else if c == '+' {
+            result.push(' ');
+        } else {
+            result.push(c);
+        }
+    }
+
+    Some(result)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -976,6 +1167,7 @@ mod tests {
                 fixed_strings: false,
                 context_before: 2,
                 context_after: 0,
+                timeout_ms: 0,
             },
             step: vec![PipelineStep {
                 step_type: StepType::Filter,
@@ -1018,6 +1210,7 @@ mod tests {
                 fixed_strings: false,
                 context_before: 0,
                 context_after: 2,
+                timeout_ms: 0,
             },
             step: vec![PipelineStep {
                 step_type: StepType::Filter,

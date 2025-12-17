@@ -39,6 +39,7 @@
 //! - [`library`]: Pattern library loading and resolution
 //! - [`inspector`]: Interactive debugging and pattern inspection
 //! - [`compass`]: COMPASS strategic framework for analysis
+//! - [`plugin`]: Extensible plugin system for custom transformations
 
 pub mod compass;
 pub mod error;
@@ -47,6 +48,7 @@ pub mod inspector;
 pub mod json_schema;
 pub mod library;
 pub mod pipeline;
+pub mod plugin;
 pub mod processor;
 
 // Re-export error types for convenience

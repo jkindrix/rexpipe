@@ -30,6 +30,9 @@ pub struct PipelineSettings {
     /// Number of context lines to show after matches
     #[serde(default)]
     pub context_after: usize,
+    /// Timeout in milliseconds for regex matching per line (0 = no timeout)
+    #[serde(default)]
+    pub timeout_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -93,6 +96,40 @@ pub enum TransformAction {
     RemoveWhitespace,
     /// Capitalize first letter of each word
     TitleCase,
+    /// Execute an external command, passing matched text as stdin
+    /// The command's stdout becomes the replacement text
+    #[serde(rename = "shell")]
+    Shell {
+        /// Command to execute (passed to shell)
+        command: String,
+    },
+    /// Apply a custom transformation by name (from registered plugins)
+    #[serde(rename = "plugin")]
+    Plugin {
+        /// Name of the registered plugin function
+        name: String,
+        /// Optional arguments to pass to the plugin
+        #[serde(default)]
+        args: Vec<String>,
+    },
+    /// Base64 encode the matched text
+    Base64Encode,
+    /// Base64 decode the matched text
+    Base64Decode,
+    /// URL encode the matched text
+    UrlEncode,
+    /// URL decode the matched text
+    UrlDecode,
+    /// Replace runs of whitespace with a single space
+    NormalizeWhitespace,
+    /// Remove duplicate lines (when applied to full line matches)
+    Deduplicate,
+    /// Sort characters in the matched text
+    SortChars,
+    /// Count characters and replace with count
+    CharCount,
+    /// Count words and replace with count
+    WordCount,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
