@@ -1,18 +1,20 @@
 mod compass;
 mod files;
+mod inspector;
 mod json_schema;
+mod library;
 mod pipeline;
 mod processor;
-mod inspector;
 
 use clap::{Arg, ArgAction, Command, ValueHint, value_parser};
 use clap_complete::{generate, Generator, Shell};
 use std::io::{self, BufReader, IsTerminal};
 use std::fs::File;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use compass::CompassAgent;
 use files::{FileProcessingOptions, MultiFileProcessor, MultiFileResult};
+use library::LibraryResolver;
 use pipeline::{PipelineConfig, PipelineSettings};
 use processor::StreamProcessor;
 use inspector::{Inspector, InspectorOptions};
@@ -265,6 +267,21 @@ fn build_cli() -> Command {
                 .value_name("NUM")
                 .help("Show NUM lines before and after each match")
         )
+        // === Pattern Library ===
+        .arg(
+            Arg::new("list-patterns")
+                .long("list-patterns")
+                .value_name("LIBRARY")
+                .help("List all patterns in a pattern library file")
+                .value_hint(ValueHint::FilePath)
+        )
+        .arg(
+            Arg::new("validate-library")
+                .long("validate-library")
+                .value_name("LIBRARY")
+                .help("Validate a pattern library file")
+                .value_hint(ValueHint::FilePath)
+        )
         // === Misc ===
         .arg(
             Arg::new("performance")
@@ -348,6 +365,15 @@ fn main() {
 }
 
 fn run_application(matches: &clap::ArgMatches) -> Result<(), Box<dyn std::error::Error>> {
+    // Handle pattern library commands first (don't require pipeline config)
+    if let Some(library_path) = matches.get_one::<String>("list-patterns") {
+        return list_library_patterns(library_path);
+    }
+
+    if let Some(library_path) = matches.get_one::<String>("validate-library") {
+        return validate_library_file(library_path);
+    }
+
     // Build pipeline settings from CLI flags
     let settings = build_pipeline_settings(matches);
 
@@ -645,7 +671,22 @@ fn output_multi_file_summary(result: &MultiFileResult) -> Result<(), Box<dyn std
 
 fn load_pipeline_config(matches: &clap::ArgMatches, settings: PipelineSettings) -> Result<PipelineConfig, Box<dyn std::error::Error>> {
     if let Some(config_file) = matches.get_one::<String>("config") {
+        let config_path = Path::new(config_file);
         let mut config = PipelineConfig::from_file(config_file)?;
+
+        // Load and resolve pattern libraries if specified
+        if config.uses_pattern_libraries() {
+            let mut resolver = LibraryResolver::new(config_path.parent());
+            let library = resolver.load_libraries(&config.patterns_include)?;
+
+            if let Err(errors) = config.resolve_pattern_references(&library) {
+                return Err(format!(
+                    "Failed to resolve pattern references:\n  {}",
+                    errors.join("\n  ")
+                ).into());
+            }
+        }
+
         // Merge CLI settings with config file settings (CLI takes precedence)
         if settings.pcre_mode {
             config.settings.pcre_mode = true;
@@ -706,6 +747,83 @@ fn validate_configuration(config: &PipelineConfig) -> Result<(), Box<dyn std::er
             println!("  - Verify all patterns are valid regex syntax");
             println!("  - Use 'rexpipe --inspect' to test patterns interactively");
             Err("Configuration is invalid".into())
+        }
+    }
+}
+
+fn list_library_patterns(library_path: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let path = Path::new(library_path);
+    let patterns = library::list_patterns(path)?;
+
+    if patterns.is_empty() {
+        println!("No patterns found in library '{}'", library_path);
+        return Ok(());
+    }
+
+    println!("Patterns in '{}' ({} total):\n", library_path, patterns.len());
+
+    // Group by category (prefix before last dot)
+    let mut current_category = String::new();
+    for (name, pattern) in &patterns {
+        let category = if let Some(pos) = name.rfind('.') {
+            &name[..pos]
+        } else {
+            ""
+        };
+
+        if category != current_category {
+            if !current_category.is_empty() {
+                println!();
+            }
+            if !category.is_empty() {
+                println!("[{}]", category);
+            }
+            current_category = category.to_string();
+        }
+
+        // Truncate long patterns for display
+        let display_pattern = if pattern.len() > 60 {
+            format!("{}...", &pattern[..57])
+        } else {
+            pattern.clone()
+        };
+
+        println!("  {} = '{}'", name, display_pattern);
+    }
+
+    Ok(())
+}
+
+fn validate_library_file(library_path: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let path = Path::new(library_path);
+
+    match library::LibraryResolver::validate_library(path) {
+        Ok(lib) => {
+            println!("✓ Library '{}' is valid", library_path);
+            if let Some(name) = &lib.name {
+                println!("  Name: {}", name);
+            }
+            if let Some(version) = &lib.version {
+                println!("  Version: {}", version);
+            }
+            if let Some(desc) = &lib.description {
+                println!("  Description: {}", desc);
+            }
+
+            // Count patterns
+            let patterns = library::list_patterns(path)?;
+            println!("  Patterns: {}", patterns.len());
+
+            if !lib.patterns_include.is_empty() {
+                println!("  Includes: {}", lib.patterns_include.join(", "));
+            }
+
+            Ok(())
+        }
+        Err(e) => {
+            println!("✗ Library '{}' is invalid:", library_path);
+            println!("  {}", e);
+            Err(e)
         }
     }
 }

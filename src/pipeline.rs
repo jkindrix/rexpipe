@@ -7,6 +7,9 @@ pub struct PipelineConfig {
     pub name: Option<String>,
     pub description: Option<String>,
     pub version: Option<String>,
+    /// Pattern libraries to include (supports ${pattern_name} references in steps)
+    #[serde(default)]
+    pub patterns_include: Vec<String>,
     #[serde(default)]
     pub settings: PipelineSettings,
     pub step: Vec<PipelineStep>,
@@ -186,6 +189,7 @@ impl PipelineConfig {
             name: Some("Inline Pipeline".to_string()),
             description: Some("Generated from command line pattern".to_string()),
             version: Some("1.0.0".to_string()),
+            patterns_include: Vec::new(),
             settings,
             step: vec![step],
         }
@@ -255,7 +259,7 @@ impl PipelineConfig {
     pub fn summary(&self) -> String {
         let total_steps = self.step.len();
         let enabled_steps = self.enabled_steps().count();
-        
+
         format!(
             "Pipeline '{}' (v{}): {} steps ({} enabled)\n{}",
             self.name.as_deref().unwrap_or("Unnamed"),
@@ -264,6 +268,46 @@ impl PipelineConfig {
             enabled_steps,
             self.description.as_deref().unwrap_or("")
         )
+    }
+
+    /// Resolve pattern references like ${pattern_name} in all steps
+    ///
+    /// This method modifies the config in place, replacing pattern references
+    /// with their actual values from the provided library.
+    pub fn resolve_pattern_references(
+        &mut self,
+        library: &crate::library::ResolvedLibrary,
+    ) -> Result<(), Vec<String>> {
+        let mut all_errors = Vec::new();
+
+        for (i, step) in self.step.iter_mut().enumerate() {
+            // Check if pattern contains references
+            if !crate::library::has_pattern_references(&step.pattern) {
+                continue;
+            }
+
+            match crate::library::resolve_pattern_references(&step.pattern, library) {
+                Ok(resolved) => {
+                    step.pattern = resolved;
+                }
+                Err(errors) => {
+                    for error in errors {
+                        all_errors.push(format!("Step {}: {}", i + 1, error));
+                    }
+                }
+            }
+        }
+
+        if all_errors.is_empty() {
+            Ok(())
+        } else {
+            Err(all_errors)
+        }
+    }
+
+    /// Check if this config uses pattern libraries
+    pub fn uses_pattern_libraries(&self) -> bool {
+        !self.patterns_include.is_empty()
     }
 }
 
@@ -415,6 +459,7 @@ mod tests {
             name: Some("Test".to_string()),
             description: None,
             version: None,
+            patterns_include: Vec::new(),
             settings: PipelineSettings::default(),
             step: vec![],
         };

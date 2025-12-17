@@ -878,6 +878,7 @@ mod tests {
             name: Some("Test Filter".to_string()),
             description: None,
             version: None,
+            patterns_include: Vec::new(),
             settings: PipelineSettings::default(),
             step: vec![PipelineStep {
                 step_type: StepType::Filter,
@@ -926,6 +927,7 @@ mod tests {
             name: Some("Context Test".to_string()),
             description: None,
             version: None,
+            patterns_include: Vec::new(),
             settings: PipelineSettings {
                 pcre_mode: false,
                 fixed_strings: false,
@@ -967,6 +969,7 @@ mod tests {
             name: Some("Context After Test".to_string()),
             description: None,
             version: None,
+            patterns_include: Vec::new(),
             settings: PipelineSettings {
                 pcre_mode: false,
                 fixed_strings: false,

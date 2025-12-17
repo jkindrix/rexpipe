@@ -1,0 +1,107 @@
+# Log Processing Pattern Library
+# Patterns for parsing and filtering common log formats
+#
+# Usage in pipelines:
+#   patterns_include = ["patterns/logs.toml"]
+#   pattern = '${level.error}'  or  '${apache.combined}'
+
+name = "Log Patterns"
+description = "Patterns for parsing common log formats and severity levels"
+version = "1.0.0"
+
+# Include common patterns for IP addresses, timestamps, etc.
+patterns_include = ["common.toml"]
+
+[patterns.level]
+# Log severity levels (case-insensitive matching)
+error = '\b(?i:error|err|fatal|critical|crit)\b'
+warning = '\b(?i:warn(?:ing)?)\b'
+info = '\b(?i:info(?:rmation)?)\b'
+debug = '\b(?i:debug|trace|verbose)\b'
+
+# Bracketed levels (common in structured logs)
+error_bracket = '\[(?i:ERROR|ERR|FATAL|CRITICAL|CRIT)\]'
+warning_bracket = '\[(?i:WARN(?:ING)?)\]'
+info_bracket = '\[(?i:INFO)\]'
+debug_bracket = '\[(?i:DEBUG|TRACE)\]'
+
+# Any severity level
+any = '\b(?i:error|err|fatal|critical|crit|warn(?:ing)?|info(?:rmation)?|debug|trace|verbose)\b'
+any_bracket = '\[(?i:ERROR|ERR|FATAL|CRITICAL|CRIT|WARN(?:ING)?|INFO|DEBUG|TRACE)\]'
+
+[patterns.apache]
+# Apache/nginx combined log format
+# 127.0.0.1 - frank [10/Oct/2000:13:55:36 -0700] "GET /apache_pb.gif HTTP/1.0" 200 2326 "http://www.example.com/start.html" "Mozilla/4.08"
+combined = '^(\S+) (\S+) (\S+) \[([^\]]+)\] "([^"]*)" (\d+) (\d+|-) "([^"]*)" "([^"]*)"'
+
+# Common log format (without referrer/user-agent)
+common = '^(\S+) (\S+) (\S+) \[([^\]]+)\] "([^"]*)" (\d+) (\d+|-)'
+
+# Just the request line
+request = '"(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)\s+([^\s]+)\s+HTTP/[0-9.]+"'
+
+# HTTP status codes
+status_2xx = '\b2[0-9]{2}\b'
+status_3xx = '\b3[0-9]{2}\b'
+status_4xx = '\b4[0-9]{2}\b'
+status_5xx = '\b5[0-9]{2}\b'
+status_error = '\b[45][0-9]{2}\b'
+
+[patterns.syslog]
+# RFC 3164 BSD syslog
+# <34>Oct 11 22:14:15 mymachine su: 'su root' failed
+bsd = '^<(\d+)>(\w{3}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2})\s+(\S+)\s+(\S+?)(?:\[(\d+)\])?:\s*(.*)'
+
+# RFC 5424 syslog
+# <165>1 2003-10-11T22:14:15.003Z mymachine.example.com evntslog - ID47 [exampleSDID@32473 iut="3"] event
+rfc5424 = '^<(\d+)>(\d+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(?:\[([^\]]*)\])?\s*(.*)'
+
+# Syslog priority
+priority = '^<(\d{1,3})>'
+
+[patterns.json]
+# JSON log line (starts with {, ends with })
+json_line = '^\{.*\}$'
+
+# Common JSON log fields (using double-quoted TOML for proper escaping)
+timestamp_field = "\"(?:timestamp|time|@timestamp|ts|datetime)\":\\s*\"[^\"]+\""
+level_field = "\"(?:level|severity|log_level|loglevel)\":\\s*\"[^\"]+\""
+message_field = "\"(?:message|msg|log)\":\\s*\"[^\"]+\""
+
+# Extract message from JSON (simple)
+message_value = "\"(?:message|msg)\":\\s*\"([^\"]+)\""
+
+[patterns.app]
+# Stack traces
+java_exception = '^(?:\s+at\s+|Caused by:|Exception|Error).*'
+python_traceback = '^(?:Traceback|  File |    |.*Error:|.*Exception:).*'
+node_stack = '^\s+at\s+.*\(.*:\d+:\d+\)'
+
+# Common application patterns (using double-quoted TOML for patterns with quotes)
+request_id = "\\b(?:request[_-]?id|req[_-]?id|correlation[_-]?id|trace[_-]?id)[=:]\\s*[\"']?([a-zA-Z0-9_-]+)[\"']?"
+user_id = "\\b(?:user[_-]?id|uid|user)[=:]\\s*[\"']?([a-zA-Z0-9_-]+)[\"']?"
+session_id = "\\b(?:session[_-]?id|sid|session)[=:]\\s*[\"']?([a-zA-Z0-9_-]+)[\"']?"
+
+# Duration/latency
+duration_ms = '\b(?:duration|latency|elapsed|time|took)[=:]\s*(\d+(?:\.\d+)?)\s*(?:ms|milliseconds?)'
+duration_s = '\b(?:duration|latency|elapsed|time|took)[=:]\s*(\d+(?:\.\d+)?)\s*(?:s|seconds?)'
+
+[patterns.docker]
+# Docker container logs (with container ID prefix)
+container_prefix = '^[a-f0-9]{12}\s+'
+
+# Docker Compose logs (with service name)
+compose_prefix = '^(\S+)\s*\|\s*'
+
+# Kubernetes pod logs (with namespace/pod/container)
+k8s_prefix = '^(\S+)/(\S+)/(\S+)\s+'
+
+[patterns.nginx]
+# Nginx error log
+error_log = '^(\d{4}/\d{2}/\d{2}\s+\d{2}:\d{2}:\d{2})\s+\[(\w+)\]\s+(\d+)#(\d+):\s+\*?(\d+)?\s*(.*)'
+
+# Nginx access log (similar to Apache combined)
+access_log = '^(\S+) - (\S+) \[([^\]]+)\] "([^"]*)" (\d+) (\d+) "([^"]*)" "([^"]*)"(?: "([^"]*)")?'
+
+# Upstream response time
+upstream_time = "upstream_response_time[=:]\\s*\"?(\\d+\\.?\\d*)\"?"

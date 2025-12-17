@@ -91,6 +91,74 @@ flags = ["global"]
 enabled = true
 ```
 
+## Pattern Libraries
+
+Pattern libraries allow you to define reusable regex patterns in separate files and reference them across multiple pipelines using `${pattern.name}` syntax.
+
+### Creating a Pattern Library
+
+```toml
+# patterns/common.toml
+name = "Common Patterns"
+description = "Reusable patterns for log processing"
+version = "1.0.0"
+
+[patterns.logs]
+error = '\[ERROR\]'
+warning = '\[WARN(ING)?\]'
+timestamp = '\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}'
+
+[patterns.data]
+email = '[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'
+ip_address = '\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}'
+```
+
+### Using Pattern Libraries in Pipelines
+
+```toml
+name = "Log Processor"
+patterns_include = ["patterns/common.toml"]
+
+[[step]]
+type = "substitute"
+pattern = '${logs.error}'
+replacement = '[ERR]'
+
+[[step]]
+type = "filter"
+pattern = '${data.ip_address}'
+action = "keep_line"
+```
+
+### Library Location Resolution
+
+Pattern libraries are searched in order:
+1. Relative to the pipeline configuration file
+2. Global directory: `~/.rexpipe/patterns/`
+
+### Nested Libraries
+
+Libraries can include other libraries:
+
+```toml
+# patterns/extended.toml
+name = "Extended Patterns"
+patterns_include = ["common.toml"]  # Include another library
+
+[patterns.custom]
+special = 'my-pattern'
+```
+
+### CLI Commands for Libraries
+
+```bash
+# List all patterns in a library
+rexpipe --list-patterns patterns/common.toml
+
+# Validate a library file
+rexpipe --validate-library patterns/common.toml
+```
+
 ## Step Types
 
 - **substitute**: Replace matched patterns with new text
@@ -142,6 +210,8 @@ OPTIONS:
         --validate              Validate configuration only
         --export <FORMAT>       Export configuration to TOML or JSON
         --completions <SHELL>   Generate shell completion script
+        --list-patterns <FILE>  List patterns from a pattern library
+        --validate-library <FILE> Validate a pattern library file
     -i, --input <FILE>          Input file (default: stdin)
     -o, --output <FILE>         Output file (default: stdout)
     -h, --help                  Print help information

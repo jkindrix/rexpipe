@@ -44,6 +44,7 @@ fn test_end_to_end_log_processing() {
         name: Some("Integration Test".to_string()),
         description: None,
         version: None,
+        patterns_include: Vec::new(),
         settings: PipelineSettings::default(),
         step: vec![
             PipelineStep {
@@ -156,6 +157,7 @@ another DEBUG to drop"#;
         name: Some("Filter Test".to_string()),
         description: None,
         version: None,
+        patterns_include: Vec::new(),
         settings: PipelineSettings::default(),
         step: vec![
             PipelineStep {
@@ -213,6 +215,7 @@ Invalid line without timestamp
         name: Some("Validation Test".to_string()),
         description: None,
         version: None,
+        patterns_include: Vec::new(),
         settings: PipelineSettings::default(),
         step: vec![
             PipelineStep {
@@ -253,6 +256,7 @@ fn test_extract_step_type() {
         name: Some("Extract Test".to_string()),
         description: None,
         version: None,
+        patterns_include: Vec::new(),
         settings: PipelineSettings::default(),
         step: vec![
             PipelineStep {
@@ -287,6 +291,7 @@ fn test_error_handling() {
         name: Some("Error Test".to_string()),
         description: None,
         version: None,
+        patterns_include: Vec::new(),
         settings: PipelineSettings::default(),
         step: vec![
             PipelineStep {
@@ -314,6 +319,7 @@ fn test_disabled_steps() {
         name: Some("Disabled Step Test".to_string()),
         description: None,
         version: None,
+        patterns_include: Vec::new(),
         settings: PipelineSettings::default(),
         step: vec![
             PipelineStep {
@@ -349,6 +355,7 @@ fn test_transform_uppercase() {
         name: Some("Transform Uppercase Test".to_string()),
         description: None,
         version: None,
+        patterns_include: Vec::new(),
         settings: PipelineSettings::default(),
         step: vec![
             PipelineStep {
@@ -382,6 +389,7 @@ fn test_transform_lowercase() {
         name: Some("Transform Lowercase Test".to_string()),
         description: None,
         version: None,
+        patterns_include: Vec::new(),
         settings: PipelineSettings::default(),
         step: vec![
             PipelineStep {
@@ -427,6 +435,7 @@ fn test_pcre_positive_lookahead() {
         name: Some("PCRE Lookahead Test".to_string()),
         description: None,
         version: None,
+        patterns_include: Vec::new(),
         settings,
         step: vec![
             PipelineStep {
@@ -466,6 +475,7 @@ fn test_pcre_negative_lookahead() {
         name: Some("PCRE Negative Lookahead Test".to_string()),
         description: None,
         version: None,
+        patterns_include: Vec::new(),
         settings,
         step: vec![
             PipelineStep {
@@ -505,6 +515,7 @@ fn test_pcre_positive_lookbehind() {
         name: Some("PCRE Lookbehind Test".to_string()),
         description: None,
         version: None,
+        patterns_include: Vec::new(),
         settings,
         step: vec![
             PipelineStep {
@@ -544,6 +555,7 @@ fn test_pcre_negative_lookbehind() {
         name: Some("PCRE Negative Lookbehind Test".to_string()),
         description: None,
         version: None,
+        patterns_include: Vec::new(),
         settings,
         step: vec![
             PipelineStep {
@@ -586,6 +598,7 @@ fn test_pcre_combined_lookaround() {
         name: Some("PCRE Combined Lookaround Test".to_string()),
         description: None,
         version: None,
+        patterns_include: Vec::new(),
         settings,
         step: vec![
             PipelineStep {
@@ -632,6 +645,7 @@ INFO: Processing complete"#;
         name: Some("PCRE Filter Test".to_string()),
         description: None,
         version: None,
+        patterns_include: Vec::new(),
         settings,
         step: vec![
             PipelineStep {
@@ -677,6 +691,7 @@ fn test_fixed_string_basic_replacement() {
         name: Some("Fixed String Test".to_string()),
         description: None,
         version: None,
+        patterns_include: Vec::new(),
         settings,
         step: vec![
             PipelineStep {
@@ -716,6 +731,7 @@ fn test_fixed_string_special_chars() {
         name: Some("Fixed String Special Chars Test".to_string()),
         description: None,
         version: None,
+        patterns_include: Vec::new(),
         settings,
         step: vec![
             PipelineStep {
@@ -757,6 +773,7 @@ Line with ERROR without brackets"#;
         name: Some("Fixed String Filter Test".to_string()),
         description: None,
         version: None,
+        patterns_include: Vec::new(),
         settings,
         step: vec![
             PipelineStep {
@@ -799,6 +816,7 @@ fn test_fixed_string_backslashes() {
         name: Some("Fixed String Backslash Test".to_string()),
         description: None,
         version: None,
+        patterns_include: Vec::new(),
         settings,
         step: vec![
             PipelineStep {
@@ -838,6 +856,7 @@ fn test_fixed_string_multiple_occurrences() {
         name: Some("Fixed String Multiple Test".to_string()),
         description: None,
         version: None,
+        patterns_include: Vec::new(),
         settings,
         step: vec![
             PipelineStep {
@@ -877,6 +896,7 @@ fn test_unicode_basic_matching() {
         name: Some("Unicode Test".to_string()),
         description: None,
         version: None,
+        patterns_include: Vec::new(),
         settings: PipelineSettings::default(),
         step: vec![
             PipelineStep {
@@ -911,6 +931,7 @@ fn test_unicode_character_classes() {
         name: Some("Unicode Classes Test".to_string()),
         description: None,
         version: None,
+        patterns_include: Vec::new(),
         settings: PipelineSettings::default(),
         step: vec![
             PipelineStep {
@@ -946,6 +967,7 @@ fn test_unicode_emoji() {
         name: Some("Unicode Emoji Test".to_string()),
         description: None,
         version: None,
+        patterns_include: Vec::new(),
         settings: PipelineSettings::default(),
         step: vec![
             PipelineStep {
@@ -983,6 +1005,7 @@ Mixed: English 和 中文"#;
         name: Some("Unicode Filter Test".to_string()),
         description: None,
         version: None,
+        patterns_include: Vec::new(),
         settings: PipelineSettings::default(),
         step: vec![
             PipelineStep {
@@ -1023,6 +1046,7 @@ fn test_unicode_transform() {
         name: Some("Unicode Transform Test".to_string()),
         description: None,
         version: None,
+        patterns_include: Vec::new(),
         settings: PipelineSettings::default(),
         step: vec![
             PipelineStep {
@@ -1058,6 +1082,7 @@ fn test_unicode_accented_characters() {
         name: Some("Unicode Accents Test".to_string()),
         description: None,
         version: None,
+        patterns_include: Vec::new(),
         settings: PipelineSettings::default(),
         step: vec![
             PipelineStep {
@@ -1092,6 +1117,7 @@ fn test_unicode_word_boundaries() {
         name: Some("Unicode Word Boundaries Test".to_string()),
         description: None,
         version: None,
+        patterns_include: Vec::new(),
         settings: PipelineSettings::default(),
         step: vec![
             PipelineStep {
@@ -1131,6 +1157,7 @@ fn test_error_invalid_regex_pattern() {
         name: Some("Invalid Regex Test".to_string()),
         description: None,
         version: None,
+        patterns_include: Vec::new(),
         settings: PipelineSettings::default(),
         step: vec![
             PipelineStep {
@@ -1157,6 +1184,7 @@ fn test_error_missing_replacement() {
         name: Some("Missing Replacement Test".to_string()),
         description: None,
         version: None,
+        patterns_include: Vec::new(),
         settings: PipelineSettings::default(),
         step: vec![
             PipelineStep {
@@ -1185,6 +1213,7 @@ fn test_error_missing_filter_action() {
         name: Some("Missing Filter Action Test".to_string()),
         description: None,
         version: None,
+        patterns_include: Vec::new(),
         settings: PipelineSettings::default(),
         step: vec![
             PipelineStep {
@@ -1213,6 +1242,7 @@ fn test_error_empty_pipeline() {
         name: Some("Empty Pipeline Test".to_string()),
         description: None,
         version: None,
+        patterns_include: Vec::new(),
         settings: PipelineSettings::default(),
         step: vec![],  // Empty steps
     };
@@ -1230,6 +1260,7 @@ fn test_error_empty_pattern() {
         name: Some("Empty Pattern Test".to_string()),
         description: None,
         version: None,
+        patterns_include: Vec::new(),
         settings: PipelineSettings::default(),
         step: vec![
             PipelineStep {
@@ -1311,6 +1342,7 @@ fn test_pcre_mode_disabled_error() {
         name: Some("PCRE Disabled Test".to_string()),
         description: None,
         version: None,
+        patterns_include: Vec::new(),
         settings,
         step: vec![
             PipelineStep {

@@ -1,0 +1,71 @@
+# Log Sanitization Pipeline
+# Demonstrates pattern library usage for PII/credential redaction
+#
+# Usage:
+#   rexpipe -c examples/log-sanitize.toml < application.log
+#
+# This pipeline redacts sensitive information from logs before sharing
+# or storing in less-secure environments.
+
+name = "Log Sanitization"
+description = "Redact PII and credentials from log files"
+version = "1.0.0"
+
+# Use patterns from the common library
+patterns_include = ["patterns/common.toml"]
+
+# Redact email addresses
+[[step]]
+type = "substitute"
+description = "Redact email addresses"
+pattern = '${email}'
+replacement = '[EMAIL_REDACTED]'
+flags = ["global"]
+
+# Redact IP addresses (use the simple pattern for speed)
+[[step]]
+type = "substitute"
+description = "Redact IP addresses"
+pattern = '${net.ipv4_simple}'
+replacement = '[IP_REDACTED]'
+flags = ["global"]
+
+# Redact API keys and tokens
+[[step]]
+type = "substitute"
+description = "Redact API keys"
+pattern = '${security.api_key_generic}'
+replacement = '[API_KEY_REDACTED]'
+flags = ["global"]
+
+# Redact password fields
+[[step]]
+type = "substitute"
+description = "Redact password fields"
+pattern = '${security.password_field}'
+replacement = '[PASSWORD_REDACTED]'
+flags = ["global"]
+
+# Redact credit card numbers
+[[step]]
+type = "substitute"
+description = "Redact credit card numbers"
+pattern = '${security.credit_card}'
+replacement = '[CC_REDACTED]'
+flags = ["global"]
+
+# Redact SSNs
+[[step]]
+type = "substitute"
+description = "Redact SSNs"
+pattern = '${security.ssn}'
+replacement = '[SSN_REDACTED]'
+flags = ["global"]
+
+# Redact phone numbers
+[[step]]
+type = "substitute"
+description = "Redact phone numbers"
+pattern = '${phone_us}'
+replacement = '[PHONE_REDACTED]'
+flags = ["global"]
