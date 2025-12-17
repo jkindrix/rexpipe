@@ -12,7 +12,6 @@ repository = "https://github.com/jkindrix/rexpipe"
 documentation = "https://docs.rs/rexpipe"
 keywords = ["regex", "pipeline", "text-processing", "streaming", "grep"]
 categories = ["command-line-utilities", "text-processing"]
-exclude = [".github/", ".tmp/", "test-data/", "target/"]
 include = ["src/**/*", "examples/**/*", "benches/**/*", "tests/**/*", "LICENSE-*", "README.md", "CHANGELOG.md", "CONTRIBUTING.md", "Cargo.toml"]
 
 [dependencies]
