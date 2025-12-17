@@ -1,7 +1,11 @@
-use crate::pipeline::{PipelineConfig, PipelineSettings, StepType, FilterAction, TransformAction, RegexFlag, PipelineResult, StepResult, PipelineError, ErrorType};
+use crate::pipeline::{
+    ErrorType, FilterAction, PipelineConfig, PipelineError, PipelineResult, PipelineSettings,
+    RegexFlag, StepResult, StepType, TransformAction,
+};
+use anyhow::{anyhow, Result};
 use regex::{Regex, RegexBuilder};
-use std::io::{BufRead, Write};
 use std::collections::{HashMap, VecDeque};
+use std::io::{BufRead, Write};
 use std::time::Instant;
 
 #[cfg(feature = "pcre")]
@@ -81,60 +85,58 @@ impl CompiledPattern {
 
     pub fn find_iter<'a>(&'a self, text: &'a str) -> Vec<(usize, usize, String)> {
         match self {
-            CompiledPattern::Standard(re) => {
-                re.find_iter(text)
-                    .map(|m| (m.start(), m.end(), m.as_str().to_string()))
-                    .collect()
-            }
-            CompiledPattern::Fixed(s) => {
-                text.match_indices(s)
-                    .map(|(start, matched)| (start, start + matched.len(), matched.to_string()))
-                    .collect()
-            }
+            CompiledPattern::Standard(re) => re
+                .find_iter(text)
+                .map(|m| (m.start(), m.end(), m.as_str().to_string()))
+                .collect(),
+            CompiledPattern::Fixed(s) => text
+                .match_indices(s)
+                .map(|(start, matched)| (start, start + matched.len(), matched.to_string()))
+                .collect(),
             #[cfg(feature = "pcre")]
-            CompiledPattern::Pcre(re) => {
-                re.find_iter(text)
-                    .filter_map(|m| m.ok())
-                    .map(|m| (m.start(), m.end(), m.as_str().to_string()))
-                    .collect()
-            }
+            CompiledPattern::Pcre(re) => re
+                .find_iter(text)
+                .filter_map(|m| m.ok())
+                .map(|m| (m.start(), m.end(), m.as_str().to_string()))
+                .collect(),
         }
     }
 
     pub fn captures_iter<'a>(&'a self, text: &'a str) -> Vec<CaptureGroup> {
         match self {
-            CompiledPattern::Standard(re) => {
-                re.captures_iter(text)
-                    .map(|caps| {
-                        let groups: Vec<Option<String>> = (0..caps.len())
-                            .map(|i| caps.get(i).map(|m| m.as_str().to_string()))
-                            .collect();
-                        let full_match = caps.get(0).map(|m| (m.start(), m.end(), m.as_str().to_string()));
-                        CaptureGroup { groups, full_match }
-                    })
-                    .collect()
-            }
-            CompiledPattern::Fixed(s) => {
-                text.match_indices(s)
-                    .map(|(start, matched)| CaptureGroup {
-                        groups: vec![Some(matched.to_string())],
-                        full_match: Some((start, start + matched.len(), matched.to_string())),
-                    })
-                    .collect()
-            }
+            CompiledPattern::Standard(re) => re
+                .captures_iter(text)
+                .map(|caps| {
+                    let groups: Vec<Option<String>> = (0..caps.len())
+                        .map(|i| caps.get(i).map(|m| m.as_str().to_string()))
+                        .collect();
+                    let full_match = caps
+                        .get(0)
+                        .map(|m| (m.start(), m.end(), m.as_str().to_string()));
+                    CaptureGroup { groups, full_match }
+                })
+                .collect(),
+            CompiledPattern::Fixed(s) => text
+                .match_indices(s)
+                .map(|(start, matched)| CaptureGroup {
+                    groups: vec![Some(matched.to_string())],
+                    full_match: Some((start, start + matched.len(), matched.to_string())),
+                })
+                .collect(),
             #[cfg(feature = "pcre")]
-            CompiledPattern::Pcre(re) => {
-                re.captures_iter(text)
-                    .filter_map(|caps| caps.ok())
-                    .map(|caps| {
-                        let groups: Vec<Option<String>> = (0..caps.len())
-                            .map(|i| caps.get(i).map(|m| m.as_str().to_string()))
-                            .collect();
-                        let full_match = caps.get(0).map(|m| (m.start(), m.end(), m.as_str().to_string()));
-                        CaptureGroup { groups, full_match }
-                    })
-                    .collect()
-            }
+            CompiledPattern::Pcre(re) => re
+                .captures_iter(text)
+                .filter_map(|caps| caps.ok())
+                .map(|caps| {
+                    let groups: Vec<Option<String>> = (0..caps.len())
+                        .map(|i| caps.get(i).map(|m| m.as_str().to_string()))
+                        .collect();
+                    let full_match = caps
+                        .get(0)
+                        .map(|m| (m.start(), m.end(), m.as_str().to_string()));
+                    CaptureGroup { groups, full_match }
+                })
+                .collect(),
         }
     }
 }
@@ -177,9 +179,12 @@ pub struct MatchInfo {
 }
 
 impl StreamProcessor {
-    pub fn new(config: PipelineConfig) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn new(config: PipelineConfig) -> Result<Self> {
         if let Err(validation_errors) = config.validate() {
-            return Err(format!("Pipeline validation failed: {}", validation_errors.join("; ")).into());
+            return Err(anyhow!(
+                "Pipeline validation failed: {}",
+                validation_errors.join("; ")
+            ));
         }
 
         let compiled_steps = Self::compile_steps(&config)?;
@@ -199,12 +204,14 @@ impl StreamProcessor {
         self.config.settings.context_before > 0 || self.config.settings.context_after > 0
     }
 
-    fn compile_steps(config: &PipelineConfig) -> Result<Vec<CompiledStep>, Box<dyn std::error::Error>> {
+    fn compile_steps(config: &PipelineConfig) -> Result<Vec<CompiledStep>> {
         let mut compiled_steps = Vec::new();
         let settings = &config.settings;
 
         for (index, step) in config.enabled_steps().enumerate() {
-            let is_global = step.flags.as_ref()
+            let is_global = step
+                .flags
+                .as_ref()
                 .map(|f| f.iter().any(|flag| matches!(flag, RegexFlag::Global)))
                 .unwrap_or(false);
 
@@ -229,7 +236,7 @@ impl StreamProcessor {
         pattern: &str,
         flags: &Option<Vec<RegexFlag>>,
         settings: &PipelineSettings,
-    ) -> Result<CompiledPattern, Box<dyn std::error::Error>> {
+    ) -> Result<CompiledPattern> {
         // Fixed string mode - no regex interpretation
         if settings.fixed_strings {
             return Ok(CompiledPattern::Fixed(pattern.to_string()));
@@ -246,23 +253,27 @@ impl StreamProcessor {
             match FancyRegex::new(pattern) {
                 Ok(re) => return Ok(CompiledPattern::Pcre(re)),
                 Err(e) => {
-                    return Err(Self::format_regex_error(pattern, &e.to_string(), true).into());
+                    return Err(anyhow!(
+                        "{}",
+                        Self::format_regex_error(pattern, &e.to_string(), true)
+                    ));
                 }
             }
         }
 
         #[cfg(not(feature = "pcre"))]
         if settings.pcre_mode {
-            return Err("PCRE mode requested but the 'pcre' feature is not enabled.\n\
-                       Suggestion: Rebuild with `cargo build --features pcre` or remove the -P flag".into());
+            return Err(anyhow!("PCRE mode requested but the 'pcre' feature is not enabled.\n\
+                       Suggestion: Rebuild with `cargo build --features pcre` or remove the -P flag"));
         }
 
         // Standard regex mode
         match Self::build_regex(pattern, flags) {
             Ok(regex) => Ok(CompiledPattern::Standard(regex)),
-            Err(e) => {
-                Err(Self::format_regex_error(pattern, &e.to_string(), false).into())
-            }
+            Err(e) => Err(anyhow!(
+                "{}",
+                Self::format_regex_error(pattern, &e.to_string(), false)
+            )),
         }
     }
 
@@ -272,13 +283,22 @@ impl StreamProcessor {
         msg.push_str(&format!("Error: {}\n", error));
 
         // Add context-specific suggestions
-        if error.contains("look") || error.contains("(?=") || error.contains("(?!") || error.contains("(?<") {
+        if error.contains("look")
+            || error.contains("(?=")
+            || error.contains("(?!")
+            || error.contains("(?<")
+        {
             if !is_pcre {
                 msg.push_str("\nSuggestion: This pattern uses lookahead/lookbehind which requires PCRE mode.\n");
                 msg.push_str("Try running with the -P flag: rexpipe -P -p 'pattern' ...\n");
             }
-        } else if error.contains("unclosed") || error.contains("unbalanced") || error.contains("unopened") {
-            msg.push_str("\nSuggestion: Check for missing closing brackets, parentheses, or braces.\n");
+        } else if error.contains("unclosed")
+            || error.contains("unbalanced")
+            || error.contains("unopened")
+        {
+            msg.push_str(
+                "\nSuggestion: Check for missing closing brackets, parentheses, or braces.\n",
+            );
             msg.push_str("Common fixes:\n");
             msg.push_str("  - Ensure all ( have matching )\n");
             msg.push_str("  - Ensure all [ have matching ]\n");
@@ -293,7 +313,9 @@ impl StreamProcessor {
             msg.push_str("  - Invalid: +abc or *test\n");
             msg.push_str("  - Valid: a+bc or te+st\n");
         } else if error.contains("invalid") || error.contains("unknown") {
-            msg.push_str("\nSuggestion: Check the regex syntax. If you're trying to match literal text,\n");
+            msg.push_str(
+                "\nSuggestion: Check the regex syntax. If you're trying to match literal text,\n",
+            );
             msg.push_str("consider using -F for fixed string mode.\n");
         }
 
@@ -325,12 +347,22 @@ impl StreamProcessor {
         if let Some(flags) = flags {
             for flag in flags {
                 match flag {
-                    RegexFlag::Global => {}, // Global is handled in processing, not compilation
-                    RegexFlag::CaseInsensitive => { builder.case_insensitive(true); },
-                    RegexFlag::Multiline => { builder.multi_line(true); },
-                    RegexFlag::DotAll => { builder.dot_matches_new_line(true); },
-                    RegexFlag::Unicode => { builder.unicode(true); },
-                    RegexFlag::Extended => { builder.ignore_whitespace(true); },
+                    RegexFlag::Global => {} // Global is handled in processing, not compilation
+                    RegexFlag::CaseInsensitive => {
+                        builder.case_insensitive(true);
+                    }
+                    RegexFlag::Multiline => {
+                        builder.multi_line(true);
+                    }
+                    RegexFlag::DotAll => {
+                        builder.dot_matches_new_line(true);
+                    }
+                    RegexFlag::Unicode => {
+                        builder.unicode(true);
+                    }
+                    RegexFlag::Extended => {
+                        builder.ignore_whitespace(true);
+                    }
                 }
             }
         }
@@ -356,9 +388,12 @@ impl StreamProcessor {
         // Only relevant for PCRE mode since standard mode uses linear-time matching
         if is_pcre {
             // Patterns like (a+)+ or (a*)* or (a+)*
-            if pattern.contains(")+)") || pattern.contains(")*)")
-                || pattern.contains("+)+") || pattern.contains("*)*")
-                || pattern.contains("+)*") || pattern.contains("*)+")
+            if pattern.contains(")+)")
+                || pattern.contains(")*)")
+                || pattern.contains("+)+")
+                || pattern.contains("*)*")
+                || pattern.contains("+)*")
+                || pattern.contains("*)+")
             {
                 warnings.push(
                     "Pattern contains nested quantifiers which can cause exponential matching time in PCRE mode. \
@@ -405,7 +440,7 @@ impl StreamProcessor {
         &mut self,
         mut reader: R,
         mut writer: W,
-    ) -> Result<PipelineResult, Box<dyn std::error::Error>> {
+    ) -> Result<PipelineResult> {
         self.stats.processing_start = Some(Instant::now());
         let mut result = PipelineResult::new();
         let mut line_buffer = String::new();
@@ -496,7 +531,7 @@ impl StreamProcessor {
         writer: &mut W,
         ctx_line: &ContextLine,
         _is_separator: bool,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<()> {
         writer.write_all(ctx_line.content.as_bytes())?;
         writer.write_all(b"\n")?;
         Ok(())
@@ -507,7 +542,7 @@ impl StreamProcessor {
         line: &str,
         line_number: u64,
         result: &mut PipelineResult,
-    ) -> Result<Option<String>, Box<dyn std::error::Error>> {
+    ) -> Result<Option<String>> {
         let mut current_line = line.trim_end_matches('\n').to_string();
         let mut should_output = true;
 
@@ -582,12 +617,15 @@ impl StreamProcessor {
                 StepType::Validate => {
                     let is_valid = compiled_step.pattern.is_match(&current_line);
                     if !is_valid {
-                        result.add_error(PipelineError::new(
-                            compiled_step.step_index,
-                            line_number,
-                            ErrorType::PatternMatch,
-                            "Line failed validation".to_string(),
-                        ).with_context(current_line.clone()));
+                        result.add_error(
+                            PipelineError::new(
+                                compiled_step.step_index,
+                                line_number,
+                                ErrorType::PatternMatch,
+                                "Line failed validation".to_string(),
+                            )
+                            .with_context(current_line.clone()),
+                        );
                         should_output = false;
                         break;
                     }
@@ -619,7 +657,9 @@ impl StreamProcessor {
 
             let elapsed = step_start.elapsed().as_millis() as u64;
             step_result.set_processing_time(elapsed);
-            self.stats.step_timings.insert(compiled_step.step_index, elapsed);
+            self.stats
+                .step_timings
+                .insert(compiled_step.step_index, elapsed);
             result.add_step_result(step_result);
         }
 
@@ -637,7 +677,7 @@ impl StreamProcessor {
         replacement: &str,
         is_global: bool,
         step_result: &mut StepResult,
-    ) -> Result<String, Box<dyn std::error::Error>> {
+    ) -> Result<String> {
         // Count actual matches before replacement
         let match_count = pattern.find_iter(input).len();
 
@@ -667,7 +707,7 @@ impl StreamProcessor {
         is_global: bool,
         extra_text: &Option<String>,
         step_result: &mut StepResult,
-    ) -> Result<String, Box<dyn std::error::Error>> {
+    ) -> Result<String> {
         let match_count = pattern.find_iter(input).len();
 
         if match_count == 0 {
@@ -689,22 +729,23 @@ impl StreamProcessor {
                     format!("{}{}", matched, suffix)
                 }
                 TransformAction::Reverse => matched.chars().rev().collect(),
-                TransformAction::RemoveWhitespace => matched.chars().filter(|c| !c.is_whitespace()).collect(),
-                TransformAction::TitleCase => {
-                    matched
-                        .split_whitespace()
-                        .map(|word| {
-                            let mut chars = word.chars();
-                            match chars.next() {
-                                None => String::new(),
-                                Some(first) => {
-                                    first.to_uppercase().chain(chars.flat_map(|c| c.to_lowercase())).collect()
-                                }
-                            }
-                        })
-                        .collect::<Vec<_>>()
-                        .join(" ")
+                TransformAction::RemoveWhitespace => {
+                    matched.chars().filter(|c| !c.is_whitespace()).collect()
                 }
+                TransformAction::TitleCase => matched
+                    .split_whitespace()
+                    .map(|word| {
+                        let mut chars = word.chars();
+                        match chars.next() {
+                            None => String::new(),
+                            Some(first) => first
+                                .to_uppercase()
+                                .chain(chars.flat_map(|c| c.to_lowercase()))
+                                .collect(),
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" "),
             }
         };
 
@@ -744,11 +785,7 @@ impl StreamProcessor {
         Ok(result)
     }
 
-    pub fn inspect_line(
-        &self,
-        line: &str,
-        step_index: Option<usize>,
-    ) -> Result<Vec<MatchInfo>, Box<dyn std::error::Error>> {
+    pub fn inspect_line(&self, line: &str, step_index: Option<usize>) -> Result<Vec<MatchInfo>> {
         let mut matches = Vec::new();
         let steps_to_inspect: Vec<(usize, &CompiledStep)> = if let Some(index) = step_index {
             vec![(index, &self.compiled_steps[index])]
@@ -759,7 +796,10 @@ impl StreamProcessor {
         for (idx, step) in steps_to_inspect {
             for cap in step.pattern.captures_iter(line) {
                 if let Some((start, end, matched)) = cap.full_match {
-                    let replacement_preview = step.replacement.as_ref().map(|replacement| step.pattern.replace(line, replacement));
+                    let replacement_preview = step
+                        .replacement
+                        .as_ref()
+                        .map(|replacement| step.pattern.replace(line, replacement));
 
                     matches.push(MatchInfo {
                         line_number: 1, // Will be set by caller
@@ -787,7 +827,9 @@ impl StreamProcessor {
     }
 
     pub fn performance_report(&self) -> String {
-        let total_time = self.stats.processing_start
+        let total_time = self
+            .stats
+            .processing_start
             .map(|start| start.elapsed().as_millis())
             .unwrap_or(0);
 
@@ -811,7 +853,8 @@ impl StreamProcessor {
             throughput,
             self.compiled_steps.len(),
             if !self.stats.step_timings.is_empty() {
-                self.stats.step_timings.values().sum::<u64>() as f64 / self.stats.step_timings.len() as f64
+                self.stats.step_timings.values().sum::<u64>() as f64
+                    / self.stats.step_timings.len() as f64
             } else {
                 0.0
             }
@@ -859,14 +902,14 @@ mod tests {
     fn test_basic_substitution() {
         let config = PipelineConfig::from_inline_pattern(r"\d+", Some("NUMBER"));
         let mut processor = StreamProcessor::new(config).unwrap();
-        
+
         let input = "Test 123 and 456";
         let reader = Cursor::new(input);
         let mut output = Vec::new();
-        
+
         let result = processor.process_stream(reader, &mut output).unwrap();
         let output_str = String::from_utf8(output).unwrap();
-        
+
         assert_eq!(output_str.trim(), "Test NUMBER and NUMBER");
         assert_eq!(result.lines_processed, 1);
         assert!(result.transformations_applied > 0);
@@ -1018,6 +1061,10 @@ mod tests {
         let result = processor.process_stream(reader, &mut output).unwrap();
 
         // Should count 5 matches, not 1
-        assert!(result.matches_found >= 5, "Expected at least 5 matches, got {}", result.matches_found);
+        assert!(
+            result.matches_found >= 5,
+            "Expected at least 5 matches, got {}",
+            result.matches_found
+        );
     }
 }

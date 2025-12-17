@@ -1,3 +1,4 @@
+use anyhow::{anyhow, Result};
 use std::collections::HashMap;
 use std::fmt;
 
@@ -96,7 +97,12 @@ impl CompassPhase {
         }
     }
 
-    pub fn add_quality_gate(&mut self, name: impl Into<String>, passed: bool, details: Option<String>) {
+    pub fn add_quality_gate(
+        &mut self,
+        name: impl Into<String>,
+        passed: bool,
+        details: Option<String>,
+    ) {
         self.quality_gates.push(QualityGate {
             name: name.into(),
             passed,
@@ -136,12 +142,30 @@ impl CompassAgent {
     /// Create a new COMPASS agent with specific analysis context
     pub fn with_context(context: AnalysisContext) -> Self {
         let phases = vec![
-            CompassPhase::new("Clarify", "Clarify Core Intent - Understanding the fundamental problem"),
-            CompassPhase::new("Orient", "Orient Through Research - Gathering evidence and context"),
-            CompassPhase::new("Map", "Map Solution Space - Designing comprehensive solution"),
-            CompassPhase::new("Pause", "Pause for Strategic Validation - Ensuring alignment"),
-            CompassPhase::new("Architect", "Architect Detailed Implementation - Creating specifications"),
-            CompassPhase::new("Synthesize", "Synthesize and Validate - Final quality assurance"),
+            CompassPhase::new(
+                "Clarify",
+                "Clarify Core Intent - Understanding the fundamental problem",
+            ),
+            CompassPhase::new(
+                "Orient",
+                "Orient Through Research - Gathering evidence and context",
+            ),
+            CompassPhase::new(
+                "Map",
+                "Map Solution Space - Designing comprehensive solution",
+            ),
+            CompassPhase::new(
+                "Pause",
+                "Pause for Strategic Validation - Ensuring alignment",
+            ),
+            CompassPhase::new(
+                "Architect",
+                "Architect Detailed Implementation - Creating specifications",
+            ),
+            CompassPhase::new(
+                "Synthesize",
+                "Synthesize and Validate - Final quality assurance",
+            ),
         ];
 
         Self {
@@ -167,11 +191,11 @@ impl CompassAgent {
         &mut self.phases[self.current_phase_index]
     }
 
-    pub fn advance_phase(&mut self) -> Result<(), String> {
+    pub fn advance_phase(&mut self) -> Result<()> {
         let current = &self.phases[self.current_phase_index];
 
         if !current.all_gates_passed() {
-            return Err(format!(
+            return Err(anyhow!(
                 "Cannot advance from {} phase: quality gates not met",
                 current.name
             ));
@@ -182,7 +206,7 @@ impl CompassAgent {
             self.phases[self.current_phase_index].status = PhaseStatus::InProgress;
             Ok(())
         } else {
-            Err("Already at final phase".to_string())
+            Err(anyhow!("Already at final phase"))
         }
     }
 
@@ -197,10 +221,11 @@ impl CompassAgent {
         self.confidence_level = level.clamp(0.0, 1.0);
     }
 
-    pub fn clarify_intent(&mut self, problem_statement: &str) -> Result<String, String> {
+    pub fn clarify_intent(&mut self, problem_statement: &str) -> Result<String> {
         // Extract context data before mutably borrowing phase
         let interpretation = if let Some(ref pipeline) = self.context.pipeline {
-            let step_summary: Vec<String> = pipeline.enabled_steps()
+            let step_summary: Vec<String> = pipeline
+                .enabled_steps()
                 .map(|s| format!("{:?}", s.step_type))
                 .collect();
             format!(
@@ -215,12 +240,12 @@ impl CompassAgent {
             format!(
                 "Understanding goal: {} for subject '{}'. \
                  This will enable efficient text processing with unified pipeline architecture.",
-                problem_statement,
-                self.context.subject
+                problem_statement, self.context.subject
             )
         };
 
-        let has_problem = !problem_statement.is_empty() || !self.context.problem_statement.is_empty();
+        let has_problem =
+            !problem_statement.is_empty() || !self.context.problem_statement.is_empty();
         let problem_desc = if problem_statement.is_empty() {
             self.context.problem_statement.clone()
         } else {
@@ -259,30 +284,40 @@ impl CompassAgent {
             phase.status = PhaseStatus::Completed;
             Ok(interpretation)
         } else {
-            Err("Failed to clarify intent adequately".to_string())
+            Err(anyhow!("Failed to clarify intent adequately"))
         }
     }
 
-    pub fn orient_research(&mut self, research_context: &str) -> Result<String, String> {
+    pub fn orient_research(&mut self, research_context: &str) -> Result<String> {
         // Generate dynamic research synthesis based on context - before mutable borrow
         let synthesis = if let Some(ref pipeline) = self.context.pipeline {
             // Analyze the pipeline for potential issues
             let mut findings = Vec::new();
 
             // Check for common patterns
-            let has_substitute = pipeline.enabled_steps().any(|s| matches!(s.step_type, StepType::Substitute));
-            let has_filter = pipeline.enabled_steps().any(|s| matches!(s.step_type, StepType::Filter));
-            let has_transform = pipeline.enabled_steps().any(|s| matches!(s.step_type, StepType::Transform));
+            let has_substitute = pipeline
+                .enabled_steps()
+                .any(|s| matches!(s.step_type, StepType::Substitute));
+            let has_filter = pipeline
+                .enabled_steps()
+                .any(|s| matches!(s.step_type, StepType::Filter));
+            let has_transform = pipeline
+                .enabled_steps()
+                .any(|s| matches!(s.step_type, StepType::Transform));
             let step_count = pipeline.enabled_steps().count();
 
             if step_count > 5 {
-                findings.push("Complex pipeline - consider breaking into smaller, reusable components");
+                findings
+                    .push("Complex pipeline - consider breaking into smaller, reusable components");
             }
             if has_substitute && has_filter {
-                findings.push("Mixed substitution and filtering - order matters for correct results");
+                findings
+                    .push("Mixed substitution and filtering - order matters for correct results");
             }
             if has_transform {
-                findings.push("Transform steps detected - ensure transformations are idempotent if re-run");
+                findings.push(
+                    "Transform steps detected - ensure transformations are idempotent if re-run",
+                );
             }
 
             if findings.is_empty() {
@@ -301,7 +336,11 @@ impl CompassAgent {
                  2) Unified processing eliminates context switching \
                  3) Streaming architecture provides constant memory usage",
                 self.context.subject,
-                if research_context.is_empty() { "Evidence gathered" } else { research_context }
+                if research_context.is_empty() {
+                    "Evidence gathered"
+                } else {
+                    research_context
+                }
             )
         };
 
@@ -334,14 +373,15 @@ impl CompassAgent {
             phase.status = PhaseStatus::Completed;
             Ok(synthesis)
         } else {
-            Err("Research incomplete or insufficient".to_string())
+            Err(anyhow!("Research incomplete or insufficient"))
         }
     }
 
-    pub fn map_solution(&mut self) -> Result<String, String> {
+    pub fn map_solution(&mut self) -> Result<String> {
         // Generate dynamic solution map based on context - before mutable borrow
         let solution_map = if let Some(ref pipeline) = self.context.pipeline {
-            let step_types: Vec<String> = pipeline.enabled_steps()
+            let step_types: Vec<String> = pipeline
+                .enabled_steps()
                 .map(|s| format!("{:?}", s.step_type))
                 .collect();
 
@@ -361,7 +401,8 @@ impl CompassAgent {
              2) TOML configuration for portable workflows \
              3) PCRE-compatible regex via fancy-regex for advanced patterns \
              4) Interactive debugging mode with match inspection \
-             5) Constant memory usage via streaming architecture".to_string()
+             5) Constant memory usage via streaming architecture"
+                .to_string()
         };
 
         // Now mutably borrow phase
@@ -387,57 +428,60 @@ impl CompassAgent {
         );
 
         phase.set_output("solution_map", solution_map.clone());
-        phase.set_output("core_components", "streaming_engine,config_parser,regex_processor,cli");
+        phase.set_output(
+            "core_components",
+            "streaming_engine,config_parser,regex_processor,cli",
+        );
 
         if phase.all_gates_passed() {
             phase.status = PhaseStatus::Completed;
             Ok(solution_map)
         } else {
-            Err("Solution mapping incomplete".to_string())
+            Err(anyhow!("Solution mapping incomplete"))
         }
     }
 
-    pub fn validate_strategy(&mut self) -> Result<bool, String> {
+    pub fn validate_strategy(&mut self) -> Result<bool> {
         let alignment_check = true;
         let risk_acceptable = true;
         let resources_available = true;
         let proceed = alignment_check && risk_acceptable && resources_available;
         let confidence_level = self.confidence_level;
-        
+
         let phase = self.current_phase_mut();
         phase.status = PhaseStatus::InProgress;
-        
+
         phase.add_quality_gate(
             "Solution aligns with intent",
             alignment_check,
             Some("Solution directly addresses all pain points".to_string()),
         );
-        
+
         phase.add_quality_gate(
             "Risks identified and acceptable",
             risk_acceptable,
             Some("Main risk: PCRE complexity, mitigated by fancy-regex crate".to_string()),
         );
-        
+
         phase.add_quality_gate(
             "Resources validated",
             resources_available,
             Some("Rust toolchain and libraries available".to_string()),
         );
-        
+
         phase.set_output("recommendation", if proceed { "PROCEED" } else { "PIVOT" });
         phase.set_output("confidence", format!("{:.1}%", confidence_level * 100.0));
-        
+
         if phase.all_gates_passed() {
             phase.status = PhaseStatus::Completed;
             Ok(proceed)
         } else {
             self.escalate("Strategic validation failed - human decision required");
-            Err("Cannot proceed without strategic alignment".to_string())
+            Err(anyhow!("Cannot proceed without strategic alignment"))
         }
     }
 
-    pub fn architect_implementation(&mut self) -> Result<String, String> {
+    pub fn architect_implementation(&mut self) -> Result<String> {
         let phase = self.current_phase_mut();
         phase.status = PhaseStatus::InProgress;
 
@@ -455,51 +499,53 @@ impl CompassAgent {
              Key Dependencies:\n\
              - fancy-regex: Regex engine with PCRE features\n\
              - clap: CLI parsing\n\
-             - toml: Configuration".to_string();
-        
+             - toml: Configuration"
+            .to_string();
+
         phase.add_quality_gate(
             "Requirements specified",
             true,
             Some("All functional requirements documented".to_string()),
         );
-        
+
         phase.add_quality_gate(
             "Architecture complete",
             true,
             Some("Module structure and data flow defined".to_string()),
         );
-        
+
         phase.add_quality_gate(
             "Implementation ready",
             true,
             Some("Can begin coding immediately".to_string()),
         );
-        
+
         phase.set_output("architecture", architecture.clone());
         phase.set_output("next_steps", "implement_core_modules");
-        
+
         if phase.all_gates_passed() {
             phase.status = PhaseStatus::Completed;
             Ok(architecture)
         } else {
-            Err("Architecture incomplete".to_string())
+            Err(anyhow!("Architecture incomplete"))
         }
     }
 
-    pub fn synthesize_final(&mut self) -> Result<String, String> {
-        let all_phases_complete = self.phases[..5].iter()
+    pub fn synthesize_final(&mut self) -> Result<String> {
+        let all_phases_complete = self.phases[..5]
+            .iter()
             .all(|p| matches!(p.status, PhaseStatus::Completed));
-        
+
         let consistency_check = true;
         let quality_met = true;
-        
+
         let confidence_level = self.confidence_level;
-        let escalation_summary = if self.escalation_triggers.is_empty() { 
-            "None".to_string() 
-        } else { 
-            self.escalation_triggers.join(", ") 
+        let escalation_summary = if self.escalation_triggers.is_empty() {
+            "None".to_string()
+        } else {
+            self.escalation_triggers.join(", ")
         };
-        
+
         let synthesis = format!(
             "COMPASS Framework Execution Complete:\n\
              ✓ Intent clarified: Unified regex pipeline processor\n\
@@ -513,47 +559,47 @@ impl CompassAgent {
             confidence_level * 100.0,
             escalation_summary
         );
-        
+
         let phase = self.current_phase_mut();
         phase.status = PhaseStatus::InProgress;
-        
+
         phase.add_quality_gate(
             "All phases complete",
             all_phases_complete,
             Some("COMPASS framework fully executed".to_string()),
         );
-        
+
         phase.add_quality_gate(
             "Internal consistency",
             consistency_check,
             Some("All outputs align and support each other".to_string()),
         );
-        
+
         phase.add_quality_gate(
             "Quality standards met",
             quality_met,
             Some("Professional-grade deliverable ready".to_string()),
         );
-        
+
         phase.set_output("final_synthesis", synthesis.clone());
-        
+
         if phase.all_gates_passed() {
             phase.status = PhaseStatus::Completed;
             Ok(synthesis)
         } else {
-            Err("Synthesis incomplete".to_string())
+            Err(anyhow!("Synthesis incomplete"))
         }
     }
 
     pub fn generate_report(&self) -> String {
         let mut report = String::from("COMPASS Agent Execution Report\n");
-        report.push_str("=" .repeat(50).as_str());
+        report.push_str("=".repeat(50).as_str());
         report.push('\n');
-        
+
         for (i, phase) in self.phases.iter().enumerate() {
             report.push_str(&format!("\n{}. {} Phase\n", i + 1, phase.name));
             report.push_str(&format!("   Status: {:?}\n", phase.status));
-            
+
             if !phase.quality_gates.is_empty() {
                 report.push_str("   Quality Gates:\n");
                 for gate in &phase.quality_gates {
@@ -561,7 +607,7 @@ impl CompassAgent {
                     report.push_str(&format!("   {} {}\n", status, gate.name));
                 }
             }
-            
+
             if !phase.outputs.is_empty() {
                 report.push_str("   Key Outputs:\n");
                 for key in phase.outputs.keys() {
@@ -569,16 +615,19 @@ impl CompassAgent {
                 }
             }
         }
-        
-        report.push_str(&format!("\nOverall Confidence: {:.1}%\n", self.confidence_level * 100.0));
-        
+
+        report.push_str(&format!(
+            "\nOverall Confidence: {:.1}%\n",
+            self.confidence_level * 100.0
+        ));
+
         if !self.escalation_triggers.is_empty() {
             report.push_str("\nEscalation Triggers:\n");
             for trigger in &self.escalation_triggers {
                 report.push_str(&format!("⚠ {}\n", trigger));
             }
         }
-        
+
         report
     }
 }
@@ -596,24 +645,28 @@ mod tests {
     #[test]
     fn test_compass_workflow() {
         let mut agent = CompassAgent::new();
-        
-        assert!(agent.clarify_intent("Build a regex pipeline processor").is_ok());
+
+        assert!(agent
+            .clarify_intent("Build a regex pipeline processor")
+            .is_ok());
         assert!(agent.advance_phase().is_ok());
-        
-        assert!(agent.orient_research("Existing tools are fragmented").is_ok());
+
+        assert!(agent
+            .orient_research("Existing tools are fragmented")
+            .is_ok());
         assert!(agent.advance_phase().is_ok());
-        
+
         assert!(agent.map_solution().is_ok());
         assert!(agent.advance_phase().is_ok());
-        
+
         assert!(agent.validate_strategy().is_ok());
         assert!(agent.advance_phase().is_ok());
-        
+
         assert!(agent.architect_implementation().is_ok());
         assert!(agent.advance_phase().is_ok());
-        
+
         assert!(agent.synthesize_final().is_ok());
-        
+
         let report = agent.generate_report();
         assert!(report.contains("COMPASS Agent Execution Report"));
     }

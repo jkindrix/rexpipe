@@ -1,3 +1,4 @@
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
@@ -152,7 +153,7 @@ pub enum ErrorType {
 }
 
 impl PipelineConfig {
-    pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
         let content = fs::read_to_string(path)?;
         let config: PipelineConfig = toml::from_str(&content)?;
         Ok(config)
@@ -178,7 +179,11 @@ impl PipelineConfig {
             step_type,
             pattern: pattern.to_string(),
             replacement: replacement.map(|s| s.to_string()),
-            action: if replacement.is_none() { Some(FilterAction::KeepMatch) } else { None },
+            action: if replacement.is_none() {
+                Some(FilterAction::KeepMatch)
+            } else {
+                None
+            },
             transform: None,
             flags: Some(vec![RegexFlag::Global]),
             description: None,
@@ -229,7 +234,10 @@ impl PipelineConfig {
             match step.step_type {
                 StepType::Substitute => {
                     if step.replacement.is_none() {
-                        errors.push(format!("Step {}: Substitute type requires replacement", i + 1));
+                        errors.push(format!(
+                            "Step {}: Substitute type requires replacement",
+                            i + 1
+                        ));
                     }
                 }
                 StepType::Filter => {
@@ -343,15 +351,13 @@ impl PipelineResult {
         if self.lines_processed == 0 {
             return 0.0;
         }
-        
+
         let error_lines = self.errors.len() as u64;
         (self.lines_processed - error_lines) as f64 / self.lines_processed as f64
     }
 
     pub fn performance_summary(&self) -> String {
-        let total_time: u64 = self.step_results.iter()
-            .map(|r| r.processing_time_ms)
-            .sum();
+        let total_time: u64 = self.step_results.iter().map(|r| r.processing_time_ms).sum();
 
         format!(
             "Performance Summary:\n\
@@ -433,7 +439,9 @@ impl std::fmt::Display for PipelineError {
             self.line_number,
             self.error_type,
             self.message,
-            self.context.as_ref().map_or(String::new(), |c| format!("\nContext: {}", c))
+            self.context
+                .as_ref()
+                .map_or(String::new(), |c| format!("\nContext: {}", c))
         )
     }
 }

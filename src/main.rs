@@ -1,4 +1,5 @@
 mod compass;
+mod error;
 mod files;
 mod inspector;
 mod json_schema;
@@ -6,18 +7,19 @@ mod library;
 mod pipeline;
 mod processor;
 
-use clap::{Arg, ArgAction, Command, ValueHint, value_parser};
+use anyhow::{anyhow, Result};
+use clap::{value_parser, Arg, ArgAction, Command, ValueHint};
 use clap_complete::{generate, Generator, Shell};
-use std::io::{self, BufReader, IsTerminal};
 use std::fs::File;
+use std::io::{self, BufReader, IsTerminal};
 use std::path::{Path, PathBuf};
 
 use compass::CompassAgent;
 use files::{FileProcessingOptions, MultiFileProcessor, MultiFileResult};
+use inspector::{Inspector, InspectorOptions};
 use library::LibraryResolver;
 use pipeline::{PipelineConfig, PipelineSettings};
 use processor::StreamProcessor;
-use inspector::{Inspector, InspectorOptions};
 
 /// Exit codes for different error conditions
 mod exit_codes {
@@ -92,21 +94,21 @@ fn build_cli() -> Command {
                 .long("config")
                 .value_name("FILE")
                 .help("TOML configuration file")
-                .value_hint(ValueHint::FilePath)
+                .value_hint(ValueHint::FilePath),
         )
         .arg(
             Arg::new("pattern")
                 .short('p')
                 .long("pattern")
                 .value_name("REGEX")
-                .help("Inline regex pattern")
+                .help("Inline regex pattern"),
         )
         .arg(
             Arg::new("replacement")
                 .short('r')
                 .long("replacement")
                 .value_name("TEXT")
-                .help("Replacement text for substitution")
+                .help("Replacement text for substitution"),
         )
         // === Regex Engine Options ===
         .arg(
@@ -114,14 +116,14 @@ fn build_cli() -> Command {
                 .short('F')
                 .long("fixed")
                 .help("Treat pattern as fixed string (no regex interpretation)")
-                .action(ArgAction::SetTrue)
+                .action(ArgAction::SetTrue),
         )
         .arg(
             Arg::new("pcre")
                 .short('P')
                 .long("pcre")
                 .help("Use PCRE-compatible regex via fancy-regex (supports lookahead/lookbehind)")
-                .action(ArgAction::SetTrue)
+                .action(ArgAction::SetTrue),
         )
         // === File Operations ===
         .arg(
@@ -129,21 +131,21 @@ fn build_cli() -> Command {
                 .short('I')
                 .long("in-place")
                 .help("Edit files in-place")
-                .action(ArgAction::SetTrue)
+                .action(ArgAction::SetTrue),
         )
         .arg(
             Arg::new("backup")
                 .short('b')
                 .long("backup")
                 .value_name("SUFFIX")
-                .help("Create backup with given suffix when editing in-place (e.g., .bak)")
+                .help("Create backup with given suffix when editing in-place (e.g., .bak)"),
         )
         .arg(
             Arg::new("recursive")
                 .short('R')
                 .long("recursive")
                 .help("Recursively process directories")
-                .action(ArgAction::SetTrue)
+                .action(ArgAction::SetTrue),
         )
         .arg(
             Arg::new("glob")
@@ -151,7 +153,7 @@ fn build_cli() -> Command {
                 .long("glob")
                 .value_name("PATTERN")
                 .help("Only process files matching glob pattern (e.g., '*.txt')")
-                .action(ArgAction::Append)
+                .action(ArgAction::Append),
         )
         .arg(
             Arg::new("exclude")
@@ -159,25 +161,25 @@ fn build_cli() -> Command {
                 .long("exclude")
                 .value_name("PATTERN")
                 .help("Exclude files matching glob pattern")
-                .action(ArgAction::Append)
+                .action(ArgAction::Append),
         )
         .arg(
             Arg::new("no-ignore")
                 .long("no-ignore")
                 .help("Don't respect .gitignore files")
-                .action(ArgAction::SetTrue)
+                .action(ArgAction::SetTrue),
         )
         .arg(
             Arg::new("hidden")
                 .long("hidden")
                 .help("Include hidden files")
-                .action(ArgAction::SetTrue)
+                .action(ArgAction::SetTrue),
         )
         .arg(
             Arg::new("max-depth")
                 .long("max-depth")
                 .value_name("NUM")
-                .help("Maximum directory recursion depth")
+                .help("Maximum directory recursion depth"),
         )
         // === Processing Modes ===
         .arg(
@@ -185,65 +187,65 @@ fn build_cli() -> Command {
                 .short('j')
                 .long("parallel")
                 .help("Process files in parallel")
-                .action(ArgAction::SetTrue)
+                .action(ArgAction::SetTrue),
         )
         .arg(
             Arg::new("progress")
                 .long("progress")
                 .help("Show progress indicator for multi-file processing")
-                .action(ArgAction::SetTrue)
+                .action(ArgAction::SetTrue),
         )
         .arg(
             Arg::new("inspect")
                 .long("inspect")
                 .help("Enable inspection mode")
-                .action(ArgAction::SetTrue)
+                .action(ArgAction::SetTrue),
         )
         .arg(
             Arg::new("interactive")
                 .long("interactive")
                 .help("Enable interactive inspection")
-                .action(ArgAction::SetTrue)
+                .action(ArgAction::SetTrue),
         )
         .arg(
             Arg::new("dry-run")
                 .long("dry-run")
                 .help("Validate config, or preview changes with -I (in-place mode)")
-                .action(ArgAction::SetTrue)
+                .action(ArgAction::SetTrue),
         )
         // === Output Modes ===
         .arg(
             Arg::new("count")
                 .long("count")
                 .help("Only show count of matches per file")
-                .action(ArgAction::SetTrue)
+                .action(ArgAction::SetTrue),
         )
         .arg(
             Arg::new("files-with-matches")
                 .short('l')
                 .long("files-with-matches")
                 .help("Only list files containing matches")
-                .action(ArgAction::SetTrue)
+                .action(ArgAction::SetTrue),
         )
         .arg(
             Arg::new("files-without-matches")
                 .short('L')
                 .long("files-without-matches")
                 .help("Only list files not containing matches")
-                .action(ArgAction::SetTrue)
+                .action(ArgAction::SetTrue),
         )
         .arg(
             Arg::new("quiet")
                 .short('q')
                 .long("quiet")
                 .help("Quiet mode - only set exit code")
-                .action(ArgAction::SetTrue)
+                .action(ArgAction::SetTrue),
         )
         .arg(
             Arg::new("json")
                 .long("json")
                 .help("Output results as JSON")
-                .action(ArgAction::SetTrue)
+                .action(ArgAction::SetTrue),
         )
         // === Context Lines (for inspection) ===
         .arg(
@@ -251,21 +253,21 @@ fn build_cli() -> Command {
                 .short('B')
                 .long("before-context")
                 .value_name("NUM")
-                .help("Show NUM lines before each match")
+                .help("Show NUM lines before each match"),
         )
         .arg(
             Arg::new("context-after")
                 .short('A')
                 .long("after-context")
                 .value_name("NUM")
-                .help("Show NUM lines after each match")
+                .help("Show NUM lines after each match"),
         )
         .arg(
             Arg::new("context")
                 .short('C')
                 .long("context")
                 .value_name("NUM")
-                .help("Show NUM lines before and after each match")
+                .help("Show NUM lines before and after each match"),
         )
         // === Pattern Library ===
         .arg(
@@ -273,46 +275,46 @@ fn build_cli() -> Command {
                 .long("list-patterns")
                 .value_name("LIBRARY")
                 .help("List all patterns in a pattern library file")
-                .value_hint(ValueHint::FilePath)
+                .value_hint(ValueHint::FilePath),
         )
         .arg(
             Arg::new("validate-library")
                 .long("validate-library")
                 .value_name("LIBRARY")
                 .help("Validate a pattern library file")
-                .value_hint(ValueHint::FilePath)
+                .value_hint(ValueHint::FilePath),
         )
         // === Misc ===
         .arg(
             Arg::new("performance")
                 .long("performance")
                 .help("Show performance metrics")
-                .action(ArgAction::SetTrue)
+                .action(ArgAction::SetTrue),
         )
         .arg(
             Arg::new("compass")
                 .long("compass")
                 .help("Run COMPASS strategic analysis")
-                .action(ArgAction::SetTrue)
+                .action(ArgAction::SetTrue),
         )
         .arg(
             Arg::new("validate")
                 .long("validate")
                 .help("Validate configuration only")
-                .action(ArgAction::SetTrue)
+                .action(ArgAction::SetTrue),
         )
         .arg(
             Arg::new("export")
                 .long("export")
                 .value_name("FORMAT")
-                .help("Export configuration (toml or json)")
+                .help("Export configuration (toml or json)"),
         )
         .arg(
             Arg::new("completions")
                 .long("completions")
                 .value_name("SHELL")
                 .help("Generate shell completion script")
-                .value_parser(value_parser!(Shell))
+                .value_parser(value_parser!(Shell)),
         )
         // === I/O ===
         .arg(
@@ -321,7 +323,7 @@ fn build_cli() -> Command {
                 .long("input")
                 .value_name("FILE")
                 .help("Input file (default: stdin)")
-                .value_hint(ValueHint::FilePath)
+                .value_hint(ValueHint::FilePath),
         )
         .arg(
             Arg::new("output")
@@ -329,7 +331,7 @@ fn build_cli() -> Command {
                 .long("output")
                 .value_name("FILE")
                 .help("Output file (default: stdout)")
-                .value_hint(ValueHint::FilePath)
+                .value_hint(ValueHint::FilePath),
         )
         // === Positional Args ===
         .arg(
@@ -337,7 +339,7 @@ fn build_cli() -> Command {
                 .help("Files or directories to process")
                 .action(ArgAction::Append)
                 .num_args(0..)
-                .value_hint(ValueHint::AnyPath)
+                .value_hint(ValueHint::AnyPath),
         )
 }
 
@@ -364,7 +366,7 @@ fn main() {
     }
 }
 
-fn run_application(matches: &clap::ArgMatches) -> Result<(), Box<dyn std::error::Error>> {
+fn run_application(matches: &clap::ArgMatches) -> Result<()> {
     // Handle pattern library commands first (don't require pipeline config)
     if let Some(library_path) = matches.get_one::<String>("list-patterns") {
         return list_library_patterns(library_path);
@@ -406,9 +408,8 @@ fn run_application(matches: &clap::ArgMatches) -> Result<(), Box<dyn std::error:
         .map(|v| v.map(PathBuf::from).collect())
         .unwrap_or_default();
 
-    let is_multi_file = matches.get_flag("recursive")
-        || matches.get_flag("in-place")
-        || !paths.is_empty();
+    let is_multi_file =
+        matches.get_flag("recursive") || matches.get_flag("in-place") || !paths.is_empty();
 
     // Handle dry-run: show preview for in-place mode, otherwise just validate
     if matches.get_flag("dry-run") {
@@ -462,11 +463,16 @@ fn build_pipeline_settings(matches: &clap::ArgMatches) -> PipelineSettings {
     }
 }
 
-fn export_configuration(config: &PipelineConfig, format: &str) -> Result<(), Box<dyn std::error::Error>> {
+fn export_configuration(config: &PipelineConfig, format: &str) -> Result<()> {
     let output = match format.to_lowercase().as_str() {
         "toml" => config.to_toml()?,
         "json" => config.to_json()?,
-        _ => return Err(format!("Unknown export format: {}. Use 'toml' or 'json'", format).into()),
+        _ => {
+            return Err(anyhow!(
+                "Unknown export format: {}. Use 'toml' or 'json'",
+                format
+            ))
+        }
     };
     println!("{}", output);
     Ok(())
@@ -476,7 +482,7 @@ fn run_multi_file_mode(
     config: &PipelineConfig,
     matches: &clap::ArgMatches,
     paths: Vec<PathBuf>,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<()> {
     let quiet = matches.get_flag("quiet");
     let json_output = matches.get_flag("json");
 
@@ -569,7 +575,7 @@ fn run_dry_run_preview(
     config: &PipelineConfig,
     matches: &clap::ArgMatches,
     paths: Vec<PathBuf>,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<()> {
     // Build file processing options (same as run_multi_file_mode but without in_place)
     let mut options = FileProcessingOptions::new()
         .respect_gitignore(!matches.get_flag("no-ignore"))
@@ -621,7 +627,7 @@ fn run_dry_run_preview(
     Ok(())
 }
 
-fn output_file_list(files: &[PathBuf], quiet: bool, json: bool, mode: &str) -> Result<(), Box<dyn std::error::Error>> {
+fn output_file_list(files: &[PathBuf], quiet: bool, json: bool, mode: &str) -> Result<()> {
     if quiet {
         return Ok(());
     }
@@ -636,7 +642,7 @@ fn output_file_list(files: &[PathBuf], quiet: bool, json: bool, mode: &str) -> R
     Ok(())
 }
 
-fn output_count_results(result: &MultiFileResult, quiet: bool, json: bool) -> Result<(), Box<dyn std::error::Error>> {
+fn output_count_results(result: &MultiFileResult, quiet: bool, json: bool) -> Result<()> {
     if quiet {
         return Ok(());
     }
@@ -645,20 +651,27 @@ fn output_count_results(result: &MultiFileResult, quiet: bool, json: bool) -> Re
         println!("{}", json_schema::output_multi_file_json(result)?);
     } else {
         for file_result in &result.file_results {
-            println!("{}:{}", file_result.path.display(), file_result.matches_found);
+            println!(
+                "{}:{}",
+                file_result.path.display(),
+                file_result.matches_found
+            );
         }
         println!("---");
-        println!("Total: {} matches in {} files", result.total_matches, result.files_matched);
+        println!(
+            "Total: {} matches in {} files",
+            result.total_matches, result.files_matched
+        );
     }
     Ok(())
 }
 
-fn output_multi_file_json(result: &MultiFileResult) -> Result<(), Box<dyn std::error::Error>> {
+fn output_multi_file_json(result: &MultiFileResult) -> Result<()> {
     println!("{}", json_schema::output_multi_file_json(result)?);
     Ok(())
 }
 
-fn output_multi_file_summary(result: &MultiFileResult) -> Result<(), Box<dyn std::error::Error>> {
+fn output_multi_file_summary(result: &MultiFileResult) -> Result<()> {
     println!("{}", result.summary());
     if !result.errors.is_empty() {
         eprintln!("\nErrors:");
@@ -669,7 +682,10 @@ fn output_multi_file_summary(result: &MultiFileResult) -> Result<(), Box<dyn std
     Ok(())
 }
 
-fn load_pipeline_config(matches: &clap::ArgMatches, settings: PipelineSettings) -> Result<PipelineConfig, Box<dyn std::error::Error>> {
+fn load_pipeline_config(
+    matches: &clap::ArgMatches,
+    settings: PipelineSettings,
+) -> Result<PipelineConfig> {
     if let Some(config_file) = matches.get_one::<String>("config") {
         let config_path = Path::new(config_file);
         let mut config = PipelineConfig::from_file(config_file)?;
@@ -680,10 +696,10 @@ fn load_pipeline_config(matches: &clap::ArgMatches, settings: PipelineSettings) 
             let library = resolver.load_libraries(&config.patterns_include)?;
 
             if let Err(errors) = config.resolve_pattern_references(&library) {
-                return Err(format!(
+                return Err(anyhow!(
                     "Failed to resolve pattern references:\n  {}",
                     errors.join("\n  ")
-                ).into());
+                ));
             }
         }
 
@@ -703,9 +719,14 @@ fn load_pipeline_config(matches: &clap::ArgMatches, settings: PipelineSettings) 
         Ok(config)
     } else if let Some(pattern) = matches.get_one::<String>("pattern") {
         let replacement = matches.get_one::<String>("replacement").map(|s| s.as_str());
-        Ok(PipelineConfig::from_inline_pattern_with_settings(pattern, replacement, settings))
+        Ok(PipelineConfig::from_inline_pattern_with_settings(
+            pattern,
+            replacement,
+            settings,
+        ))
     } else {
-        Err("Missing required input.\n\n\
+        Err(anyhow!(
+            "Missing required input.\n\n\
              You must specify either:\n  \
              - A config file:  rexpipe --config pipeline.toml < input.txt\n  \
              - An inline pattern:  rexpipe --pattern '\\d+' < input.txt\n\n\
@@ -713,11 +734,12 @@ fn load_pipeline_config(matches: &clap::ArgMatches, settings: PipelineSettings) 
              rexpipe -p 'ERROR' < log.txt              # Match lines with ERROR\n  \
              rexpipe -p '\\d+' -r 'NUM' < data.txt     # Replace numbers with NUM\n  \
              rexpipe -c config.toml --inspect < test   # Preview matches\n\n\
-             Run 'rexpipe --help' for full usage information.".into())
+             Run 'rexpipe --help' for full usage information."
+        ))
     }
 }
 
-fn validate_configuration(config: &PipelineConfig) -> Result<(), Box<dyn std::error::Error>> {
+fn validate_configuration(config: &PipelineConfig) -> Result<()> {
     match config.validate() {
         Ok(()) => {
             println!("✓ Configuration is valid");
@@ -746,12 +768,12 @@ fn validate_configuration(config: &PipelineConfig) -> Result<(), Box<dyn std::er
             println!("  - Check that all filter steps have 'action' defined (keep_line, drop_line, etc.)");
             println!("  - Verify all patterns are valid regex syntax");
             println!("  - Use 'rexpipe --inspect' to test patterns interactively");
-            Err("Configuration is invalid".into())
+            Err(anyhow!("Configuration is invalid"))
         }
     }
 }
 
-fn list_library_patterns(library_path: &str) -> Result<(), Box<dyn std::error::Error>> {
+fn list_library_patterns(library_path: &str) -> Result<()> {
     let path = Path::new(library_path);
     let patterns = library::list_patterns(path)?;
 
@@ -760,7 +782,11 @@ fn list_library_patterns(library_path: &str) -> Result<(), Box<dyn std::error::E
         return Ok(());
     }
 
-    println!("Patterns in '{}' ({} total):\n", library_path, patterns.len());
+    println!(
+        "Patterns in '{}' ({} total):\n",
+        library_path,
+        patterns.len()
+    );
 
     // Group by category (prefix before last dot)
     let mut current_category = String::new();
@@ -794,7 +820,7 @@ fn list_library_patterns(library_path: &str) -> Result<(), Box<dyn std::error::E
     Ok(())
 }
 
-fn validate_library_file(library_path: &str) -> Result<(), Box<dyn std::error::Error>> {
+fn validate_library_file(library_path: &str) -> Result<()> {
     let path = Path::new(library_path);
 
     match library::LibraryResolver::validate_library(path) {
@@ -828,22 +854,25 @@ fn validate_library_file(library_path: &str) -> Result<(), Box<dyn std::error::E
     }
 }
 
-fn run_compass_analysis() -> Result<(), Box<dyn std::error::Error>> {
+fn run_compass_analysis() -> Result<()> {
     println!("Initializing COMPASS Strategic Collaboration Agent...\n");
 
     let mut agent = CompassAgent::new();
     run_compass_phases(&mut agent)
 }
 
-fn run_compass_analysis_for_pipeline(config: &PipelineConfig) -> Result<(), Box<dyn std::error::Error>> {
+fn run_compass_analysis_for_pipeline(config: &PipelineConfig) -> Result<()> {
     println!("Initializing COMPASS Strategic Collaboration Agent for Pipeline Analysis...\n");
 
     let mut agent = CompassAgent::for_pipeline(config);
-    println!("Analyzing: {}\n", config.name.as_deref().unwrap_or("Unnamed Pipeline"));
+    println!(
+        "Analyzing: {}\n",
+        config.name.as_deref().unwrap_or("Unnamed Pipeline")
+    );
     run_compass_phases(&mut agent)
 }
 
-fn run_compass_phases(agent: &mut CompassAgent) -> Result<(), Box<dyn std::error::Error>> {
+fn run_compass_phases(agent: &mut CompassAgent) -> Result<()> {
     // Execute COMPASS framework
     println!("Phase 1: Clarifying Core Intent");
     let intent = agent.clarify_intent(&agent.context.problem_statement.clone())?;
@@ -862,7 +891,10 @@ fn run_compass_phases(agent: &mut CompassAgent) -> Result<(), Box<dyn std::error
 
     println!("Phase 4: Pausing for Strategic Validation");
     let should_proceed = agent.validate_strategy()?;
-    println!("✓ Strategic validation: {}\n", if should_proceed { "PROCEED" } else { "PIVOT" });
+    println!(
+        "✓ Strategic validation: {}\n",
+        if should_proceed { "PROCEED" } else { "PIVOT" }
+    );
     agent.advance_phase()?;
 
     println!("Phase 5: Architecting Implementation");
@@ -884,7 +916,7 @@ fn run_inspection_mode(
     config: &PipelineConfig,
     input: Box<dyn io::BufRead>,
     matches: &clap::ArgMatches,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<()> {
     let options = InspectorOptions::new()
         .interactive(matches.get_flag("interactive"))
         .show_performance(matches.get_flag("performance"))
@@ -894,7 +926,7 @@ fn run_inspection_mode(
     let mut inspector = Inspector::new(config.clone())?.with_options(options);
     let result = inspector.inspect_stream(input)?;
     inspector.display_results(&result)?;
-    
+
     Ok(())
 }
 
@@ -902,7 +934,7 @@ fn run_processing_mode(
     config: &PipelineConfig,
     input: Box<dyn io::BufRead>,
     matches: &clap::ArgMatches,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<()> {
     let quiet = matches.get_flag("quiet");
     let json_output = matches.get_flag("json");
     let count_only = matches.get_flag("count");
@@ -932,7 +964,8 @@ fn run_processing_mode(
         return Ok(());
     }
 
-    let output: Box<dyn io::Write> = if let Some(output_file) = matches.get_one::<String>("output") {
+    let output: Box<dyn io::Write> = if let Some(output_file) = matches.get_one::<String>("output")
+    {
         Box::new(File::create(output_file)?)
     } else {
         Box::new(io::stdout())
@@ -956,12 +989,13 @@ fn run_processing_mode(
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_config_loading_from_pattern() {
-        let mut _matches: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+        let mut _matches: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
         // This would normally be created by clap, but for testing we simulate it
-        
+
         let config = PipelineConfig::from_inline_pattern(r"\d+", Some("NUMBER"));
         assert_eq!(config.step.len(), 1);
         assert!(config.validate().is_ok());

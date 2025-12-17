@@ -27,6 +27,7 @@
 //! pattern = '${category.nested_pattern}'
 //! ```
 
+use anyhow::{anyhow, Context, Result};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -95,6 +96,8 @@ impl ResolvedLibrary {
     /// Merge another library into this one (other takes lower precedence)
     /// Emits warnings to stderr when patterns conflict
     pub fn merge(&mut self, other: ResolvedLibrary) {
+        use std::collections::hash_map::Entry;
+
         let self_source = self
             .source_files
             .first()
@@ -102,13 +105,16 @@ impl ResolvedLibrary {
             .unwrap_or_else(|| "unknown".to_string());
 
         for (name, pattern) in other.patterns {
-            if self.patterns.contains_key(&name) {
-                eprintln!(
-                    "Warning: Pattern '{}' defined in multiple libraries, using definition from '{}'",
-                    name, self_source
-                );
-            } else {
-                self.patterns.insert(name, pattern);
+            match self.patterns.entry(name.clone()) {
+                Entry::Occupied(_) => {
+                    eprintln!(
+                        "Warning: Pattern '{}' defined in multiple libraries, using definition from '{}'",
+                        name, self_source
+                    );
+                }
+                Entry::Vacant(entry) => {
+                    entry.insert(pattern);
+                }
             }
         }
         self.source_files.extend(other.source_files);
@@ -152,10 +158,7 @@ impl LibraryResolver {
     }
 
     /// Load and resolve multiple libraries into a single ResolvedLibrary
-    pub fn load_libraries(
-        &mut self,
-        includes: &[String],
-    ) -> Result<ResolvedLibrary, Box<dyn std::error::Error>> {
+    pub fn load_libraries(&mut self, includes: &[String]) -> Result<ResolvedLibrary> {
         let mut resolved = ResolvedLibrary::new();
 
         for include in includes {
@@ -169,7 +172,7 @@ impl LibraryResolver {
     }
 
     /// Find a library file in the search paths
-    fn find_library(&self, name: &str) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    fn find_library(&self, name: &str) -> Result<PathBuf> {
         let name_path = Path::new(name);
 
         // If it's an absolute path, use it directly
@@ -200,22 +203,18 @@ impl LibraryResolver {
             .map(|p| p.display().to_string())
             .collect();
 
-        Err(format!(
+        Err(anyhow!(
             "Pattern library not found: '{}' (searched: {})",
             name,
             searched.join(", ")
-        )
-        .into())
+        ))
     }
 
     /// Load a library file recursively, handling nested includes
-    fn load_library_recursive(
-        &mut self,
-        path: &Path,
-    ) -> Result<PatternLibrary, Box<dyn std::error::Error>> {
+    fn load_library_recursive(&mut self, path: &Path) -> Result<PatternLibrary> {
         let canonical = path
             .canonicalize()
-            .map_err(|e| format!("Failed to resolve path '{}': {}", path.display(), e))?;
+            .with_context(|| format!("Failed to resolve path '{}'", path.display()))?;
 
         // Check for circular reference
         if self.resolution_stack.contains(&canonical) {
@@ -224,12 +223,11 @@ impl LibraryResolver {
                 .iter()
                 .map(|p| p.display().to_string())
                 .collect();
-            return Err(format!(
+            return Err(anyhow!(
                 "Circular pattern library include detected: {} -> {}",
                 cycle.join(" -> "),
                 canonical.display()
-            )
-            .into());
+            ));
         }
 
         // Check cache
@@ -242,10 +240,10 @@ impl LibraryResolver {
 
         // Load and parse the library
         let content = fs::read_to_string(&canonical)
-            .map_err(|e| format!("Failed to read library '{}': {}", canonical.display(), e))?;
+            .with_context(|| format!("Failed to read library '{}'", canonical.display()))?;
 
         let library: PatternLibrary = toml::from_str(&content)
-            .map_err(|e| format!("Failed to parse library '{}': {}", canonical.display(), e))?;
+            .with_context(|| format!("Failed to parse library '{}'", canonical.display()))?;
 
         // Process nested includes
         let parent = canonical.parent().unwrap_or(Path::new("."));
@@ -275,12 +273,12 @@ impl LibraryResolver {
         &self,
         library: &PatternLibrary,
         source_path: &Path,
-    ) -> Result<ResolvedLibrary, Box<dyn std::error::Error>> {
+    ) -> Result<ResolvedLibrary> {
         let mut resolved = ResolvedLibrary::new();
         resolved.source_files.push(source_path.to_path_buf());
 
         // Flatten the patterns
-        self.flatten_patterns(&library.patterns, "", &mut resolved.patterns);
+        flatten_patterns_recursive(&library.patterns, "", &mut resolved.patterns);
 
         // Also include patterns from nested includes
         let canonical = source_path.canonicalize()?;
@@ -306,50 +304,24 @@ impl LibraryResolver {
         Ok(resolved)
     }
 
-    /// Recursively flatten patterns to dot notation
-    fn flatten_patterns(
-        &self,
-        patterns: &HashMap<String, PatternValue>,
-        prefix: &str,
-        output: &mut HashMap<String, String>,
-    ) {
-        for (key, value) in patterns {
-            let full_key = if prefix.is_empty() {
-                key.clone()
-            } else {
-                format!("{}.{}", prefix, key)
-            };
-
-            match value {
-                PatternValue::Pattern(pattern) => {
-                    output.insert(full_key, pattern.clone());
-                }
-                PatternValue::Nested(nested) => {
-                    self.flatten_patterns(nested, &full_key, output);
-                }
-            }
-        }
-    }
-
     /// Validate a library file without resolving includes
-    pub fn validate_library(path: &Path) -> Result<PatternLibrary, Box<dyn std::error::Error>> {
+    pub fn validate_library(path: &Path) -> Result<PatternLibrary> {
         let content = fs::read_to_string(path)
-            .map_err(|e| format!("Failed to read library '{}': {}", path.display(), e))?;
+            .with_context(|| format!("Failed to read library '{}'", path.display()))?;
 
         let library: PatternLibrary = toml::from_str(&content)
-            .map_err(|e| format!("Failed to parse library '{}': {}", path.display(), e))?;
+            .with_context(|| format!("Failed to parse library '{}'", path.display()))?;
 
         // Validate that all pattern strings are valid regex
         let mut errors = Vec::new();
         Self::validate_patterns(&library.patterns, "", &mut errors);
 
         if !errors.is_empty() {
-            return Err(format!(
+            return Err(anyhow!(
                 "Invalid patterns in library '{}':\n  {}",
                 path.display(),
                 errors.join("\n  ")
-            )
-            .into());
+            ));
         }
 
         Ok(library)
@@ -425,8 +397,32 @@ pub fn has_pattern_references(input: &str) -> bool {
     input.contains("${")
 }
 
+/// Recursively flatten patterns to dot notation
+fn flatten_patterns_recursive(
+    patterns: &HashMap<String, PatternValue>,
+    prefix: &str,
+    output: &mut HashMap<String, String>,
+) {
+    for (key, value) in patterns {
+        let full_key = if prefix.is_empty() {
+            key.clone()
+        } else {
+            format!("{}.{}", prefix, key)
+        };
+
+        match value {
+            PatternValue::Pattern(pattern) => {
+                output.insert(full_key, pattern.clone());
+            }
+            PatternValue::Nested(nested) => {
+                flatten_patterns_recursive(nested, &full_key, output);
+            }
+        }
+    }
+}
+
 /// List all patterns in a library file
-pub fn list_patterns(path: &Path) -> Result<Vec<(String, String)>, Box<dyn std::error::Error>> {
+pub fn list_patterns(path: &Path) -> Result<Vec<(String, String)>> {
     let library = LibraryResolver::validate_library(path)?;
     let mut patterns = Vec::new();
 
@@ -504,9 +500,8 @@ mod tests {
         );
         patterns.insert("category".to_string(), PatternValue::Nested(nested));
 
-        let resolver = LibraryResolver::new(None);
         let mut output = HashMap::new();
-        resolver.flatten_patterns(&patterns, "", &mut output);
+        super::flatten_patterns_recursive(&patterns, "", &mut output);
 
         assert_eq!(output.get("simple"), Some(&"^simple$".to_string()));
         assert_eq!(output.get("category.inner"), Some(&"^inner$".to_string()));

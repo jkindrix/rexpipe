@@ -5,6 +5,7 @@
 
 use crate::pipeline::PipelineConfig;
 use crate::processor::StreamProcessor;
+use anyhow::Result;
 use diffy::{create_patch, PatchFormatter};
 use ignore::WalkBuilder;
 use indicatif::{ProgressBar, ProgressStyle};
@@ -194,7 +195,7 @@ impl MultiFileProcessor {
     }
 
     /// Discover files matching the criteria starting from the given paths
-    pub fn discover_files(&self, paths: &[PathBuf]) -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
+    pub fn discover_files(&self, paths: &[PathBuf]) -> Result<Vec<PathBuf>> {
         let mut files = Vec::new();
 
         for path in paths {
@@ -209,7 +210,7 @@ impl MultiFileProcessor {
         Ok(files)
     }
 
-    fn walk_directory(&self, dir: &Path) -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
+    fn walk_directory(&self, dir: &Path) -> Result<Vec<PathBuf>> {
         let mut builder = WalkBuilder::new(dir);
 
         // Configure gitignore handling
@@ -264,7 +265,7 @@ impl MultiFileProcessor {
     }
 
     /// Process multiple files
-    pub fn process_files(&self, files: &[PathBuf]) -> Result<MultiFileResult, Box<dyn std::error::Error>> {
+    pub fn process_files(&self, files: &[PathBuf]) -> Result<MultiFileResult> {
         if self.options.parallel {
             self.process_files_parallel(files)
         } else {
@@ -272,7 +273,7 @@ impl MultiFileProcessor {
         }
     }
 
-    fn process_files_sequential(&self, files: &[PathBuf]) -> Result<MultiFileResult, Box<dyn std::error::Error>> {
+    fn process_files_sequential(&self, files: &[PathBuf]) -> Result<MultiFileResult> {
         let mut result = MultiFileResult::default();
         let progress = create_progress_bar(
             files.len() as u64,
@@ -323,7 +324,7 @@ impl MultiFileProcessor {
         Ok(result)
     }
 
-    fn process_files_parallel(&self, files: &[PathBuf]) -> Result<MultiFileResult, Box<dyn std::error::Error>> {
+    fn process_files_parallel(&self, files: &[PathBuf]) -> Result<MultiFileResult> {
         let files_processed = AtomicU64::new(0);
         let files_matched = AtomicU64::new(0);
         let files_modified = AtomicU64::new(0);
@@ -373,7 +374,11 @@ impl MultiFileProcessor {
 
         let errors: Vec<String> = file_results
             .iter()
-            .filter_map(|r| r.error.as_ref().map(|e| format!("{}: {}", r.path.display(), e)))
+            .filter_map(|r| {
+                r.error
+                    .as_ref()
+                    .map(|e| format!("{}: {}", r.path.display(), e))
+            })
             .collect();
 
         let result = MultiFileResult {
@@ -396,7 +401,7 @@ impl MultiFileProcessor {
         Ok(result)
     }
 
-    fn process_single_file(&self, path: &Path) -> Result<FileResult, Box<dyn std::error::Error>> {
+    fn process_single_file(&self, path: &Path) -> Result<FileResult> {
         let mut processor = StreamProcessor::new(self.config.clone())?;
 
         // Read the file
@@ -440,8 +445,8 @@ impl MultiFileProcessor {
     }
 
     /// Count matches in files without modifying them
-    pub fn count_matches(&self, files: &[PathBuf]) -> Result<MultiFileResult, Box<dyn std::error::Error>> {
-        let processor_fn = |path: &Path| -> Result<(u64, u64), Box<dyn std::error::Error>> {
+    pub fn count_matches(&self, files: &[PathBuf]) -> Result<MultiFileResult> {
+        let processor_fn = |path: &Path| -> Result<(u64, u64)> {
             let mut processor = StreamProcessor::new(self.config.clone())?;
             let file = File::open(path)?;
             let reader = BufReader::new(file);
@@ -453,45 +458,41 @@ impl MultiFileProcessor {
         let results: Vec<FileResult> = if self.options.parallel {
             files
                 .par_iter()
-                .map(|path| {
-                    match processor_fn(path) {
-                        Ok((matches, lines)) => FileResult {
-                            path: path.clone(),
-                            matches_found: matches,
-                            lines_processed: lines,
-                            modified: false,
-                            error: None,
-                        },
-                        Err(e) => FileResult {
-                            path: path.clone(),
-                            matches_found: 0,
-                            lines_processed: 0,
-                            modified: false,
-                            error: Some(e.to_string()),
-                        },
-                    }
+                .map(|path| match processor_fn(path) {
+                    Ok((matches, lines)) => FileResult {
+                        path: path.clone(),
+                        matches_found: matches,
+                        lines_processed: lines,
+                        modified: false,
+                        error: None,
+                    },
+                    Err(e) => FileResult {
+                        path: path.clone(),
+                        matches_found: 0,
+                        lines_processed: 0,
+                        modified: false,
+                        error: Some(e.to_string()),
+                    },
                 })
                 .collect()
         } else {
             files
                 .iter()
-                .map(|path| {
-                    match processor_fn(path) {
-                        Ok((matches, lines)) => FileResult {
-                            path: path.clone(),
-                            matches_found: matches,
-                            lines_processed: lines,
-                            modified: false,
-                            error: None,
-                        },
-                        Err(e) => FileResult {
-                            path: path.clone(),
-                            matches_found: 0,
-                            lines_processed: 0,
-                            modified: false,
-                            error: Some(e.to_string()),
-                        },
-                    }
+                .map(|path| match processor_fn(path) {
+                    Ok((matches, lines)) => FileResult {
+                        path: path.clone(),
+                        matches_found: matches,
+                        lines_processed: lines,
+                        modified: false,
+                        error: None,
+                    },
+                    Err(e) => FileResult {
+                        path: path.clone(),
+                        matches_found: 0,
+                        lines_processed: 0,
+                        modified: false,
+                        error: Some(e.to_string()),
+                    },
                 })
                 .collect()
         };
@@ -505,7 +506,9 @@ impl MultiFileProcessor {
                 result.files_matched += 1;
             }
             if let Some(ref e) = file_result.error {
-                result.errors.push(format!("{}: {}", file_result.path.display(), e));
+                result
+                    .errors
+                    .push(format!("{}: {}", file_result.path.display(), e));
             }
             result.file_results.push(file_result);
         }
@@ -514,7 +517,7 @@ impl MultiFileProcessor {
     }
 
     /// List files with matches
-    pub fn files_with_matches(&self, files: &[PathBuf]) -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
+    pub fn files_with_matches(&self, files: &[PathBuf]) -> Result<Vec<PathBuf>> {
         let result = self.count_matches(files)?;
         Ok(result
             .file_results
@@ -525,7 +528,7 @@ impl MultiFileProcessor {
     }
 
     /// List files without matches
-    pub fn files_without_matches(&self, files: &[PathBuf]) -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
+    pub fn files_without_matches(&self, files: &[PathBuf]) -> Result<Vec<PathBuf>> {
         let result = self.count_matches(files)?;
         Ok(result
             .file_results
@@ -537,7 +540,7 @@ impl MultiFileProcessor {
 
     /// Preview changes that would be made during in-place editing (dry-run mode)
     /// Returns a string containing unified diff output for all files that would be modified
-    pub fn preview_changes(&self, files: &[PathBuf], use_color: bool) -> Result<String, Box<dyn std::error::Error>> {
+    pub fn preview_changes(&self, files: &[PathBuf], use_color: bool) -> Result<String> {
         let mut output = String::new();
         let mut files_with_changes = 0;
 
@@ -574,7 +577,10 @@ impl MultiFileProcessor {
         if files_with_changes == 0 {
             output.push_str("No changes would be made.\n");
         } else {
-            output.push_str(&format!("\n{} file(s) would be modified.\n", files_with_changes));
+            output.push_str(&format!(
+                "\n{} file(s) would be modified.\n",
+                files_with_changes
+            ));
         }
 
         Ok(output)
@@ -582,7 +588,7 @@ impl MultiFileProcessor {
 
     /// Preview changes for a single file
     /// Returns (original_content, modified_content) if the file has matches
-    fn preview_single_file(&self, path: &Path) -> Result<Option<(String, String)>, Box<dyn std::error::Error>> {
+    fn preview_single_file(&self, path: &Path) -> Result<Option<(String, String)>> {
         let mut processor = StreamProcessor::new(self.config.clone())?;
 
         // Read the original file
@@ -705,7 +711,9 @@ pub mod async_processing {
                         });
                     }
                     Err(e) => {
-                        result.errors.push(format!("{}: task panicked: {}", file.display(), e));
+                        result
+                            .errors
+                            .push(format!("{}: task panicked: {}", file.display(), e));
                         result.file_results.push(FileResult {
                             path: file.clone(),
                             matches_found: 0,
@@ -866,7 +874,11 @@ pub mod async_processing {
         let mut lines = reader.lines();
         let mut result = Vec::new();
 
-        while let Some(line) = lines.next_line().await.map_err(|e| format!("Failed to read line: {}", e))? {
+        while let Some(line) = lines
+            .next_line()
+            .await
+            .map_err(|e| format!("Failed to read line: {}", e))?
+        {
             result.push(line);
         }
 
@@ -932,7 +944,9 @@ mod tests {
         let options = FileProcessingOptions::default();
         let processor = MultiFileProcessor::new(config, options);
 
-        let discovered = processor.discover_files(&[temp_dir.path().to_path_buf()]).unwrap();
+        let discovered = processor
+            .discover_files(&[temp_dir.path().to_path_buf()])
+            .unwrap();
         assert_eq!(discovered.len(), 3);
     }
 
@@ -1010,11 +1024,12 @@ mod tests {
         let _files = create_test_files(temp_dir.path());
 
         let config = PipelineConfig::from_inline_pattern(r"\d+", None);
-        let options = FileProcessingOptions::default()
-            .include_pattern("*.txt".to_string());
+        let options = FileProcessingOptions::default().include_pattern("*.txt".to_string());
 
         let processor = MultiFileProcessor::new(config, options);
-        let discovered = processor.discover_files(&[temp_dir.path().to_path_buf()]).unwrap();
+        let discovered = processor
+            .discover_files(&[temp_dir.path().to_path_buf()])
+            .unwrap();
 
         assert_eq!(discovered.len(), 2); // Only .txt files
     }

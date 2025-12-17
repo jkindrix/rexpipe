@@ -1,7 +1,8 @@
-use crate::processor::{StreamProcessor, MatchInfo};
 use crate::pipeline::PipelineConfig;
-use std::io::{self, BufRead, Write};
+use crate::processor::{MatchInfo, StreamProcessor};
+use anyhow::Result;
 use std::collections::HashMap;
+use std::io::{self, BufRead, Write};
 use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
 
 pub struct Inspector {
@@ -40,9 +41,9 @@ pub struct PerformanceData {
 }
 
 impl Inspector {
-    pub fn new(config: PipelineConfig) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn new(config: PipelineConfig) -> Result<Self> {
         let processor = StreamProcessor::new(config)?;
-        
+
         Ok(Self {
             processor,
             interactive_mode: false,
@@ -62,7 +63,7 @@ impl Inspector {
         self
     }
 
-    pub fn inspect_stream<R: BufRead>(&mut self, reader: R) -> Result<InspectionResult, Box<dyn std::error::Error>> {
+    pub fn inspect_stream<R: BufRead>(&mut self, reader: R) -> Result<InspectionResult> {
         let mut result = InspectionResult {
             total_lines: 0,
             total_matches: 0,
@@ -99,7 +100,10 @@ impl Inspector {
 
                 // Update per-step counters using the actual step index from each match
                 for match_info in &limited_matches {
-                    *result.matches_per_step.entry(match_info.step_index).or_insert(0) += 1;
+                    *result
+                        .matches_per_step
+                        .entry(match_info.step_index)
+                        .or_insert(0) += 1;
                 }
 
                 // Calculate transformed line by applying all replacements
@@ -113,7 +117,11 @@ impl Inspector {
                 });
 
                 if self.interactive_mode {
-                    self.display_interactive_match(&line, line_number, result.line_matches.last().unwrap())?;
+                    self.display_interactive_match(
+                        &line,
+                        line_number,
+                        result.line_matches.last().unwrap(),
+                    )?;
 
                     if self.should_pause()? {
                         break;
@@ -134,7 +142,11 @@ impl Inspector {
     }
 
     /// Calculate the transformed line by applying all replacement previews
-    fn calculate_transformed_line(&self, _original: &str, matches: &[crate::processor::MatchInfo]) -> Option<String> {
+    fn calculate_transformed_line(
+        &self,
+        _original: &str,
+        matches: &[crate::processor::MatchInfo],
+    ) -> Option<String> {
         // If any match has a replacement preview, use the first one as the transformed line
         // In a real pipeline, all steps would be applied sequentially
         for match_info in matches {
@@ -146,25 +158,25 @@ impl Inspector {
     }
 
     #[allow(dead_code)]
-    pub fn inspect_single_line(&self, line: &str) -> Result<Vec<MatchInfo>, Box<dyn std::error::Error>> {
+    pub fn inspect_single_line(&self, line: &str) -> Result<Vec<MatchInfo>> {
         self.processor.inspect_line(line, None)
     }
 
-    pub fn display_results(&self, result: &InspectionResult) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn display_results(&self, result: &InspectionResult) -> Result<()> {
         let mut stdout = StandardStream::stdout(ColorChoice::Auto);
-        
+
         self.print_header(&mut stdout)?;
-        
+
         for line_match in &result.line_matches {
             self.display_line_match(&mut stdout, line_match)?;
-            
+
             if self.interactive_mode {
                 println!(); // Extra spacing in interactive mode
             }
         }
-        
+
         self.print_summary(&mut stdout, result)?;
-        
+
         if self.show_performance {
             self.print_performance(&mut stdout, &result.performance_data)?;
         }
@@ -172,23 +184,35 @@ impl Inspector {
         Ok(())
     }
 
-    fn print_header(&self, stdout: &mut StandardStream) -> Result<(), Box<dyn std::error::Error>> {
+    fn print_header(&self, stdout: &mut StandardStream) -> Result<()> {
         stdout.set_color(ColorSpec::new().set_fg(Some(Color::Cyan)).set_bold(true))?;
         writeln!(stdout, "rexpipe Pattern Inspection Results")?;
         writeln!(stdout, "=================================")?;
         stdout.reset()?;
-        writeln!(stdout, "Pipeline: {}", self.processor.get_config().name.as_deref().unwrap_or("Unnamed"))?;
+        writeln!(
+            stdout,
+            "Pipeline: {}",
+            self.processor
+                .get_config()
+                .name
+                .as_deref()
+                .unwrap_or("Unnamed")
+        )?;
         writeln!(stdout)?;
         Ok(())
     }
 
-    fn display_line_match(&self, stdout: &mut StandardStream, line_match: &LineMatch) -> Result<(), Box<dyn std::error::Error>> {
+    fn display_line_match(
+        &self,
+        stdout: &mut StandardStream,
+        line_match: &LineMatch,
+    ) -> Result<()> {
         // Show line number and original content
         if self.show_line_numbers {
             stdout.set_color(ColorSpec::new().set_fg(Some(Color::Yellow)))?;
             write!(stdout, "Line {}: ", line_match.line_number)?;
         }
-        
+
         stdout.set_color(ColorSpec::new().set_fg(Some(Color::White)))?;
         writeln!(stdout, "{}", line_match.original_line)?;
         stdout.reset()?;
@@ -198,15 +222,19 @@ impl Inspector {
             stdout.set_color(ColorSpec::new().set_fg(Some(Color::Green)).set_bold(true))?;
             write!(stdout, "  Match {}: ", i + 1)?;
             stdout.reset()?;
-            
+
             // Highlight the match in context
             let line = &line_match.original_line;
             let before = &line[..match_info.byte_start];
             let matched = &match_info.full_match;
             let after = &line[match_info.byte_end..];
-            
+
             write!(stdout, "{}", before)?;
-            stdout.set_color(ColorSpec::new().set_bg(Some(Color::Green)).set_fg(Some(Color::Black)))?;
+            stdout.set_color(
+                ColorSpec::new()
+                    .set_bg(Some(Color::Green))
+                    .set_fg(Some(Color::Black)),
+            )?;
             write!(stdout, "{}", matched)?;
             stdout.reset()?;
             writeln!(stdout, "{}", after)?;
@@ -233,25 +261,30 @@ impl Inspector {
         Ok(())
     }
 
-    fn display_interactive_match(&self, _line: &str, _line_number: u64, line_match: &LineMatch) -> Result<(), Box<dyn std::error::Error>> {
+    fn display_interactive_match(
+        &self,
+        _line: &str,
+        _line_number: u64,
+        line_match: &LineMatch,
+    ) -> Result<()> {
         let mut stdout = StandardStream::stdout(ColorChoice::Auto);
-        
+
         stdout.set_color(ColorSpec::new().set_fg(Some(Color::Cyan)).set_bold(true))?;
         writeln!(stdout, "\n--- Interactive Match Display ---")?;
         stdout.reset()?;
-        
+
         self.display_line_match(&mut stdout, line_match)?;
-        
+
         Ok(())
     }
 
-    fn should_pause(&self) -> Result<bool, Box<dyn std::error::Error>> {
+    fn should_pause(&self) -> Result<bool> {
         print!("\nPress Enter to continue, 'q' to quit, 's' to skip to summary: ");
         io::stdout().flush()?;
-        
+
         let mut input = String::new();
         io::stdin().read_line(&mut input)?;
-        
+
         match input.trim().to_lowercase().as_str() {
             "q" | "quit" | "exit" => Ok(true),
             "s" | "skip" | "summary" => Ok(true),
@@ -259,50 +292,58 @@ impl Inspector {
         }
     }
 
-    fn print_summary(&self, stdout: &mut StandardStream, result: &InspectionResult) -> Result<(), Box<dyn std::error::Error>> {
+    fn print_summary(&self, stdout: &mut StandardStream, result: &InspectionResult) -> Result<()> {
         stdout.set_color(ColorSpec::new().set_fg(Some(Color::Cyan)).set_bold(true))?;
         writeln!(stdout, "\nInspection Summary")?;
         writeln!(stdout, "==================")?;
         stdout.reset()?;
-        
+
         writeln!(stdout, "Total lines processed: {}", result.total_lines)?;
         writeln!(stdout, "Total matches found: {}", result.total_matches)?;
         writeln!(stdout, "Lines with matches: {}", result.line_matches.len())?;
-        
+
         let match_rate = if result.total_lines > 0 {
             (result.line_matches.len() as f64 / result.total_lines as f64) * 100.0
         } else {
             0.0
         };
         writeln!(stdout, "Match rate: {:.2}%", match_rate)?;
-        
+
         if !result.matches_per_step.is_empty() {
             writeln!(stdout, "\nMatches per step:")?;
             for (step, count) in &result.matches_per_step {
                 writeln!(stdout, "  Step {}: {} matches", step + 1, count)?;
             }
         }
-        
+
         Ok(())
     }
 
-    fn print_performance(&self, stdout: &mut StandardStream, performance: &PerformanceData) -> Result<(), Box<dyn std::error::Error>> {
+    fn print_performance(
+        &self,
+        stdout: &mut StandardStream,
+        performance: &PerformanceData,
+    ) -> Result<()> {
         stdout.set_color(ColorSpec::new().set_fg(Some(Color::Green)).set_bold(true))?;
         writeln!(stdout, "\nPerformance Metrics")?;
         writeln!(stdout, "===================")?;
         stdout.reset()?;
-        
-        writeln!(stdout, "Total processing time: {}ms", performance.total_processing_time_ms)?;
+
+        writeln!(
+            stdout,
+            "Total processing time: {}ms",
+            performance.total_processing_time_ms
+        )?;
         writeln!(stdout, "Lines per second: {}", performance.lines_per_second)?;
         writeln!(stdout, "Bytes per second: {}", performance.bytes_per_second)?;
-        
+
         if !performance.step_timings.is_empty() {
             writeln!(stdout, "\nStep timings:")?;
             for (step, timing) in &performance.step_timings {
                 writeln!(stdout, "  Step {}: {}ms", step + 1, timing)?;
             }
         }
-        
+
         Ok(())
     }
 }
@@ -364,12 +405,12 @@ mod tests {
     fn test_basic_inspection() {
         let config = PipelineConfig::from_inline_pattern(r"\d+", None);
         let mut inspector = Inspector::new(config).unwrap();
-        
+
         let input = "Line 1: 123\nLine 2: no numbers\nLine 3: 456 and 789";
         let reader = Cursor::new(input);
-        
+
         let result = inspector.inspect_stream(reader).unwrap();
-        
+
         assert_eq!(result.total_lines, 3);
         assert!(result.line_matches.len() >= 2); // Lines with matches
         assert!(result.total_matches >= 2); // At least 2 numbers found
@@ -379,9 +420,9 @@ mod tests {
     fn test_single_line_inspection() {
         let config = PipelineConfig::from_inline_pattern(r"(\w+)=(\d+)", None);
         let inspector = Inspector::new(config).unwrap();
-        
+
         let matches = inspector.inspect_single_line("user=123 id=456").unwrap();
-        
+
         assert_eq!(matches.len(), 2);
         assert_eq!(matches[0].captures.len(), 3); // Full match + 2 groups
         assert_eq!(matches[0].captures[1], Some("user".to_string()));
@@ -395,9 +436,9 @@ mod tests {
             .interactive(true)
             .show_line_numbers(false)
             .max_matches_per_line(Some(5));
-        
+
         let inspector = Inspector::new(config).unwrap().with_options(options);
-        
+
         assert_eq!(inspector.interactive_mode, true);
         assert_eq!(inspector.show_line_numbers, false);
         assert_eq!(inspector.max_matches_per_line, Some(5));

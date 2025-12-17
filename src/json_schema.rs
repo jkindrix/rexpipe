@@ -192,21 +192,27 @@ pub fn paths_to_file_list(paths: &[PathBuf]) -> FileListResult {
 
 /// Output a standardized JSON response for processing results
 #[allow(dead_code)]
-pub fn output_processing_json(result: &crate::pipeline::PipelineResult) -> Result<String, serde_json::Error> {
+pub fn output_processing_json(
+    result: &crate::pipeline::PipelineResult,
+) -> Result<String, serde_json::Error> {
     let data = ProcessingResult::from(result);
     let response = JsonResponse::new("processing", data);
     response.to_json()
 }
 
 /// Output a standardized JSON response for count mode
-pub fn output_count_json(result: &crate::pipeline::PipelineResult) -> Result<String, serde_json::Error> {
+pub fn output_count_json(
+    result: &crate::pipeline::PipelineResult,
+) -> Result<String, serde_json::Error> {
     let data = CountResult::from(result);
     let response = JsonResponse::new("count", data);
     response.to_json()
 }
 
 /// Output a standardized JSON response for multi-file results
-pub fn output_multi_file_json(result: &crate::files::MultiFileResult) -> Result<String, serde_json::Error> {
+pub fn output_multi_file_json(
+    result: &crate::files::MultiFileResult,
+) -> Result<String, serde_json::Error> {
     let data = MultiFileResultJson::from(result);
     let response = JsonResponse::new("multi_file", data);
     response.to_json()
@@ -220,7 +226,9 @@ pub fn output_file_list_json(paths: &[PathBuf], mode: &str) -> Result<String, se
 }
 
 /// Output a standardized JSON response for performance metrics
-pub fn output_performance_json(result: &crate::pipeline::PipelineResult) -> Result<String, serde_json::Error> {
+pub fn output_performance_json(
+    result: &crate::pipeline::PipelineResult,
+) -> Result<String, serde_json::Error> {
     let data = PerformanceResult {
         lines_processed: result.lines_processed,
         matches_found: result.matches_found,
