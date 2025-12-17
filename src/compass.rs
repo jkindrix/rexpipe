@@ -4,7 +4,7 @@ use std::fmt;
 
 use crate::pipeline::{PipelineConfig, StepType};
 
-/// Context for COMPASS analysis - can analyze either rexpipe itself or a user's pipeline
+/// Context for COMPASS analysis - can analyze either rexpipe itself or a user's pipeline.
 #[derive(Debug, Clone)]
 pub struct AnalysisContext {
     /// Subject being analyzed
@@ -13,8 +13,7 @@ pub struct AnalysisContext {
     pub problem_statement: String,
     /// Pipeline configuration to analyze (if applicable)
     pub pipeline: Option<PipelineConfig>,
-    /// Additional context or requirements
-    #[allow(dead_code)]
+    /// Additional context or requirements for the analysis
     pub additional_context: Vec<String>,
 }
 
@@ -46,8 +45,9 @@ impl AnalysisContext {
         }
     }
 
-    /// Create context with custom subject and problem
-    #[allow(dead_code)]
+    /// Create context with custom subject and problem statement.
+    ///
+    /// Use this when analyzing something other than a pipeline.
     pub fn custom(subject: impl Into<String>, problem: impl Into<String>) -> Self {
         Self {
             subject: subject.into(),
@@ -58,31 +58,44 @@ impl AnalysisContext {
     }
 }
 
-#[allow(dead_code)]
+/// Status of a COMPASS phase.
 #[derive(Debug, Clone)]
 pub enum PhaseStatus {
+    /// Phase has not been started
     NotStarted,
+    /// Phase is currently in progress
     InProgress,
+    /// Phase completed successfully
     Completed,
+    /// Phase failed with error
     Failed(String),
+    /// Phase requires human escalation
     RequiresEscalation(String),
 }
 
+/// A quality gate that must be passed before advancing phases.
 #[derive(Debug, Clone)]
 pub struct QualityGate {
+    /// Name of the quality gate
     pub name: String,
+    /// Whether the gate has been passed
     pub passed: bool,
-    #[allow(dead_code)]
+    /// Optional details about the gate result
     pub details: Option<String>,
 }
 
+/// A phase in the COMPASS framework.
 #[derive(Debug)]
 pub struct CompassPhase {
+    /// Name of the phase
     pub name: String,
-    #[allow(dead_code)]
+    /// Description of what this phase accomplishes
     pub description: String,
+    /// Current status of the phase
     pub status: PhaseStatus,
+    /// Quality gates that must be passed
     pub quality_gates: Vec<QualityGate>,
+    /// Outputs produced by this phase
     pub outputs: HashMap<String, String>,
 }
 
@@ -182,7 +195,7 @@ impl CompassAgent {
         Self::with_context(AnalysisContext::from_pipeline(config))
     }
 
-    #[allow(dead_code)]
+    /// Get a reference to the current phase.
     pub fn current_phase(&self) -> &CompassPhase {
         &self.phases[self.current_phase_index]
     }
@@ -216,7 +229,7 @@ impl CompassAgent {
         self.current_phase_mut().status = PhaseStatus::RequiresEscalation(reason);
     }
 
-    #[allow(dead_code)]
+    /// Set the confidence level for the current analysis (0.0 to 1.0).
     pub fn set_confidence(&mut self, level: f32) {
         self.confidence_level = level.clamp(0.0, 1.0);
     }

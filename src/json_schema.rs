@@ -56,13 +56,18 @@ impl<T: Serialize> JsonResponse<T> {
 // Specific response types for different modes
 // ============================================================================
 
-/// Processing result for single-file/stdin processing
-#[allow(dead_code)]
+/// Processing result for single-file/stdin processing.
+///
+/// Used as the data payload in JSON output for basic processing operations.
 #[derive(Debug, Clone, Serialize)]
 pub struct ProcessingResult {
+    /// Number of lines processed
     pub lines_processed: u64,
+    /// Number of matches found across all lines
     pub matches_found: u64,
+    /// Number of transformations applied
     pub transformations_applied: u64,
+    /// Success rate as a value between 0.0 and 1.0
     pub success_rate: f64,
 }
 
@@ -190,8 +195,9 @@ pub fn paths_to_file_list(paths: &[PathBuf]) -> FileListResult {
 // Output helpers
 // ============================================================================
 
-/// Output a standardized JSON response for processing results
-#[allow(dead_code)]
+/// Output a standardized JSON response for processing results.
+///
+/// Converts a PipelineResult into a JSON string with metadata envelope.
 pub fn output_processing_json(
     result: &crate::pipeline::PipelineResult,
 ) -> Result<String, serde_json::Error> {

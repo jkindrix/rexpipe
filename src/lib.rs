@@ -15,8 +15,8 @@
 //!
 //! ## Quick Start
 //!
-//! ```no_run
-//! use rexpipe::pipeline::{PipelineConfig, PipelineSettings};
+//! ```
+//! use rexpipe::pipeline::PipelineConfig;
 //! use rexpipe::processor::StreamProcessor;
 //! use std::io::Cursor;
 //!
@@ -29,6 +29,47 @@
 //! let result = processor.process_stream(input, &mut output).unwrap();
 //!
 //! assert_eq!(String::from_utf8(output).unwrap(), "There are NUM apples and NUM oranges.\n");
+//! ```
+//!
+//! ## Pipeline Configuration
+//!
+//! Pipelines can be defined in TOML format for complex multi-step processing:
+//!
+//! ```
+//! use rexpipe::pipeline::PipelineConfig;
+//!
+//! let toml = r#"
+//! name = "Log Processor"
+//!
+//! [[step]]
+//! type = "substitute"
+//! pattern = '\[ERROR\]'
+//! replacement = "[ERR]"
+//!
+//! [[step]]
+//! type = "filter"
+//! pattern = 'DEBUG'
+//! action = "drop_line"
+//! "#;
+//!
+//! let config: PipelineConfig = toml::from_str(toml).unwrap();
+//! assert_eq!(config.step.len(), 2);
+//! ```
+//!
+//! ## Match Inspection
+//!
+//! Use the inspector module to analyze pattern matches:
+//!
+//! ```
+//! use rexpipe::pipeline::PipelineConfig;
+//! use rexpipe::inspector::Inspector;
+//!
+//! let config = PipelineConfig::from_inline_pattern(r"(\w+)@(\w+\.com)", None);
+//! let inspector = Inspector::new(config).unwrap();
+//!
+//! let matches = inspector.inspect_single_line("Contact: user@example.com").unwrap();
+//! assert_eq!(matches.len(), 1);
+//! assert_eq!(matches[0].captures[1], Some("user".to_string()));
 //! ```
 //!
 //! ## Modules

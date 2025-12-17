@@ -23,12 +23,16 @@ pub struct InspectionResult {
     pub performance_data: PerformanceData,
 }
 
+/// Information about matches found on a single line.
 #[derive(Debug)]
 pub struct LineMatch {
+    /// Line number (1-based)
     pub line_number: u64,
+    /// The original line content before any transformations
     pub original_line: String,
+    /// All matches found on this line
     pub matches: Vec<MatchInfo>,
-    #[allow(dead_code)]
+    /// The transformed line content (if any transformation was applied)
     pub transformed_line: Option<String>,
 }
 
@@ -157,7 +161,18 @@ impl Inspector {
         None
     }
 
-    #[allow(dead_code)]
+    /// Inspect a single line and return match information.
+    ///
+    /// # Example
+    /// ```
+    /// use rexpipe::pipeline::PipelineConfig;
+    /// use rexpipe::inspector::Inspector;
+    ///
+    /// let config = PipelineConfig::from_inline_pattern(r"(\w+)=(\d+)", None);
+    /// let inspector = Inspector::new(config).unwrap();
+    /// let matches = inspector.inspect_single_line("key=123").unwrap();
+    /// assert_eq!(matches.len(), 1);
+    /// ```
     pub fn inspect_single_line(&self, line: &str) -> Result<Vec<MatchInfo>> {
         self.processor.inspect_line(line, None)
     }
@@ -388,7 +403,15 @@ impl InspectorOptions {
         self
     }
 
-    #[allow(dead_code)]
+    /// Set maximum matches to display per line (None for unlimited).
+    ///
+    /// # Example
+    /// ```
+    /// use rexpipe::inspector::InspectorOptions;
+    ///
+    /// let options = InspectorOptions::new()
+    ///     .max_matches_per_line(Some(5));
+    /// ```
     pub fn max_matches_per_line(mut self, max: Option<usize>) -> Self {
         self.max_matches_per_line = max;
         self

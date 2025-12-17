@@ -2,6 +2,30 @@
 //!
 //! Provides directory recursion, in-place editing, parallel processing,
 //! progress indicators, dry-run preview, and VCS-aware file discovery.
+//!
+//! # Example
+//!
+//! ```no_run
+//! use rexpipe::pipeline::PipelineConfig;
+//! use rexpipe::files::{FileProcessingOptions, MultiFileProcessor};
+//! use std::path::PathBuf;
+//!
+//! // Create a pipeline to replace TODO with DONE
+//! let config = PipelineConfig::from_inline_pattern(r"TODO", Some("DONE"));
+//!
+//! // Set up options for processing
+//! let options = FileProcessingOptions::new()
+//!     .include_pattern("*.txt".to_string())
+//!     .parallel(true);
+//!
+//! // Create processor and discover files
+//! let processor = MultiFileProcessor::new(config, options);
+//! let files = processor.discover_files(&[PathBuf::from(".")]).unwrap();
+//!
+//! // Process the files
+//! let result = processor.process_files(&files).unwrap();
+//! println!("Processed {} files, {} matches", result.files_processed, result.total_matches);
+//! ```
 
 use crate::pipeline::PipelineConfig;
 use crate::processor::StreamProcessor;
@@ -756,7 +780,7 @@ impl MultiFileResult {
         self.total_matches > 0
     }
 
-    #[allow(dead_code)]
+    /// Check if any errors occurred during processing.
     pub fn has_errors(&self) -> bool {
         !self.errors.is_empty()
     }
@@ -767,7 +791,6 @@ impl MultiFileResult {
 // ============================================================================
 
 #[cfg(feature = "async")]
-#[allow(dead_code)]
 pub mod async_processing {
     //! Async file processing using tokio
     //!

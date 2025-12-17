@@ -152,40 +152,52 @@ pub struct PipelineResult {
     pub step_results: Vec<StepResult>,
 }
 
+/// Result from processing a single pipeline step.
 #[derive(Debug, Clone)]
 pub struct StepResult {
-    #[allow(dead_code)]
+    /// Index of this step in the pipeline (0-based)
     pub step_index: usize,
-    #[allow(dead_code)]
+    /// The type of step (Substitute, Filter, etc.)
     pub step_type: StepType,
-    #[allow(dead_code)]
+    /// The regex pattern used by this step
     pub pattern: String,
+    /// Number of matches found by this step
     pub matches: u64,
+    /// Number of transformations applied by this step
     pub transformations: u64,
+    /// Time spent processing this step in milliseconds
     pub processing_time_ms: u64,
-    #[allow(dead_code)]
+    /// Any errors that occurred during this step
     pub errors: Vec<String>,
 }
 
+/// An error that occurred during pipeline processing.
 #[derive(Debug, Clone)]
 pub struct PipelineError {
-    #[allow(dead_code)]
+    /// Index of the step where the error occurred (0-based)
     pub step_index: usize,
-    #[allow(dead_code)]
+    /// Line number where the error occurred (1-based)
     pub line_number: u64,
+    /// The type/category of error
     pub error_type: ErrorType,
+    /// Human-readable error message
     pub message: String,
-    #[allow(dead_code)]
+    /// Optional context (e.g., the line content that caused the error)
     pub context: Option<String>,
 }
 
-#[allow(dead_code)]
+/// Categories of errors that can occur during pipeline processing.
 #[derive(Debug, Clone)]
 pub enum ErrorType {
+    /// Error compiling a regex pattern
     RegexCompilation,
+    /// Pattern matching failed (e.g., validation step)
     PatternMatch,
+    /// Error during text substitution
     Substitution,
+    /// I/O error (reading/writing files)
     IoError,
+    /// Configuration error (invalid settings)
     ConfigurationError,
 }
 
@@ -196,7 +208,22 @@ impl PipelineConfig {
         Ok(config)
     }
 
-    #[allow(dead_code)]
+    /// Create a pipeline from a single inline pattern.
+    ///
+    /// # Arguments
+    /// * `pattern` - The regex pattern to match
+    /// * `replacement` - Optional replacement text (if provided, creates a Substitute step)
+    ///
+    /// # Example
+    /// ```
+    /// use rexpipe::pipeline::PipelineConfig;
+    ///
+    /// // Create a filter pipeline (no replacement)
+    /// let filter = PipelineConfig::from_inline_pattern(r"\d+", None);
+    ///
+    /// // Create a substitution pipeline
+    /// let substitute = PipelineConfig::from_inline_pattern(r"\d+", Some("NUMBER"));
+    /// ```
     pub fn from_inline_pattern(pattern: &str, replacement: Option<&str>) -> Self {
         Self::from_inline_pattern_with_settings(pattern, replacement, PipelineSettings::default())
     }
@@ -237,7 +264,19 @@ impl PipelineConfig {
         }
     }
 
-    #[allow(dead_code)]
+    /// Set pipeline settings using builder pattern.
+    ///
+    /// # Example
+    /// ```
+    /// use rexpipe::pipeline::{PipelineConfig, PipelineSettings};
+    ///
+    /// let settings = PipelineSettings {
+    ///     pcre_mode: true,
+    ///     ..Default::default()
+    /// };
+    /// let config = PipelineConfig::from_inline_pattern(r"\d+", None)
+    ///     .with_settings(settings);
+    /// ```
     pub fn with_settings(mut self, settings: PipelineSettings) -> Self {
         self.settings = settings;
         self
@@ -251,7 +290,22 @@ impl PipelineConfig {
         serde_json::to_string_pretty(self)
     }
 
-    #[allow(dead_code)]
+    /// Create a pipeline configuration from a JSON string.
+    ///
+    /// # Example
+    /// ```
+    /// use rexpipe::pipeline::PipelineConfig;
+    ///
+    /// let json = r#"{
+    ///     "name": "Test Pipeline",
+    ///     "step": [{
+    ///         "type": "substitute",
+    ///         "pattern": "\\d+",
+    ///         "replacement": "NUM"
+    ///     }]
+    /// }"#;
+    /// let config = PipelineConfig::from_json(json).unwrap();
+    /// ```
     pub fn from_json(json: &str) -> Result<Self, serde_json::Error> {
         serde_json::from_str(json)
     }
@@ -379,7 +433,9 @@ impl PipelineResult {
         self.step_results.push(result);
     }
 
-    #[allow(dead_code)]
+    /// Add an error to the pipeline result.
+    ///
+    /// Used during processing to record errors that occur (e.g., validation failures).
     pub fn add_error(&mut self, error: PipelineError) {
         self.errors.push(error);
     }
@@ -435,7 +491,9 @@ impl StepResult {
         self.transformations += 1;
     }
 
-    #[allow(dead_code)]
+    /// Add an error message to this step's result.
+    ///
+    /// Used to record step-specific errors during pipeline execution.
     pub fn add_error(&mut self, error: String) {
         self.errors.push(error);
     }

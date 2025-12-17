@@ -17,7 +17,8 @@ use rexpipe::processor::StreamProcessor;
 
 /// Exit codes for different error conditions
 mod exit_codes {
-    /// Success - operation completed normally
+    /// Success - operation completed normally (implicit, not explicitly used).
+    /// Defined for completeness but Rust's main() returns 0 implicitly on success.
     #[allow(dead_code)]
     pub const SUCCESS: i32 = 0;
     /// No matches found (used with -q/--quiet mode)

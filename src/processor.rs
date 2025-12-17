@@ -166,20 +166,53 @@ pub struct ProcessorStats {
     pub step_timings: HashMap<usize, u64>,
 }
 
+/// Detailed information about a single regex match.
 #[derive(Debug, Clone)]
 pub struct MatchInfo {
-    #[allow(dead_code)]
+    /// Line number where this match occurred (1-based, for external use)
     pub line_number: u64,
+    /// Byte offset where the match starts
     pub byte_start: usize,
+    /// Byte offset where the match ends
     pub byte_end: usize,
+    /// The full matched text
     pub full_match: String,
+    /// Captured groups (index 0 is full match, 1+ are capture groups)
     pub captures: Vec<Option<String>>,
+    /// Preview of what the replacement would look like
     pub replacement_preview: Option<String>,
     /// Index of the pipeline step that produced this match
     pub step_index: usize,
 }
 
 impl StreamProcessor {
+    /// Create a new StreamProcessor from a pipeline configuration.
+    ///
+    /// # Arguments
+    /// * `config` - The pipeline configuration to use for processing
+    ///
+    /// # Returns
+    /// A Result containing the processor or an error if validation fails
+    ///
+    /// # Example
+    /// ```
+    /// use rexpipe::pipeline::PipelineConfig;
+    /// use rexpipe::processor::StreamProcessor;
+    /// use std::io::Cursor;
+    ///
+    /// // Create a simple substitution pipeline
+    /// let config = PipelineConfig::from_inline_pattern(r"\d+", Some("NUM"));
+    /// let mut processor = StreamProcessor::new(config).unwrap();
+    ///
+    /// // Process some text
+    /// let input = Cursor::new("There are 123 apples and 456 oranges");
+    /// let mut output = Vec::new();
+    /// let result = processor.process_stream(input, &mut output).unwrap();
+    ///
+    /// assert_eq!(result.matches_found, 2);
+    /// let output_str = String::from_utf8(output).unwrap();
+    /// assert!(output_str.contains("NUM"));
+    /// ```
     pub fn new(config: PipelineConfig) -> Result<Self> {
         if let Err(validation_errors) = config.validate() {
             let error = ValidationError::Multiple {
@@ -897,7 +930,10 @@ impl StreamProcessor {
         Ok(matches)
     }
 
-    #[allow(dead_code)]
+    /// Get processing statistics.
+    ///
+    /// Returns a reference to the internal statistics tracking bytes processed,
+    /// lines read, and timing information.
     pub fn get_stats(&self) -> &ProcessorStats {
         &self.stats
     }
@@ -943,7 +979,9 @@ impl StreamProcessor {
 }
 
 impl ProcessorStats {
-    #[allow(dead_code)]
+    /// Calculate throughput in bytes per second based on elapsed processing time.
+    ///
+    /// Returns 0 if processing hasn't started or no time has elapsed.
     pub fn throughput_bytes_per_second(&self) -> u64 {
         if let Some(start) = self.processing_start {
             let elapsed_ms = start.elapsed().as_millis() as u64;
@@ -957,7 +995,9 @@ impl ProcessorStats {
         }
     }
 
-    #[allow(dead_code)]
+    /// Calculate lines processed per second based on elapsed processing time.
+    ///
+    /// Returns 0 if processing hasn't started or no time has elapsed.
     pub fn lines_per_second(&self) -> u64 {
         if let Some(start) = self.processing_start {
             let elapsed_ms = start.elapsed().as_millis() as u64;

@@ -82,14 +82,26 @@ impl ResolvedLibrary {
         self.patterns.get(name)
     }
 
-    /// Check if a pattern exists
-    #[allow(dead_code)]
+    /// Check if a pattern exists in the library.
+    ///
+    /// # Example
+    /// ```ignore
+    /// if library.contains("email") {
+    ///     println!("Email pattern is available");
+    /// }
+    /// ```
     pub fn contains(&self, name: &str) -> bool {
         self.patterns.contains_key(name)
     }
 
-    /// Get all pattern names
-    #[allow(dead_code)]
+    /// Get an iterator over all pattern names in the library.
+    ///
+    /// # Example
+    /// ```ignore
+    /// for name in library.pattern_names() {
+    ///     println!("Pattern: {}", name);
+    /// }
+    /// ```
     pub fn pattern_names(&self) -> impl Iterator<Item = &String> {
         self.patterns.keys()
     }
