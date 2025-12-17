@@ -6,7 +6,7 @@
 use crate::pipeline::PipelineConfig;
 use crate::processor::StreamProcessor;
 use anyhow::Result;
-use diffy::{create_patch, PatchFormatter};
+use diffy::{PatchFormatter, create_patch};
 use ignore::WalkBuilder;
 use indicatif::{ProgressBar, ProgressStyle};
 use rayon::prelude::*;
@@ -37,8 +37,11 @@ pub struct MultiFileResult {
     pub errors: Vec<String>,
 }
 
+/// Callback type for streaming file results as they're processed
+pub type StreamingCallback = Box<dyn Fn(&FileResult) + Send + Sync>;
+
 /// Options for multi-file processing
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct FileProcessingOptions {
     /// Edit files in-place
     pub in_place: bool,
@@ -66,6 +69,29 @@ pub struct FileProcessingOptions {
     pub quiet: bool,
     /// Show progress indicator for multi-file processing
     pub show_progress: bool,
+    /// Enable streaming output mode (emit results as files are processed)
+    pub streaming_output: bool,
+}
+
+impl std::fmt::Debug for FileProcessingOptions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FileProcessingOptions")
+            .field("in_place", &self.in_place)
+            .field("backup_suffix", &self.backup_suffix)
+            .field("respect_gitignore", &self.respect_gitignore)
+            .field("include_hidden", &self.include_hidden)
+            .field("max_depth", &self.max_depth)
+            .field("include_patterns", &self.include_patterns)
+            .field("exclude_patterns", &self.exclude_patterns)
+            .field("parallel", &self.parallel)
+            .field("count_only", &self.count_only)
+            .field("files_with_matches", &self.files_with_matches)
+            .field("files_without_matches", &self.files_without_matches)
+            .field("quiet", &self.quiet)
+            .field("show_progress", &self.show_progress)
+            .field("streaming_output", &self.streaming_output)
+            .finish()
+    }
 }
 
 impl Default for FileProcessingOptions {
@@ -84,6 +110,7 @@ impl Default for FileProcessingOptions {
             files_without_matches: false,
             quiet: false,
             show_progress: false,
+            streaming_output: false,
         }
     }
 }
@@ -155,6 +182,12 @@ impl FileProcessingOptions {
 
     pub fn show_progress(mut self, show: bool) -> Self {
         self.show_progress = show;
+        self
+    }
+
+    /// Enable streaming output mode (results emitted as files are processed)
+    pub fn streaming_output(mut self, streaming: bool) -> Self {
+        self.streaming_output = streaming;
         self
     }
 }
@@ -271,6 +304,100 @@ impl MultiFileProcessor {
         } else {
             self.process_files_sequential(files)
         }
+    }
+
+    /// Process multiple files with a streaming callback
+    ///
+    /// The callback is invoked for each file as it's processed, enabling
+    /// real-time output for large file sets. This is useful when processing
+    /// many files and you want to see results immediately rather than waiting
+    /// for all files to complete.
+    ///
+    /// # Arguments
+    ///
+    /// * `files` - List of file paths to process
+    /// * `callback` - Function called with each file's result as it completes
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// processor.process_files_streaming(&files, |result| {
+    ///     if result.matches_found > 0 {
+    ///         println!("{}: {} matches", result.path.display(), result.matches_found);
+    ///     }
+    /// })?;
+    /// ```
+    pub fn process_files_streaming<F>(
+        &self,
+        files: &[PathBuf],
+        callback: F,
+    ) -> Result<MultiFileResult>
+    where
+        F: Fn(&FileResult) + Send + Sync,
+    {
+        self.process_files_streaming_impl(files, &callback)
+    }
+
+    fn process_files_streaming_impl<F>(
+        &self,
+        files: &[PathBuf],
+        callback: &F,
+    ) -> Result<MultiFileResult>
+    where
+        F: Fn(&FileResult) + Send + Sync,
+    {
+        let mut result = MultiFileResult::default();
+        let progress = create_progress_bar(
+            files.len() as u64,
+            self.options.show_progress,
+            self.options.quiet,
+        );
+
+        for file in files {
+            let file_result = match self.process_single_file(file) {
+                Ok(fr) => fr,
+                Err(e) => FileResult {
+                    path: file.clone(),
+                    matches_found: 0,
+                    lines_processed: 0,
+                    modified: false,
+                    error: Some(e.to_string()),
+                },
+            };
+
+            // Invoke callback immediately for streaming output
+            callback(&file_result);
+
+            // Update aggregated result
+            result.files_processed += 1;
+            result.total_lines += file_result.lines_processed;
+            result.total_matches += file_result.matches_found;
+
+            if file_result.matches_found > 0 {
+                result.files_matched += 1;
+            }
+            if file_result.modified {
+                result.files_modified += 1;
+            }
+            if let Some(ref e) = file_result.error {
+                result.errors.push(format!("{}: {}", file.display(), e));
+            }
+
+            result.file_results.push(file_result);
+
+            if let Some(ref pb) = progress {
+                pb.inc(1);
+            }
+        }
+
+        if let Some(pb) = progress {
+            pb.finish_with_message(format!(
+                "Processed {} files ({} matches)",
+                result.files_processed, result.total_matches
+            ));
+        }
+
+        Ok(result)
     }
 
     fn process_files_sequential(&self, files: &[PathBuf]) -> Result<MultiFileResult> {
@@ -980,7 +1107,9 @@ mod tests {
             .backup_suffix(Some(".bak".to_string()));
 
         let processor = MultiFileProcessor::new(config, options);
-        let result = processor.process_files(&[file_path.clone()]).unwrap();
+        let result = processor
+            .process_files(std::slice::from_ref(&file_path))
+            .unwrap();
 
         assert_eq!(result.files_modified, 1);
 

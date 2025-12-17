@@ -1,25 +1,19 @@
-mod compass;
-mod error;
-mod files;
-mod inspector;
-mod json_schema;
-mod library;
-mod pipeline;
-mod processor;
-
-use anyhow::{anyhow, Result};
-use clap::{value_parser, Arg, ArgAction, Command, ValueHint};
-use clap_complete::{generate, Generator, Shell};
+use anyhow::{Result, anyhow};
+use clap::{Arg, ArgAction, Command, ValueHint, value_parser};
+use clap_complete::{Generator, Shell, generate};
 use std::fs::File;
 use std::io::{self, BufReader, IsTerminal};
 use std::path::{Path, PathBuf};
 
-use compass::CompassAgent;
-use files::{FileProcessingOptions, MultiFileProcessor, MultiFileResult};
-use inspector::{Inspector, InspectorOptions};
-use library::LibraryResolver;
-use pipeline::{PipelineConfig, PipelineSettings};
-use processor::StreamProcessor;
+// Import from the library crate
+use rexpipe::compass::CompassAgent;
+use rexpipe::files::{FileProcessingOptions, MultiFileProcessor, MultiFileResult};
+use rexpipe::inspector::{Inspector, InspectorOptions};
+use rexpipe::json_schema;
+use rexpipe::library;
+use rexpipe::library::LibraryResolver;
+use rexpipe::pipeline::{PipelineConfig, PipelineSettings};
+use rexpipe::processor::StreamProcessor;
 
 /// Exit codes for different error conditions
 mod exit_codes {
@@ -190,6 +184,19 @@ fn build_cli() -> Command {
                 .action(ArgAction::SetTrue),
         )
         .arg(
+            Arg::new("timeout")
+                .long("timeout")
+                .value_name("MS")
+                .help("Timeout in milliseconds per line (0 = no timeout)")
+                .value_parser(value_parser!(u64)),
+        )
+        .arg(
+            Arg::new("async")
+                .long("async")
+                .help("Use async I/O for file processing (requires async feature)")
+                .action(ArgAction::SetTrue),
+        )
+        .arg(
             Arg::new("progress")
                 .long("progress")
                 .help("Show progress indicator for multi-file processing")
@@ -344,8 +351,13 @@ fn build_cli() -> Command {
 }
 
 /// Generate shell completion script for the given shell
-fn print_completions<G: Generator>(gen: G, cmd: &mut Command) {
-    generate(gen, cmd, cmd.get_name().to_string(), &mut io::stdout());
+fn print_completions<G: Generator>(generator: G, cmd: &mut Command) {
+    generate(
+        generator,
+        cmd,
+        cmd.get_name().to_string(),
+        &mut io::stdout(),
+    );
 }
 
 fn main() {
@@ -455,11 +467,14 @@ fn build_pipeline_settings(matches: &clap::ArgMatches) -> PipelineSettings {
         .and_then(|s| s.parse().ok())
         .unwrap_or(context);
 
+    let timeout_ms = matches.get_one::<u64>("timeout").copied().unwrap_or(0);
+
     PipelineSettings {
         pcre_mode: matches.get_flag("pcre"),
         fixed_strings: matches.get_flag("fixed"),
         context_before,
         context_after,
+        timeout_ms,
     }
 }
 
@@ -471,7 +486,7 @@ fn export_configuration(config: &PipelineConfig, format: &str) -> Result<()> {
             return Err(anyhow!(
                 "Unknown export format: {}. Use 'toml' or 'json'",
                 format
-            ))
+            ));
         }
     };
     println!("{}", output);
@@ -537,6 +552,17 @@ fn run_multi_file_mode(
         return Ok(());
     }
 
+    // Check if async mode is requested
+    let use_async = matches.get_flag("async");
+
+    // Warn if async flag is used without async feature
+    #[cfg(not(feature = "async"))]
+    if use_async {
+        eprintln!("Warning: --async flag requires the 'async' feature.");
+        eprintln!("Rebuild with: cargo build --features async");
+        eprintln!("Falling back to synchronous processing.");
+    }
+
     // Process based on mode
     let result = if options.files_with_matches {
         let matching = processor.files_with_matches(&files)?;
@@ -547,10 +573,34 @@ fn run_multi_file_mode(
         output_file_list(&non_matching, quiet, json_output, "files_without_matches")?;
         return Ok(());
     } else if options.count_only {
+        #[cfg(feature = "async")]
+        if use_async {
+            let rt = tokio::runtime::Runtime::new()?;
+            let result = rt
+                .block_on(
+                    rexpipe::files::AsyncMultiFileProcessor::new(config.clone(), options.clone())
+                        .count_matches_async(&files),
+                )
+                .map_err(|e| anyhow!(e))?;
+            output_count_results(&result, quiet, json_output)?;
+            return Ok(());
+        }
         let result = processor.count_matches(&files)?;
         output_count_results(&result, quiet, json_output)?;
         return Ok(());
     } else {
+        #[cfg(feature = "async")]
+        if use_async {
+            let rt = tokio::runtime::Runtime::new()?;
+            rt.block_on(
+                rexpipe::files::AsyncMultiFileProcessor::new(config.clone(), options.clone())
+                    .process_files_async(&files),
+            )
+            .map_err(|e| anyhow!(e))?
+        } else {
+            processor.process_files(&files)?
+        }
+        #[cfg(not(feature = "async"))]
         processor.process_files(&files)?
     };
 
@@ -716,6 +766,9 @@ fn load_pipeline_config(
         if settings.context_after > 0 {
             config.settings.context_after = settings.context_after;
         }
+        if settings.timeout_ms > 0 {
+            config.settings.timeout_ms = settings.timeout_ms;
+        }
         Ok(config)
     } else if let Some(pattern) = matches.get_one::<String>("pattern") {
         let replacement = matches.get_one::<String>("replacement").map(|s| s.as_str());
@@ -765,7 +818,9 @@ fn validate_configuration(config: &PipelineConfig) -> Result<()> {
             }
             println!("\nSuggestions:");
             println!("  - Check that all substitute steps have 'replacement' defined");
-            println!("  - Check that all filter steps have 'action' defined (keep_line, drop_line, etc.)");
+            println!(
+                "  - Check that all filter steps have 'action' defined (keep_line, drop_line, etc.)"
+            );
             println!("  - Verify all patterns are valid regex syntax");
             println!("  - Use 'rexpipe --inspect' to test patterns interactively");
             Err(anyhow!("Configuration is invalid"))
