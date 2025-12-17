@@ -1,1 +1,37 @@
-/target
+# Build artifacts
+/target/
+**/*.rs.bk
+
+# Editor/IDE
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+*.sublime-project
+*.sublime-workspace
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Debug/profiling
+*.pdb
+perf.data
+perf.data.old
+flamegraph.svg
+cachegrind.out.*
+callgrind.out.*
+
+# Test artifacts
+*.log
+*.tmp
+.coverage/
+
+# Documentation build
+/docs/book/

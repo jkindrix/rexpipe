@@ -2,13 +2,12 @@
 name = "rexpipe"
 version = "1.1.0"
 edition = "2021"
-authors = ["Strategic Collaboration Agent"]
-description = "Unified regex pipeline processor with COMPASS framework integration"
-license = "MIT"
-# Update these URLs when publishing to crates.io
+authors = ["Justin Kindrix <jkindrix@gmail.com>"]
+description = "Unified regex pipeline processor with pattern libraries and multi-file support"
+license = "MIT OR Apache-2.0"
 homepage = "https://github.com/jkindrix/rexpipe"
 repository = "https://github.com/jkindrix/rexpipe"
-keywords = ["regex", "pipeline", "text-processing", "streaming", "compass"]
+keywords = ["regex", "pipeline", "text-processing", "streaming", "grep"]
 categories = ["command-line-utilities", "text-processing"]
 
 [dependencies]
