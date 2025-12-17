@@ -121,6 +121,30 @@ docs(readme): add pattern library examples
 - Unit tests can be inline with `#[cfg(test)]` modules
 - Ensure tests are deterministic and don't rely on external state
 
+### Fuzz Testing
+
+The project includes fuzz testing infrastructure using `cargo-fuzz`. Fuzz tests help find edge cases and potential panics in parsing and processing code.
+
+**Setup:**
+```bash
+cargo install cargo-fuzz
+```
+
+**Available fuzz targets:**
+- `fuzz_pattern`: Tests regex pattern compilation
+- `fuzz_config`: Tests TOML configuration parsing
+- `fuzz_pipeline`: Tests pipeline processing with structured input
+
+**Running fuzz tests:**
+```bash
+cd fuzz
+cargo +nightly fuzz run fuzz_pattern -- -max_len=1000
+cargo +nightly fuzz run fuzz_config -- -max_len=10000
+cargo +nightly fuzz run fuzz_pipeline
+```
+
+**Note:** Fuzz testing requires the nightly Rust toolchain.
+
 ## Pull Request Process
 
 1. **Create a descriptive PR title** using conventional commit format
@@ -150,6 +174,12 @@ src/
 tests/
 ├── integration_tests.rs  # End-to-end tests
 └── library_tests.rs      # Pattern library tests
+
+fuzz/
+└── fuzz_targets/  # Fuzz testing targets
+    ├── fuzz_pattern.rs   # Pattern compilation fuzzer
+    ├── fuzz_config.rs    # TOML config fuzzer
+    └── fuzz_pipeline.rs  # Pipeline processing fuzzer
 
 examples/
 ├── *.toml         # Example pipeline configurations
