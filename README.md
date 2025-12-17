@@ -9,7 +9,8 @@ rexpipe transforms regex text processing from a fragmented, debugging-intensive,
 ## Key Features
 
 - **Unified Processing**: Single process handles multiple regex operations
-- **COMPASS Integration**: Strategic thinking framework for complex pipeline planning
+- **Pattern Libraries**: Reusable regex patterns with `${pattern.name}` syntax
+- **Multi-File Processing**: Recursive search, in-place editing, grep-like output modes
 - **Interactive Debugging**: Real-time pattern inspection and match visualization
 - **Streaming Architecture**: Constant memory usage regardless of file size
 - **TOML Configuration**: Version-controllable, shareable pipeline definitions
@@ -159,6 +160,27 @@ rexpipe --list-patterns patterns/common.toml
 rexpipe --validate-library patterns/common.toml
 ```
 
+### Included Pattern Libraries
+
+rexpipe ships with two pattern libraries in `examples/patterns/`:
+
+**common.toml** (43 patterns):
+- `email`, `url`, `uuid`, `phone_us`, `phone_intl`
+- `net.ipv4`, `net.ipv6`, `net.mac`, `net.cidr`
+- `time.iso8601`, `time.date_iso`, `time.timestamp_unix`
+- `data.json_key`, `data.semver`, `data.key_value`
+- `code.identifier`, `code.function_call`, `code.comment_hash`
+- `security.api_key_generic`, `security.password_field`, `security.credit_card`, `security.ssn`
+
+**logs.toml** (40 patterns, includes common.toml):
+- `level.error`, `level.warning`, `level.info`, `level.debug`
+- `apache.combined`, `apache.common`, `apache.status_5xx`
+- `syslog.bsd`, `syslog.rfc5424`
+- `json.json_line`, `json.message_field`
+- `app.java_exception`, `app.python_traceback`, `app.request_id`
+- `docker.container_prefix`, `docker.k8s_prefix`
+- `nginx.error_log`, `nginx.access_log`
+
 ## Step Types
 
 - **substitute**: Replace matched patterns with new text
@@ -190,32 +212,64 @@ The transform step type supports the following actions:
 ## Command Line Options
 
 ```bash
-rexpipe [OPTIONS]
+rexpipe [OPTIONS] [paths]...
+
+ARGUMENTS:
+    [paths]...                    Files or directories to process
 
 OPTIONS:
-    -c, --config <FILE>         TOML configuration file
-    -p, --pattern <REGEX>       Inline regex pattern
-    -r, --replacement <TEXT>    Replacement text for substitution
-    -F, --fixed                 Treat pattern as fixed string (no regex)
-    -P, --pcre                  Use PCRE-compatible regex (lookahead/lookbehind)
-    -B, --before <N>            Show N lines before each match
-    -A, --after <N>             Show N lines after each match
-    -C, --context <N>           Show N lines before and after each match
-        --inspect               Enable inspection mode
-        --interactive           Enable interactive inspection
-        --dry-run               Validate config, or show diff preview with -I
-        --progress              Show progress indicator for multi-file processing
-        --performance           Show performance metrics
-        --compass               Run COMPASS strategic analysis
-        --validate              Validate configuration only
-        --export <FORMAT>       Export configuration to TOML or JSON
-        --completions <SHELL>   Generate shell completion script
-        --list-patterns <FILE>  List patterns from a pattern library
+    # Core Processing
+    -c, --config <FILE>           TOML configuration file
+    -p, --pattern <REGEX>         Inline regex pattern
+    -r, --replacement <TEXT>      Replacement text for substitution
+    -F, --fixed                   Treat pattern as fixed string (no regex)
+    -P, --pcre                    Use PCRE-compatible regex (lookahead/lookbehind)
+
+    # File Operations
+    -i, --input <FILE>            Input file (default: stdin)
+    -o, --output <FILE>           Output file (default: stdout)
+    -I, --in-place                Edit files in-place
+    -b, --backup <SUFFIX>         Create backup with suffix when editing in-place
+
+    # Multi-File Processing
+    -R, --recursive               Recursively process directories
+    -g, --glob <PATTERN>          Only process files matching glob pattern
+    -e, --exclude <PATTERN>       Exclude files matching glob pattern
+        --no-ignore               Don't respect .gitignore files
+        --hidden                  Include hidden files
+        --max-depth <NUM>         Maximum directory recursion depth
+    -j, --parallel                Process files in parallel
+        --progress                Show progress indicator
+
+    # Output Modes
+        --count                   Only show count of matches per file
+    -l, --files-with-matches      Only list files containing matches
+    -L, --files-without-matches   Only list files not containing matches
+    -q, --quiet                   Quiet mode - only set exit code
+        --json                    Output results as JSON
+
+    # Context Lines
+    -B, --before-context <NUM>    Show NUM lines before each match
+    -A, --after-context <NUM>     Show NUM lines after each match
+    -C, --context <NUM>           Show NUM lines before and after each match
+
+    # Inspection & Debugging
+        --inspect                 Enable inspection mode
+        --interactive             Enable interactive inspection
+        --dry-run                 Validate config, or preview changes with -I
+        --performance             Show performance metrics
+
+    # Pattern Libraries
+        --list-patterns <FILE>    List patterns from a pattern library
         --validate-library <FILE> Validate a pattern library file
-    -i, --input <FILE>          Input file (default: stdin)
-    -o, --output <FILE>         Output file (default: stdout)
-    -h, --help                  Print help information
-    -V, --version               Print version information
+
+    # Utilities
+        --compass                 Run COMPASS strategic analysis
+        --validate                Validate configuration only
+        --export <FORMAT>         Export configuration (toml or json)
+        --completions <SHELL>     Generate shell completion script
+    -h, --help                    Print help information
+    -V, --version                 Print version information
 ```
 
 ## JSON Output
@@ -312,30 +366,109 @@ The integrated COMPASS (Clarify, Orient, Map, Pause, Architect, Synthesize) fram
 
 Run `rexpipe --compass` to see the framework in action.
 
+## Multi-File Processing
+
+rexpipe supports processing multiple files with grep-like functionality:
+
+### Basic Multi-File Operations
+```bash
+# Process all .log files in current directory
+rexpipe -p 'ERROR' *.log
+
+# Recursively search directories
+rexpipe -p 'TODO' -R src/
+
+# Filter by glob pattern
+rexpipe -p 'FIXME' -R -g '*.rs' .
+
+# Exclude patterns
+rexpipe -p 'debug' -R -e '*.test.js' -e 'node_modules/*' src/
+```
+
+### Grep-Like Output Modes
+```bash
+# List only files containing matches
+rexpipe -p 'password' -l -R .
+
+# List files NOT containing a pattern
+rexpipe -p 'Copyright' -L -R src/
+
+# Count matches per file
+rexpipe -p 'TODO|FIXME' --count -R src/
+
+# Quiet mode (just set exit code)
+rexpipe -p 'ERROR' -q server.log && echo "Found errors"
+```
+
+### In-Place Editing
+```bash
+# Edit files in-place
+rexpipe -p 'old_api' -r 'new_api' -I -R -g '*.py' src/
+
+# Create backups before editing
+rexpipe -p 'localhost' -r 'production.example.com' -I -b .bak config/
+
+# Preview changes with dry-run
+rexpipe -p 'v1' -r 'v2' -I --dry-run -R -g '*.json' .
+```
+
+### Parallel Processing
+```bash
+# Process files in parallel for large codebases
+rexpipe -p 'deprecated' -R -j --progress src/
+```
+
 ## Examples
 
 ### Log Processing
 ```bash
 # Clean server logs
-rexpipe --config examples/log-cleanup.toml < server.log
+rexpipe -c examples/log-cleanup.toml < server.log
 
 # Debug pattern matching
-rexpipe --pattern 'ERROR.*user_id=(\d+)' --inspect < server.log
+rexpipe -p 'ERROR.*user_id=(\d+)' --inspect < server.log
+
+# Extract only errors (using pattern library)
+rexpipe -c examples/log-errors.toml < application.log
+
+# Sanitize logs (redact PII using pattern library)
+rexpipe -c examples/log-sanitize.toml < application.log
 ```
 
 ### Data Transformation
 ```bash
 # Process CSV data
-rexpipe --config examples/data-transform.toml < customers.csv
+rexpipe -c examples/data-transform.toml < customers.csv
 
 # Interactive pattern testing
-rexpipe --pattern '(\w+),(\w+@[\w.]+)' --inspect --interactive < data.csv
+rexpipe -p '(\w+),(\w+@[\w.]+)' --inspect --interactive < data.csv
+```
+
+### Multi-File Search
+```bash
+# Find all TODO comments in Rust files
+rexpipe -p 'TODO|FIXME|HACK' -R -g '*.rs' src/
+
+# Search with context lines
+rexpipe -p 'panic!' -C 3 -R -g '*.rs' src/
+
+# JSON output for scripting
+rexpipe -p 'unsafe' -R -g '*.rs' --json src/
+```
+
+### In-Place Refactoring
+```bash
+# Rename a function across codebase
+rexpipe -p 'old_function_name' -r 'new_function_name' -I -R -g '*.py' src/
+
+# Update API version in configs
+rexpipe -p 'api/v1' -r 'api/v2' -I -R -g '*.yaml' config/
 ```
 
 ### Performance Analysis
 ```bash
 # Show processing metrics
-rexpipe --config pipeline.toml --performance < large-file.txt
+rexpipe -c pipeline.toml --performance < large-file.txt
 ```
 
 ### Dry-Run Preview
