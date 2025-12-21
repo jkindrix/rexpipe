@@ -252,10 +252,11 @@ impl std::str::FromStr for DataFormat {
 }
 
 /// A universal data value that can represent any structured data.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(untagged)]
 pub enum DataValue {
     /// Null value
+    #[default]
     Null,
     /// Boolean value
     Bool(bool),
@@ -269,12 +270,6 @@ pub enum DataValue {
     Array(Vec<DataValue>),
     /// Object/map of key-value pairs
     Object(BTreeMap<String, DataValue>),
-}
-
-impl Default for DataValue {
-    fn default() -> Self {
-        Self::Null
-    }
 }
 
 impl DataValue {
@@ -305,7 +300,7 @@ impl DataValue {
         let values: std::result::Result<Vec<DataValue>, _> = content
             .lines()
             .filter(|l| !l.trim().is_empty())
-            .map(|line| Self::from_json(line))
+            .map(Self::from_json)
             .collect();
         Ok(Self::Array(values?))
     }
@@ -771,7 +766,7 @@ impl DataValue {
                 value.query_parts(rest)
             }
             (Self::Array(arr), PathPart::Index(idx)) => {
-                let value = arr.get(*idx).ok_or_else(|| DataError::IndexOutOfBounds {
+                let value = arr.get(*idx).ok_or(DataError::IndexOutOfBounds {
                     index: *idx,
                     length: arr.len(),
                 })?;
