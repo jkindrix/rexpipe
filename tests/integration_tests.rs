@@ -113,12 +113,16 @@ fn test_inspection_mode() {
     let result = inspector.inspect_stream(reader).unwrap();
 
     assert_eq!(result.total_lines, 1);
-    assert!(result.total_matches >= 3); // Should find 123, 456, 789
+    assert_eq!(result.total_matches, 3, "Should find exactly 123, 456, 789");
     assert_eq!(result.line_matches.len(), 1);
 
     let line_match = &result.line_matches[0];
     assert_eq!(line_match.line_number, 1);
-    assert!(line_match.matches.len() >= 3);
+    assert_eq!(line_match.matches.len(), 3, "Should have exactly 3 matches");
+
+    // Verify the actual matched values
+    let match_values: Vec<&str> = line_match.matches.iter().map(|m| m.full_match.as_str()).collect();
+    assert_eq!(match_values, vec!["123", "456", "789"]);
 }
 
 #[test]
@@ -1640,6 +1644,362 @@ fn test_parallel_processing_many_files() {
 // Async Multi-File Processing Tests
 // =====================================================
 
+// =====================================================
+// Edge Case Tests - Timeouts and I/O Failures
+// =====================================================
+
+/// Test max line length setting can be configured
+#[test]
+fn test_max_line_length_configuration() {
+    use rexpipe::pipeline::MaxLineAction;
+
+    // Test that settings can be configured without error
+    let settings = PipelineSettings {
+        max_line_length: 500,
+        max_line_action: MaxLineAction::Skip,
+        ..Default::default()
+    };
+
+    let config = PipelineConfig {
+        name: Some("Max Line Config Test".to_string()),
+        description: None,
+        version: None,
+        patterns_include: Vec::new(),
+        settings,
+        step: vec![PipelineStep {
+            step_type: StepType::Substitute,
+            pattern: r"\d+".to_string(),
+            replacement: Some("[NUM]".to_string()),
+            action: None,
+            transform: None,
+            flags: Some(vec![RegexFlag::Global]),
+            description: None,
+            enabled: Some(true),
+        }],
+    };
+
+    // Should create processor successfully
+    let processor = StreamProcessor::new(config);
+    assert!(processor.is_ok());
+}
+
+/// Test max line action truncate configuration
+#[test]
+fn test_max_line_action_truncate_config() {
+    use rexpipe::pipeline::MaxLineAction;
+
+    // Test that truncate action can be configured
+    let settings = PipelineSettings {
+        max_line_length: 150,
+        max_line_action: MaxLineAction::Truncate,
+        ..Default::default()
+    };
+
+    let config = PipelineConfig {
+        name: Some("Max Line Truncate Test".to_string()),
+        description: None,
+        version: None,
+        patterns_include: Vec::new(),
+        settings,
+        step: vec![PipelineStep {
+            step_type: StepType::Substitute,
+            pattern: r"\d+".to_string(),
+            replacement: Some("[NUM]".to_string()),
+            action: None,
+            transform: None,
+            flags: Some(vec![RegexFlag::Global]),
+            description: None,
+            enabled: Some(true),
+        }],
+    };
+
+    // Should create processor successfully with truncate action
+    let processor = StreamProcessor::new(config);
+    assert!(processor.is_ok());
+}
+
+/// Test processing empty file (edge case for I/O)
+#[test]
+fn test_empty_stream_processing() {
+    let config = PipelineConfig::from_inline_pattern(r"\d+", Some("[NUM]"));
+    let mut processor = StreamProcessor::new(config).unwrap();
+
+    let reader = Cursor::new("");
+    let mut output = Vec::new();
+
+    let result = processor.process_stream(reader, &mut output).unwrap();
+
+    assert_eq!(result.lines_processed, 0);
+    assert_eq!(result.transformations_applied, 0);
+    assert!(output.is_empty());
+}
+
+/// Test processing single line without newline
+#[test]
+fn test_single_line_no_newline() {
+    let input_data = "single line 123"; // No trailing newline
+
+    let config = PipelineConfig::from_inline_pattern(r"\d+", Some("[NUM]"));
+    let mut processor = StreamProcessor::new(config).unwrap();
+
+    let reader = Cursor::new(input_data);
+    let mut output = Vec::new();
+
+    let result = processor.process_stream(reader, &mut output).unwrap();
+    let output_str = String::from_utf8(output).unwrap();
+
+    assert_eq!(result.lines_processed, 1);
+    assert!(output_str.contains("[NUM]"));
+}
+
+/// Test processing with only whitespace lines
+#[test]
+fn test_whitespace_only_lines() {
+    let input_data = "   \n\t\t\n   \t   \n";
+
+    let config = PipelineConfig::from_inline_pattern(r"\d+", Some("[NUM]"));
+    let mut processor = StreamProcessor::new(config).unwrap();
+
+    let reader = Cursor::new(input_data);
+    let mut output = Vec::new();
+
+    let result = processor.process_stream(reader, &mut output).unwrap();
+    let output_str = String::from_utf8(output).unwrap();
+
+    // Should process all lines but find no matches
+    assert_eq!(result.lines_processed, 3);
+    assert_eq!(result.transformations_applied, 0);
+    // Output should preserve whitespace lines
+    assert!(!output_str.is_empty());
+}
+
+/// Test processing with very large number of lines
+#[test]
+fn test_large_line_count() {
+    let line_count = 10000;
+    let mut input_data = String::new();
+    for i in 0..line_count {
+        input_data.push_str(&format!("Line {} with number\n", i));
+    }
+
+    let config = PipelineConfig::from_inline_pattern(r"\d+", Some("[X]"));
+    let mut processor = StreamProcessor::new(config).unwrap();
+
+    let reader = Cursor::new(input_data);
+    let mut output = Vec::new();
+
+    let result = processor.process_stream(reader, &mut output).unwrap();
+
+    assert_eq!(result.lines_processed, line_count);
+    assert_eq!(result.transformations_applied, line_count);
+}
+
+/// Test processing binary-like content (should handle gracefully)
+#[test]
+fn test_binary_like_content() {
+    // Create content with null bytes mixed with text
+    let mut input_bytes = Vec::new();
+    input_bytes.extend_from_slice(b"Normal line 123\n");
+    // Note: actual binary with null bytes will fail UTF-8 conversion
+    // This tests near-binary content that's still valid UTF-8
+    input_bytes.extend_from_slice("Line with unicode 🔥 456\n".as_bytes());
+
+    let config = PipelineConfig::from_inline_pattern(r"\d+", Some("[NUM]"));
+    let mut processor = StreamProcessor::new(config).unwrap();
+
+    let reader = Cursor::new(input_bytes);
+    let mut output = Vec::new();
+
+    let result = processor.process_stream(reader, &mut output).unwrap();
+    let output_str = String::from_utf8(output).unwrap();
+
+    assert!(result.lines_processed >= 2);
+    assert!(output_str.contains("[NUM]"));
+}
+
+/// Test I/O error on directory instead of file (multi-file processing)
+#[test]
+fn test_process_directory_path() {
+    let temp_dir = TempDir::new().unwrap();
+
+    let config = PipelineConfig::from_inline_pattern(r"\d+", Some("[NUM]"));
+    let options = FileProcessingOptions::default();
+
+    let processor = MultiFileProcessor::new(config, options);
+    // Pass the directory as a file path (should fail gracefully)
+    let paths = vec![temp_dir.path().to_path_buf()];
+    let result = processor.process_files(&paths);
+
+    // Should handle gracefully - either error or skip the directory
+    if let Ok(res) = result {
+        // Directory shouldn't be processed as a file
+        assert_eq!(res.files_processed, 0);
+    }
+    // Error result is also acceptable
+}
+
+/// Test file permission issues (simulated by non-existent file)
+#[test]
+fn test_nonexistent_file_processing() {
+    let config = PipelineConfig::from_inline_pattern(r"\d+", Some("[NUM]"));
+    let options = FileProcessingOptions::default();
+
+    let processor = MultiFileProcessor::new(config, options);
+    let paths = vec![std::path::PathBuf::from("/nonexistent/path/to/file.txt")];
+    let result = processor.process_files(&paths);
+
+    // Should return an error or have error in result
+    if let Ok(res) = result {
+        assert!(res.files_processed == 0 || !res.errors.is_empty());
+    }
+}
+
+/// Test quiet mode processing (no output, only exit code)
+#[test]
+fn test_quiet_mode_processing() {
+    let temp_dir = TempDir::new().unwrap();
+    let file_path = temp_dir.path().join("test.txt");
+    let original_content = "Original 123 content";
+    fs::write(&file_path, original_content).unwrap();
+
+    let config = PipelineConfig::from_inline_pattern(r"\d+", Some("[NUM]"));
+    let options = FileProcessingOptions {
+        quiet: true,
+        ..Default::default()
+    };
+
+    let processor = MultiFileProcessor::new(config, options);
+    let paths = vec![file_path.clone()];
+    let result = processor.process_files(&paths).unwrap();
+
+    // File should NOT be modified without in_place
+    let content = fs::read_to_string(&file_path).unwrap();
+    assert_eq!(content, original_content);
+
+    // But should report what was processed
+    assert_eq!(result.files_processed, 1);
+}
+
+/// Test multiple errors in batch processing
+#[test]
+fn test_multiple_file_errors() {
+    let temp_dir = TempDir::new().unwrap();
+
+    // Create one valid file
+    let valid_file = temp_dir.path().join("valid.txt");
+    fs::write(&valid_file, "Valid 123 content").unwrap();
+
+    let config = PipelineConfig::from_inline_pattern(r"\d+", Some("[NUM]"));
+    let options = FileProcessingOptions::default();
+
+    let processor = MultiFileProcessor::new(config, options);
+    let paths = vec![
+        std::path::PathBuf::from("/nonexistent/file1.txt"),
+        valid_file,
+        std::path::PathBuf::from("/nonexistent/file2.txt"),
+    ];
+    let result = processor.process_files(&paths).unwrap();
+
+    // Should process the valid file despite errors with others
+    assert!(result.files_processed >= 1);
+    assert!(!result.errors.is_empty() || result.files_processed < 3);
+}
+
+/// Test context lines with edge cases (first/last line)
+#[test]
+fn test_context_lines_at_boundaries() {
+    let input_data = "Line 1\nLine 2\nLine 3 match 123\nLine 4\nLine 5";
+
+    let config = PipelineConfig {
+        name: Some("Context Boundary Test".to_string()),
+        description: None,
+        version: None,
+        patterns_include: Vec::new(),
+        settings: PipelineSettings {
+            context_before: 5,  // More than available lines before
+            context_after: 5,   // More than available lines after
+            ..Default::default()
+        },
+        step: vec![PipelineStep {
+            step_type: StepType::Substitute,
+            pattern: r"match \d+".to_string(),
+            replacement: Some("[MATCHED]".to_string()),
+            action: None,
+            transform: None,
+            flags: None,
+            description: None,
+            enabled: Some(true),
+        }],
+    };
+
+    let mut processor = StreamProcessor::new(config).unwrap();
+    let reader = Cursor::new(input_data);
+    let mut output = Vec::new();
+
+    let result = processor.process_stream(reader, &mut output).unwrap();
+
+    // Should handle boundary conditions gracefully
+    assert!(result.lines_processed == 5);
+}
+
+/// Test pattern that matches entire line
+#[test]
+fn test_full_line_match() {
+    let input_data = "123\nabc\n456";
+
+    let config = PipelineConfig::from_inline_pattern(r"^\d+$", Some("[ALL_DIGITS]"));
+    let mut processor = StreamProcessor::new(config).unwrap();
+
+    let reader = Cursor::new(input_data);
+    let mut output = Vec::new();
+
+    processor.process_stream(reader, &mut output).unwrap();
+    let output_str = String::from_utf8(output).unwrap();
+
+    // Lines with only digits should be completely replaced
+    assert!(output_str.contains("[ALL_DIGITS]"));
+    assert!(output_str.contains("abc")); // Non-matching line preserved
+}
+
+/// Test overlapping patterns (regex matches overlapping regions)
+#[test]
+fn test_overlapping_matches() {
+    let input_data = "aaaa";
+
+    let config = PipelineConfig::from_inline_pattern(r"aa", Some("[X]"));
+    let mut processor = StreamProcessor::new(config).unwrap();
+
+    let reader = Cursor::new(input_data);
+    let mut output = Vec::new();
+
+    processor.process_stream(reader, &mut output).unwrap();
+    let output_str = String::from_utf8(output).unwrap();
+
+    // With non-overlapping matching, should get "[X][X]" (two matches)
+    // or "[X]aa" (first match only, depending on global flag)
+    assert!(output_str.contains("[X]"));
+}
+
+/// Test literal replacement string (no regex special chars)
+#[test]
+fn test_literal_replacement_string() {
+    let input_data = "test 123 value";
+
+    // Simple literal replacement
+    let config = PipelineConfig::from_inline_pattern(r"\d+", Some("NUMBER"));
+    let mut processor = StreamProcessor::new(config).unwrap();
+
+    let reader = Cursor::new(input_data);
+    let mut output = Vec::new();
+
+    processor.process_stream(reader, &mut output).unwrap();
+    let output_str = String::from_utf8(output).unwrap();
+
+    // Should handle literal replacement
+    assert!(output_str.contains("NUMBER"));
+    assert!(!output_str.contains("123"));
+}
+
 #[cfg(feature = "async")]
 mod async_tests {
     use super::*;
@@ -1659,7 +2019,7 @@ mod async_tests {
 
         let processor = AsyncMultiFileProcessor::new(config, options);
         let paths = vec![file1_path, file2_path];
-        let result = processor.process_files(&paths).await.unwrap();
+        let result = processor.process_files_async(&paths).await.unwrap();
 
         assert_eq!(result.files_processed, 2);
         assert!(result.files_matched > 0);
@@ -1680,7 +2040,7 @@ mod async_tests {
 
         let processor = AsyncMultiFileProcessor::new(config, options);
         let paths = vec![file_path.clone()];
-        let result = processor.process_files(&paths).await.unwrap();
+        let result = processor.process_files_async(&paths).await.unwrap();
 
         assert_eq!(result.files_processed, 1);
 
