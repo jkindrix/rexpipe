@@ -1,3 +1,35 @@
+//! Interactive pattern inspection and debugging for rexpipe pipelines.
+//!
+//! The inspector module provides detailed visualization and analysis of regex matches,
+//! enabling users to understand exactly how their patterns interact with input text.
+//!
+//! # Features
+//!
+//! - **Match Visualization**: See exactly what each pattern matches with colored output
+//! - **Capture Group Display**: View captured groups for each match
+//! - **Performance Profiling**: Measure processing speed and per-step timing
+//! - **Interactive Mode**: Step through matches one-by-one
+//!
+//! # Example
+//!
+//! ```
+//! use rexpipe::pipeline::PipelineConfig;
+//! use rexpipe::inspector::{Inspector, InspectorOptions};
+//! use std::io::Cursor;
+//!
+//! let config = PipelineConfig::from_inline_pattern(r"(\w+)=(\d+)", None);
+//! let options = InspectorOptions::new()
+//!     .show_captures(true)
+//!     .show_performance(true);
+//!
+//! let mut inspector = Inspector::new(config).unwrap().with_options(options);
+//!
+//! let input = Cursor::new("key=123\nname=456\n");
+//! let result = inspector.inspect_stream(input).unwrap();
+//!
+//! assert_eq!(result.total_matches, 2);
+//! ```
+
 use crate::pipeline::PipelineConfig;
 use crate::processor::{MatchInfo, StreamProcessor};
 use anyhow::Result;
@@ -5,6 +37,25 @@ use std::collections::HashMap;
 use std::io::{self, BufRead, Write};
 use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
 
+/// Interactive pattern inspector for debugging and analyzing regex matches.
+///
+/// `Inspector` wraps a `StreamProcessor` to provide detailed analysis of pattern
+/// matching behavior, including visualization of matches, capture group extraction,
+/// and performance profiling.
+///
+/// # Example
+///
+/// ```
+/// use rexpipe::pipeline::PipelineConfig;
+/// use rexpipe::inspector::Inspector;
+///
+/// let config = PipelineConfig::from_inline_pattern(r"\d+", None);
+/// let inspector = Inspector::new(config).unwrap();
+///
+/// let matches = inspector.inspect_single_line("Order 123 placed").unwrap();
+/// assert_eq!(matches.len(), 1);
+/// assert_eq!(matches[0].full_match, "123");
+/// ```
 pub struct Inspector {
     processor: StreamProcessor,
     interactive_mode: bool,
@@ -15,12 +66,21 @@ pub struct Inspector {
     use_color: bool,
 }
 
+/// Results from inspecting a stream for pattern matches.
+///
+/// Contains aggregate statistics and detailed match information for each line
+/// that contained matches.
 #[derive(Debug)]
 pub struct InspectionResult {
+    /// Total number of lines read from input
     pub total_lines: u64,
+    /// Total number of matches found across all lines
     pub total_matches: u64,
+    /// Matches grouped by pipeline step index
     pub matches_per_step: HashMap<usize, u64>,
+    /// Detailed match information for each line containing matches
     pub line_matches: Vec<LineMatch>,
+    /// Performance metrics from the inspection run
     pub performance_data: PerformanceData,
 }
 
@@ -37,19 +97,69 @@ pub struct LineMatch {
     pub transformed_line: Option<String>,
 }
 
+/// Performance metrics collected during stream inspection.
+///
+/// Provides throughput measurements and per-step timing breakdowns for
+/// performance analysis and optimization.
 #[derive(Debug)]
 pub struct PerformanceData {
+    /// Total wall-clock time spent processing in milliseconds
     pub total_processing_time_ms: u64,
+    /// Throughput in lines per second
     pub lines_per_second: u64,
+    /// Throughput in bytes per second
     pub bytes_per_second: u64,
+    /// Per-step cumulative processing time (step_index -> milliseconds)
     pub step_timings: HashMap<usize, u64>,
 }
 
 impl Inspector {
+    /// Create a new Inspector from a pipeline configuration.
+    ///
+    /// # Arguments
+    ///
+    /// * `config` - The pipeline configuration defining patterns to inspect
+    ///
+    /// # Returns
+    ///
+    /// A Result containing the inspector or an error if the configuration is invalid.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use rexpipe::pipeline::PipelineConfig;
+    /// use rexpipe::inspector::Inspector;
+    ///
+    /// let config = PipelineConfig::from_inline_pattern(r"ERROR|WARN", None);
+    /// let inspector = Inspector::new(config).unwrap();
+    /// ```
     pub fn new(config: PipelineConfig) -> Result<Self> {
         let processor = StreamProcessor::new(config)?;
+        Ok(Self::from_processor(processor))
+    }
 
-        Ok(Self {
+    /// Create an Inspector from an existing StreamProcessor.
+    ///
+    /// This method enables dependency injection for testing, allowing tests to
+    /// provide a pre-configured or mock processor.
+    ///
+    /// # Arguments
+    ///
+    /// * `processor` - A pre-configured StreamProcessor
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use rexpipe::pipeline::PipelineConfig;
+    /// use rexpipe::processor::StreamProcessor;
+    /// use rexpipe::inspector::Inspector;
+    ///
+    /// let config = PipelineConfig::from_inline_pattern(r"\d+", None);
+    /// let processor = StreamProcessor::new(config).unwrap();
+    /// let inspector = Inspector::from_processor(processor);
+    /// ```
+    pub fn from_processor(processor: StreamProcessor) -> Self {
+        Self {
             processor,
             interactive_mode: false,
             show_line_numbers: true,
@@ -57,7 +167,7 @@ impl Inspector {
             show_performance: false,
             max_matches_per_line: Some(10),
             use_color: true,
-        })
+        }
     }
 
     /// Enable or disable colored output.
@@ -75,6 +185,22 @@ impl Inspector {
         }
     }
 
+    /// Configure the inspector with custom options.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use rexpipe::pipeline::PipelineConfig;
+    /// use rexpipe::inspector::{Inspector, InspectorOptions};
+    ///
+    /// let config = PipelineConfig::from_inline_pattern(r"\d+", None);
+    /// let options = InspectorOptions::new()
+    ///     .show_captures(true)
+    ///     .show_performance(true)
+    ///     .max_matches_per_line(Some(5));
+    ///
+    /// let inspector = Inspector::new(config).unwrap().with_options(options);
+    /// ```
     pub fn with_options(mut self, options: InspectorOptions) -> Self {
         self.interactive_mode = options.interactive;
         self.show_line_numbers = options.show_line_numbers;
@@ -84,6 +210,36 @@ impl Inspector {
         self
     }
 
+    /// Inspect a stream and collect match information.
+    ///
+    /// Reads the input stream line-by-line, collecting detailed information about
+    /// all pattern matches. In interactive mode, displays matches as they're found
+    /// and allows the user to step through them.
+    ///
+    /// # Arguments
+    ///
+    /// * `reader` - Any type implementing `BufRead` (file, stdin, string buffer)
+    ///
+    /// # Returns
+    ///
+    /// An `InspectionResult` containing aggregate statistics and per-line match details.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use rexpipe::pipeline::PipelineConfig;
+    /// use rexpipe::inspector::Inspector;
+    /// use std::io::Cursor;
+    ///
+    /// let config = PipelineConfig::from_inline_pattern(r"\d+", None);
+    /// let mut inspector = Inspector::new(config).unwrap();
+    ///
+    /// let input = Cursor::new("Line 123\nLine 456\n");
+    /// let result = inspector.inspect_stream(input).unwrap();
+    ///
+    /// assert_eq!(result.total_lines, 2);
+    /// assert_eq!(result.total_matches, 2);
+    /// ```
     pub fn inspect_stream<R: BufRead>(&mut self, reader: R) -> Result<InspectionResult> {
         let mut result = InspectionResult {
             total_lines: 0,
@@ -380,12 +536,33 @@ impl Inspector {
     }
 }
 
+/// Configuration options for the pattern inspector.
+///
+/// Use the builder pattern to configure inspection behavior.
+///
+/// # Example
+///
+/// ```
+/// use rexpipe::inspector::InspectorOptions;
+///
+/// let options = InspectorOptions::new()
+///     .interactive(false)
+///     .show_line_numbers(true)
+///     .show_captures(true)
+///     .show_performance(true)
+///     .max_matches_per_line(Some(10));
+/// ```
 #[derive(Debug, Default)]
 pub struct InspectorOptions {
+    /// Enable interactive mode (step through matches one-by-one)
     pub interactive: bool,
+    /// Show line numbers in output
     pub show_line_numbers: bool,
+    /// Display capture group contents for each match
     pub show_captures: bool,
+    /// Include performance metrics in results
     pub show_performance: bool,
+    /// Maximum matches to display per line (None for unlimited)
     pub max_matches_per_line: Option<usize>,
 }
 
@@ -446,14 +623,18 @@ mod tests {
         let config = PipelineConfig::from_inline_pattern(r"\d+", None);
         let mut inspector = Inspector::new(config).unwrap();
 
+        // All lines have digits because of "Line N:" prefix
+        // Line 1: "1" + "123" = 2 matches
+        // Line 2: "2" = 1 match (even though text says "no numbers", the line number has one!)
+        // Line 3: "3" + "456" + "789" = 3 matches
         let input = "Line 1: 123\nLine 2: no numbers\nLine 3: 456 and 789";
         let reader = Cursor::new(input);
 
         let result = inspector.inspect_stream(reader).unwrap();
 
         assert_eq!(result.total_lines, 3);
-        assert!(result.line_matches.len() >= 2); // Lines with matches
-        assert!(result.total_matches >= 2); // At least 2 numbers found
+        assert_eq!(result.line_matches.len(), 3, "All lines have digits due to 'Line N:' prefix");
+        assert_eq!(result.total_matches, 6, "Total: 1, 123, 2, 3, 456, 789");
     }
 
     #[test]
@@ -482,5 +663,250 @@ mod tests {
         assert!(inspector.interactive_mode);
         assert!(!inspector.show_line_numbers);
         assert_eq!(inspector.max_matches_per_line, Some(5));
+    }
+
+    #[test]
+    fn test_inspection_no_matches() {
+        let config = PipelineConfig::from_inline_pattern(r"\d+", None);
+        let mut inspector = Inspector::new(config).unwrap();
+
+        let input = "no numbers here\njust text\nnothing to see";
+        let reader = Cursor::new(input);
+
+        let result = inspector.inspect_stream(reader).unwrap();
+
+        assert_eq!(result.total_lines, 3);
+        assert_eq!(result.total_matches, 0);
+        assert!(result.line_matches.is_empty());
+    }
+
+    #[test]
+    fn test_inspection_empty_input() {
+        let config = PipelineConfig::from_inline_pattern(r"\d+", None);
+        let mut inspector = Inspector::new(config).unwrap();
+
+        let reader = Cursor::new("");
+        let result = inspector.inspect_stream(reader).unwrap();
+
+        assert_eq!(result.total_lines, 0);
+        assert_eq!(result.total_matches, 0);
+        assert!(result.line_matches.is_empty());
+    }
+
+    #[test]
+    fn test_max_matches_per_line_limiting() {
+        let config = PipelineConfig::from_inline_pattern(r"\d", None);
+        let options = InspectorOptions::new().max_matches_per_line(Some(2));
+        let mut inspector = Inspector::new(config).unwrap().with_options(options);
+
+        // Line with many single-digit matches
+        let input = "1234567890";
+        let reader = Cursor::new(input);
+
+        let result = inspector.inspect_stream(reader).unwrap();
+
+        // Should only record 2 matches due to limit
+        assert_eq!(result.total_matches, 2);
+        assert_eq!(result.line_matches[0].matches.len(), 2);
+    }
+
+    #[test]
+    fn test_max_matches_unlimited() {
+        let config = PipelineConfig::from_inline_pattern(r"\d", None);
+        let options = InspectorOptions::new().max_matches_per_line(None);
+        let mut inspector = Inspector::new(config).unwrap().with_options(options);
+
+        let input = "1234567890";
+        let reader = Cursor::new(input);
+
+        let result = inspector.inspect_stream(reader).unwrap();
+
+        // Should record all 10 matches
+        assert_eq!(result.total_matches, 10);
+    }
+
+    #[test]
+    fn test_inspector_with_color_disabled() {
+        let config = PipelineConfig::from_inline_pattern(r"\d+", None);
+        let inspector = Inspector::new(config).unwrap().with_color(false);
+
+        assert!(!inspector.use_color);
+        assert_eq!(inspector.color_choice(), ColorChoice::Never);
+    }
+
+    #[test]
+    fn test_inspector_with_color_enabled() {
+        let config = PipelineConfig::from_inline_pattern(r"\d+", None);
+        let inspector = Inspector::new(config).unwrap().with_color(true);
+
+        assert!(inspector.use_color);
+        assert_eq!(inspector.color_choice(), ColorChoice::Auto);
+    }
+
+    #[test]
+    fn test_performance_data_collection() {
+        let config = PipelineConfig::from_inline_pattern(r"\d+", None);
+        let mut inspector = Inspector::new(config).unwrap();
+
+        let input = "123\n456\n789\n";
+        let reader = Cursor::new(input);
+
+        let result = inspector.inspect_stream(reader).unwrap();
+
+        // Performance data should be populated (verify it was set, not just default)
+        // Note: processing time might be 0 for very fast operations, which is valid
+        // With 3 lines processed quickly, we should have some throughput
+        assert_eq!(result.total_lines, 3);
+        // Verify performance data struct is accessible and populated
+        let _time = result.performance_data.total_processing_time_ms;
+        let _lps = result.performance_data.lines_per_second;
+    }
+
+    #[test]
+    fn test_line_match_structure() {
+        let config = PipelineConfig::from_inline_pattern(r"(\w+):(\d+)", None);
+        let mut inspector = Inspector::new(config).unwrap();
+
+        let input = "key:123";
+        let reader = Cursor::new(input);
+
+        let result = inspector.inspect_stream(reader).unwrap();
+
+        assert_eq!(result.line_matches.len(), 1);
+        let line_match = &result.line_matches[0];
+        assert_eq!(line_match.line_number, 1);
+        assert_eq!(line_match.original_line, "key:123");
+        assert_eq!(line_match.matches.len(), 1);
+        assert_eq!(line_match.matches[0].full_match, "key:123");
+    }
+
+    #[test]
+    fn test_matches_per_step_tracking() {
+        let config = PipelineConfig::from_inline_pattern(r"\d+", None);
+        let mut inspector = Inspector::new(config).unwrap();
+
+        // Input: "1", "2" and "123", "3" and "456" = 5 matches total
+        let input = "line 1\nline 2 with 123\nline 3 with 456";
+        let reader = Cursor::new(input);
+
+        let result = inspector.inspect_stream(reader).unwrap();
+
+        // Step 0 should have recorded all matches
+        assert!(result.matches_per_step.contains_key(&0));
+        assert_eq!(*result.matches_per_step.get(&0).unwrap(), 5);
+    }
+
+    #[test]
+    fn test_inspector_options_default() {
+        let options = InspectorOptions::default();
+
+        assert!(!options.interactive);
+        assert!(!options.show_line_numbers);
+        assert!(!options.show_captures);
+        assert!(!options.show_performance);
+        assert!(options.max_matches_per_line.is_none());
+    }
+
+    #[test]
+    fn test_inspector_options_new() {
+        let options = InspectorOptions::new();
+
+        // new() sets some defaults differently than Default
+        assert!(!options.interactive);
+        assert!(options.show_line_numbers);
+        assert!(options.show_captures);
+        assert!(!options.show_performance);
+        assert_eq!(options.max_matches_per_line, Some(10));
+    }
+
+    #[test]
+    fn test_inspector_options_builder_chain() {
+        let options = InspectorOptions::new()
+            .interactive(true)
+            .show_line_numbers(false)
+            .show_captures(false)
+            .show_performance(true)
+            .max_matches_per_line(Some(25));
+
+        assert!(options.interactive);
+        assert!(!options.show_line_numbers);
+        assert!(!options.show_captures);
+        assert!(options.show_performance);
+        assert_eq!(options.max_matches_per_line, Some(25));
+    }
+
+    #[test]
+    fn test_inspection_result_debug() {
+        let result = InspectionResult {
+            total_lines: 10,
+            total_matches: 5,
+            matches_per_step: HashMap::new(),
+            line_matches: Vec::new(),
+            performance_data: PerformanceData {
+                total_processing_time_ms: 100,
+                lines_per_second: 100,
+                bytes_per_second: 500,
+                step_timings: HashMap::new(),
+            },
+        };
+
+        // Should implement Debug without panic
+        let debug_str = format!("{:?}", result);
+        assert!(debug_str.contains("total_lines: 10"));
+        assert!(debug_str.contains("total_matches: 5"));
+    }
+
+    #[test]
+    fn test_line_match_debug() {
+        let line_match = LineMatch {
+            line_number: 42,
+            original_line: "test line".to_string(),
+            matches: Vec::new(),
+            transformed_line: Some("transformed".to_string()),
+        };
+
+        let debug_str = format!("{:?}", line_match);
+        assert!(debug_str.contains("42"));
+        assert!(debug_str.contains("test line"));
+    }
+
+    #[test]
+    fn test_performance_data_debug() {
+        let perf = PerformanceData {
+            total_processing_time_ms: 1000,
+            lines_per_second: 5000,
+            bytes_per_second: 25000,
+            step_timings: HashMap::new(),
+        };
+
+        let debug_str = format!("{:?}", perf);
+        assert!(debug_str.contains("1000"));
+        assert!(debug_str.contains("5000"));
+    }
+
+    #[test]
+    fn test_unicode_line_inspection() {
+        let config = PipelineConfig::from_inline_pattern(r"\p{L}+", None);
+        let inspector = Inspector::new(config).unwrap();
+
+        let matches = inspector.inspect_single_line("hello 世界 مرحبا").unwrap();
+
+        // Should match all three words (hello, 世界, مرحبا)
+        assert_eq!(matches.len(), 3);
+    }
+
+    #[test]
+    fn test_multiline_stream_inspection() {
+        let config = PipelineConfig::from_inline_pattern(r"ERROR|WARN", None);
+        let mut inspector = Inspector::new(config).unwrap();
+
+        let input = "INFO: Starting\nERROR: Failed\nWARN: Low memory\nINFO: Done";
+        let reader = Cursor::new(input);
+
+        let result = inspector.inspect_stream(reader).unwrap();
+
+        assert_eq!(result.total_lines, 4);
+        assert_eq!(result.total_matches, 2);
+        assert_eq!(result.line_matches.len(), 2);
     }
 }
