@@ -277,7 +277,7 @@ impl CompiledPattern {
     ///
     /// Why single-pass: Running the regex twice (once to count, once to replace) doubles
     /// CPU time for large inputs. By using a closure in replace_all, we increment a counter
-    /// during the replacement pass itself. For the standard regex engine, we use Cell<usize>
+    /// during the replacement pass itself. For the standard regex engine, we use `Cell<usize>`
     /// because Rust closures in replace_all are FnMut, but Cell provides interior mutability
     /// without requiring &mut self.
     pub fn replace_all_counting(&self, text: &str, replacement: &str) -> (String, usize) {
@@ -461,7 +461,7 @@ struct CompiledStep {
 /// # Construction
 ///
 /// This struct cannot be constructed outside of rexpipe due to `#[non_exhaustive]`.
-/// Use [`StreamProcessor::stats`] to obtain processing statistics.
+/// Use [`StreamProcessor::get_stats`] to obtain processing statistics.
 #[derive(Debug, Default)]
 #[non_exhaustive]
 pub struct ProcessorStats {

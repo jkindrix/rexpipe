@@ -454,7 +454,7 @@ impl PluginRegistry {
     /// ```
     ///
     /// Uses the default timeout of 30 seconds. For configurable timeout,
-    /// use [`execute_shell_with_timeout`].
+    /// use [`Self::execute_shell_with_timeout`].
     pub fn execute_shell(command: &str, input: &str) -> Result<String, String> {
         Self::execute_shell_with_timeout(command, input, 30)
     }

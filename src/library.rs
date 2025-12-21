@@ -90,10 +90,15 @@ impl ResolvedLibrary {
     /// Check if a pattern exists in the library.
     ///
     /// # Example
-    /// ```ignore
-    /// if library.contains("email") {
-    ///     println!("Email pattern is available");
-    /// }
+    ///
+    /// ```
+    /// use rexpipe::library::ResolvedLibrary;
+    ///
+    /// let mut library = ResolvedLibrary::new();
+    /// library.patterns.insert("email".to_string(), r"[\w.]+@[\w.]+".to_string());
+    ///
+    /// assert!(library.contains("email"));
+    /// assert!(!library.contains("unknown"));
     /// ```
     pub fn contains(&self, name: &str) -> bool {
         self.patterns.contains_key(name)
@@ -102,10 +107,16 @@ impl ResolvedLibrary {
     /// Get an iterator over all pattern names in the library.
     ///
     /// # Example
-    /// ```ignore
-    /// for name in library.pattern_names() {
-    ///     println!("Pattern: {}", name);
-    /// }
+    ///
+    /// ```
+    /// use rexpipe::library::ResolvedLibrary;
+    ///
+    /// let mut library = ResolvedLibrary::new();
+    /// library.patterns.insert("email".to_string(), r"[\w.]+@[\w.]+".to_string());
+    /// library.patterns.insert("phone".to_string(), r"\d{3}-\d{4}".to_string());
+    ///
+    /// let names: Vec<_> = library.pattern_names().collect();
+    /// assert_eq!(names.len(), 2);
     /// ```
     pub fn pattern_names(&self) -> impl Iterator<Item = &String> {
         self.patterns.keys()

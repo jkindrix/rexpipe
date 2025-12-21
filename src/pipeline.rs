@@ -472,14 +472,12 @@ impl PipelineConfig {
             .filter(|(_, s)| s.enabled.unwrap_or(true))
             .collect();
 
-        for i in 0..enabled_steps.len() {
-            let (idx1, step1) = enabled_steps[i];
+        for (i, &(idx1, step1)) in enabled_steps.iter().enumerate() {
             if !matches!(step1.step_type, StepType::Filter) {
                 continue;
             }
 
-            for j in (i + 1)..enabled_steps.len() {
-                let (idx2, step2) = enabled_steps[j];
+            for &(idx2, step2) in enabled_steps.iter().skip(i + 1) {
                 if !matches!(step2.step_type, StepType::Filter) {
                     continue;
                 }
@@ -593,7 +591,7 @@ impl PipelineConfig {
             {
                 errors.push(crate::error::ValidationError::step_error(
                     step_num,
-                    format!("Pattern uses reference syntax (${{...}}) but no libraries are loaded"),
+                    "Pattern uses reference syntax (${...}) but no libraries are loaded",
                     "Add 'patterns_include' to your config or use --library flag",
                 ));
             }
@@ -621,14 +619,12 @@ impl PipelineConfig {
             .filter(|(_, s)| s.enabled.unwrap_or(true))
             .collect();
 
-        for i in 0..enabled_steps.len() {
-            let (idx1, step1) = enabled_steps[i];
+        for (i, &(idx1, step1)) in enabled_steps.iter().enumerate() {
             if !matches!(step1.step_type, StepType::Filter) {
                 continue;
             }
 
-            for j in (i + 1)..enabled_steps.len() {
-                let (idx2, step2) = enabled_steps[j];
+            for &(idx2, step2) in enabled_steps.iter().skip(i + 1) {
                 if !matches!(step2.step_type, StepType::Filter) {
                     continue;
                 }

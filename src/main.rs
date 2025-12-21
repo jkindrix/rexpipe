@@ -36,6 +36,9 @@ use rexpipe::processor::StreamProcessor;
 /// ```
 mod exit_codes {
     /// Success - operation completed normally with matches found.
+    /// Note: This constant exists for documentation completeness. In practice,
+    /// success is indicated by main() completing normally (implicit exit 0).
+    #[allow(dead_code)]
     pub const SUCCESS: i32 = 0;
     /// No matches found (grep-like behavior: not an error, just no results)
     pub const NO_MATCHES: i32 = 1;
@@ -760,7 +763,9 @@ fn build_file_processing_options(matches: &clap::ArgMatches) -> Result<FileProce
     // Parse binary mode
     let binary_mode = matches
         .get_one::<String>("binary")
-        .and_then(|s| rexpipe::BinaryMode::from_str(s))
+        .map(|s| s.parse::<rexpipe::BinaryMode>())
+        .transpose()
+        .map_err(|e| anyhow!("Invalid binary mode: {}", e))?
         .unwrap_or_default();
 
     // Set up graceful shutdown handling

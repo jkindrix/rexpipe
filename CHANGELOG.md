@@ -11,10 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Updated all dependencies to latest compatible versions
 - Migrated to `anyhow` for application error handling with rich context
 - Added `thiserror` for structured error types (foundation for future refinement)
-- Fixed clippy warnings (Entry API usage, recursion parameter)
+- Fixed all clippy warnings (Entry API usage, recursion parameter, iterator idioms)
+- Improved `BinaryMode` to implement `FromStr` trait for idiomatic parsing
+- Improved documentation with proper intra-doc links and HTML escaping
 
 ### Added
 - Crate-level documentation with usage examples and doc-tests
+- Working doctests for `ResolvedLibrary::contains` and `ResolvedLibrary::pattern_names`
 
 ## [1.1.0] - 2024-12-15
 

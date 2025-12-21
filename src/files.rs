@@ -103,14 +103,21 @@ pub enum BinaryMode {
     Skip,
 }
 
-impl BinaryMode {
+impl std::str::FromStr for BinaryMode {
+    type Err = String;
+
     /// Parse a binary mode from a string.
-    pub fn from_str(s: &str) -> Option<Self> {
+    ///
+    /// Valid values (case-insensitive): "auto", "text", "skip"
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
-            "auto" => Some(BinaryMode::Auto),
-            "text" => Some(BinaryMode::Text),
-            "skip" => Some(BinaryMode::Skip),
-            _ => None,
+            "auto" => Ok(BinaryMode::Auto),
+            "text" => Ok(BinaryMode::Text),
+            "skip" => Ok(BinaryMode::Skip),
+            _ => Err(format!(
+                "Invalid binary mode '{}'. Valid options: auto, text, skip",
+                s
+            )),
         }
     }
 }
@@ -260,6 +267,7 @@ impl ShutdownSignal {
     /// 1. This is called rarely (only on Ctrl+C), so performance isn't critical
     /// 2. We need the store to be immediately visible to all threads
     /// 3. Signal handlers have complex memory visibility requirements
+    ///
     /// A weaker ordering could cause worker threads to miss the shutdown signal.
     pub fn request_shutdown(&self) {
         self.flag.store(true, Ordering::SeqCst);
