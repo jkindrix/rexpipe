@@ -4,10 +4,18 @@ use crate::pipeline::{
     RegexFlag, StepResult, StepType, TransformAction,
 };
 use anyhow::{Context, Result};
+use log::{debug, trace};
 use regex::{Regex, RegexBuilder};
 use std::collections::{HashMap, VecDeque};
 use std::io::{BufRead, Write};
+#[cfg(feature = "pcre")]
+use std::sync::LazyLock;
 use std::time::Instant;
+
+/// Pre-compiled regex for detecting repetition patterns like `{10000}` in ReDoS analysis
+#[cfg(feature = "pcre")]
+static REPETITION_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\{(\d+)\}").expect("invalid repetition regex"));
 
 #[cfg(feature = "pcre")]
 use fancy_regex::Regex as FancyRegex;
@@ -17,8 +25,6 @@ use fancy_regex::Regex as FancyRegex;
 struct ContextLine {
     line_number: u64,
     content: String,
-    #[allow(dead_code)]
-    is_match: bool,
 }
 
 pub struct StreamProcessor {
@@ -81,6 +87,70 @@ impl CompiledPattern {
             CompiledPattern::Fixed(s) => text.replacen(s, replacement, 1),
             #[cfg(feature = "pcre")]
             CompiledPattern::Pcre(re) => re.replace(text, replacement).to_string(),
+        }
+    }
+
+    /// Replace all matches and return both the result and match count in a single pass.
+    /// This avoids running the regex twice (once to count, once to replace).
+    pub fn replace_all_counting(&self, text: &str, replacement: &str) -> (String, usize) {
+        match self {
+            CompiledPattern::Standard(re) => {
+                use std::cell::Cell;
+                let count = Cell::new(0usize);
+                // Use closure to count while expanding capture groups properly
+                let result = re
+                    .replace_all(text, |caps: &regex::Captures| {
+                        count.set(count.get() + 1);
+                        let mut dst = String::new();
+                        caps.expand(replacement, &mut dst);
+                        dst
+                    })
+                    .to_string();
+                (result, count.get())
+            }
+            CompiledPattern::Fixed(s) => {
+                let count = text.matches(s).count();
+                let result = text.replace(s, replacement);
+                (result, count)
+            }
+            #[cfg(feature = "pcre")]
+            CompiledPattern::Pcre(re) => {
+                // fancy_regex doesn't support closure-based replace, so count first
+                let count = re.find_iter(text).filter_map(|m| m.ok()).count();
+                let result = re.replace_all(text, replacement).to_string();
+                (result, count)
+            }
+        }
+    }
+
+    /// Replace first match and return both the result and whether a match occurred.
+    /// This avoids running the regex twice.
+    pub fn replace_counting(&self, text: &str, replacement: &str) -> (String, bool) {
+        match self {
+            CompiledPattern::Standard(re) => {
+                use std::cell::Cell;
+                let had_match = Cell::new(false);
+                let result = re
+                    .replace(text, |caps: &regex::Captures| {
+                        had_match.set(true);
+                        let mut dst = String::new();
+                        caps.expand(replacement, &mut dst);
+                        dst
+                    })
+                    .to_string();
+                (result, had_match.get())
+            }
+            CompiledPattern::Fixed(s) => {
+                let had_match = text.contains(s);
+                let result = text.replacen(s, replacement, 1);
+                (result, had_match)
+            }
+            #[cfg(feature = "pcre")]
+            CompiledPattern::Pcre(re) => {
+                let had_match = re.is_match(text).unwrap_or(false);
+                let result = re.replace(text, replacement).to_string();
+                (result, had_match)
+            }
         }
     }
 
@@ -214,7 +284,13 @@ impl StreamProcessor {
     /// assert!(output_str.contains("NUM"));
     /// ```
     pub fn new(config: PipelineConfig) -> Result<Self> {
+        debug!(
+            "Creating StreamProcessor with {} steps",
+            config.step.len()
+        );
+
         if let Err(validation_errors) = config.validate() {
+            debug!("Pipeline validation failed: {:?}", validation_errors);
             let error = ValidationError::Multiple {
                 count: validation_errors.len(),
                 errors: validation_errors.join("\n  - "),
@@ -223,6 +299,10 @@ impl StreamProcessor {
         }
 
         let compiled_steps = Self::compile_steps(&config)?;
+        debug!(
+            "Compiled {} enabled steps",
+            compiled_steps.len()
+        );
 
         Ok(Self {
             config,
@@ -282,6 +362,17 @@ impl StreamProcessor {
         if settings.pcre_mode {
             // Check for ReDoS risks in PCRE mode (which uses backtracking)
             if let Some(warning) = Self::check_redos_risk(pattern, true) {
+                if settings.strict_mode {
+                    // In strict mode, reject potentially dangerous patterns
+                    return Err(PatternError::InvalidRegex {
+                        pattern: pattern.to_string(),
+                        message: format!(
+                            "Pattern rejected in strict mode: {}",
+                            warning.replace("ReDoS Warning:\n", "")
+                        ),
+                    })
+                    .context("Use --no-strict to allow potentially dangerous patterns");
+                }
                 eprintln!("{}", warning);
             }
 
@@ -375,6 +466,7 @@ impl StreamProcessor {
     const DEFAULT_REGEX_SIZE_LIMIT: usize = 10 * 1024 * 1024;
 
     /// Maximum pattern length before warning (patterns longer than this may be slow)
+    #[cfg(feature = "pcre")]
     const PATTERN_LENGTH_WARNING: usize = 1000;
 
     fn build_regex(pattern: &str, flags: &Option<Vec<RegexFlag>>) -> Result<Regex, regex::Error> {
@@ -416,7 +508,7 @@ impl StreamProcessor {
 
     /// Check pattern for potential ReDoS vulnerabilities (primarily for PCRE mode)
     /// Returns a warning message if the pattern looks potentially dangerous
-    #[allow(dead_code)]
+    #[cfg(feature = "pcre")]
     fn check_redos_risk(pattern: &str, is_pcre: bool) -> Option<String> {
         let mut warnings = Vec::new();
 
@@ -459,8 +551,7 @@ impl StreamProcessor {
         }
 
         // Check for suspicious repetition patterns like a{10000}
-        let repetition_re = regex::Regex::new(r"\{(\d+)\}").unwrap();
-        for cap in repetition_re.captures_iter(pattern) {
+        for cap in REPETITION_REGEX.captures_iter(pattern) {
             if let Some(num_str) = cap.get(1) {
                 if let Ok(num) = num_str.as_str().parse::<u32>() {
                     if num > 10000 {
@@ -506,7 +597,6 @@ impl StreamProcessor {
 
             let processed_line = self.process_line(&line_buffer, line_number, &mut result)?;
             let line_content = line_buffer.trim_end_matches('\n').to_string();
-            let is_match = processed_line.is_some();
 
             if use_context {
                 // Handle context-aware output
@@ -545,7 +635,6 @@ impl StreamProcessor {
                 self.context_before_buffer.push_back(ContextLine {
                     line_number,
                     content: line_content,
-                    is_match,
                 });
 
                 // Keep only the needed number of before-context lines
@@ -566,6 +655,14 @@ impl StreamProcessor {
         }
 
         result.lines_processed = line_number;
+
+        debug!(
+            "Processing complete: {} lines, {} matches, {} transformations",
+            result.lines_processed,
+            result.matches_found,
+            result.transformations_applied
+        );
+
         Ok(result)
     }
 
@@ -587,6 +684,7 @@ impl StreamProcessor {
         line_number: u64,
         result: &mut PipelineResult,
     ) -> Result<Option<String>> {
+        trace!("Processing line {}: {:?}", line_number, line);
         let mut current_line = line.trim_end_matches('\n').to_string();
         let mut should_output = true;
         let line_start = Instant::now();
@@ -611,8 +709,7 @@ impl StreamProcessor {
             match compiled_step.step_type {
                 StepType::Substitute => {
                     if let Some(ref replacement) = compiled_step.replacement {
-                        let original = current_line.clone();
-                        current_line = self.apply_substitution(
+                        let (result, was_modified) = self.apply_substitution(
                             &compiled_step.pattern,
                             &current_line,
                             replacement,
@@ -620,7 +717,8 @@ impl StreamProcessor {
                             &mut step_result,
                         )?;
 
-                        if current_line != original {
+                        if was_modified {
+                            current_line = result;
                             step_result.add_transformation();
                         }
                     }
@@ -687,8 +785,7 @@ impl StreamProcessor {
                 StepType::Transform => {
                     // Apply transformation to matched text
                     if let Some(ref action) = compiled_step.transform_action {
-                        let original = current_line.clone();
-                        current_line = self.apply_transform(
+                        let (result, was_modified) = self.apply_transform(
                             &compiled_step.pattern,
                             &current_line,
                             action,
@@ -697,7 +794,8 @@ impl StreamProcessor {
                             &mut step_result,
                         )?;
 
-                        if current_line != original {
+                        if was_modified {
+                            current_line = result;
                             step_result.add_transformation();
                         }
                     } else {
@@ -724,6 +822,7 @@ impl StreamProcessor {
         }
     }
 
+    /// Applies substitution and returns (result, was_modified) to avoid cloning for comparison.
     fn apply_substitution(
         &self,
         pattern: &CompiledPattern,
@@ -731,28 +830,24 @@ impl StreamProcessor {
         replacement: &str,
         is_global: bool,
         step_result: &mut StepResult,
-    ) -> Result<String> {
-        // Count actual matches before replacement
-        let match_count = pattern.find_iter(input).len();
-
-        let result = if is_global {
-            pattern.replace_all(input, replacement)
-        } else {
-            pattern.replace(input, replacement)
-        };
-
-        // Add the actual number of matches (or 1 for non-global if there was a match)
+    ) -> Result<(String, bool)> {
+        // Use single-pass methods that count while replacing
         if is_global {
+            let (result, match_count) = pattern.replace_all_counting(input, replacement);
             for _ in 0..match_count {
                 step_result.add_match();
             }
-        } else if match_count > 0 {
-            step_result.add_match();
+            Ok((result, match_count > 0))
+        } else {
+            let (result, had_match) = pattern.replace_counting(input, replacement);
+            if had_match {
+                step_result.add_match();
+            }
+            Ok((result, had_match))
         }
-
-        Ok(result)
     }
 
+    /// Applies transformation and returns (result, was_modified) to avoid cloning for comparison.
     fn apply_transform(
         &self,
         pattern: &CompiledPattern,
@@ -761,11 +856,11 @@ impl StreamProcessor {
         is_global: bool,
         extra_text: &Option<String>,
         step_result: &mut StepResult,
-    ) -> Result<String> {
+    ) -> Result<(String, bool)> {
         let match_count = pattern.find_iter(input).len();
 
         if match_count == 0 {
-            return Ok(input.to_string());
+            return Ok((input.to_string(), false));
         }
 
         // Transform function that will be applied to each match
@@ -895,7 +990,8 @@ impl StreamProcessor {
             }
         };
 
-        Ok(result)
+        // We know there was at least one match (checked at function start)
+        Ok((result, true))
     }
 
     pub fn inspect_line(&self, line: &str, step_index: Option<usize>) -> Result<Vec<MatchInfo>> {
@@ -1208,6 +1304,8 @@ mod tests {
                 context_before: 2,
                 context_after: 0,
                 timeout_ms: 0,
+                allow_shell: true,
+                strict_mode: false,
             },
             step: vec![PipelineStep {
                 step_type: StepType::Filter,
@@ -1251,6 +1349,8 @@ mod tests {
                 context_before: 0,
                 context_after: 2,
                 timeout_ms: 0,
+                allow_shell: true,
+                strict_mode: false,
             },
             step: vec![PipelineStep {
                 step_type: StepType::Filter,

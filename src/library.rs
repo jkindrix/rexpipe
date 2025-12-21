@@ -34,6 +34,11 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
+
+/// Pre-compiled regex for pattern references like `${pattern.name}`
+static PATTERN_REF_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\$\{([a-zA-Z_][a-zA-Z0-9_.]*)\}").expect("invalid pattern ref regex"));
 
 /// Pattern library configuration as loaded from TOML
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -134,13 +139,16 @@ impl ResolvedLibrary {
     }
 }
 
+/// Maximum depth for library includes to prevent excessive recursion
+const MAX_INCLUDE_DEPTH: usize = 32;
+
 /// Library resolver handles loading pattern libraries with circular reference detection
 pub struct LibraryResolver {
     /// Paths to search for libraries
     search_paths: Vec<PathBuf>,
     /// Cache of loaded libraries by canonical path
     loaded: HashMap<PathBuf, PatternLibrary>,
-    /// Stack of libraries currently being resolved (for cycle detection)
+    /// Stack of libraries currently being resolved (for cycle detection and depth limiting)
     resolution_stack: Vec<PathBuf>,
 }
 
@@ -240,6 +248,20 @@ impl LibraryResolver {
                 cycle: format!("{} -> {}", cycle.join(" -> "), canonical.display()),
             }
             .into());
+        }
+
+        // Check for excessive include depth
+        if self.resolution_stack.len() >= MAX_INCLUDE_DEPTH {
+            return Err(anyhow::anyhow!(
+                "Maximum library include depth ({}) exceeded. \
+                 Include chain: {}",
+                MAX_INCLUDE_DEPTH,
+                self.resolution_stack
+                    .iter()
+                    .map(|p| p.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(" -> ")
+            ));
         }
 
         // Check cache
@@ -374,11 +396,10 @@ pub fn resolve_pattern_references(
     input: &str,
     library: &ResolvedLibrary,
 ) -> Result<String, Vec<String>> {
-    let pattern_ref_regex = Regex::new(r"\$\{([a-zA-Z_][a-zA-Z0-9_.]*)\}").unwrap();
     let mut errors = Vec::new();
     let mut unresolved_refs = HashSet::new();
 
-    let result = pattern_ref_regex
+    let result = PATTERN_REF_REGEX
         .replace_all(input, |caps: &regex::Captures| {
             let ref_name = &caps[1];
             match library.get(ref_name) {

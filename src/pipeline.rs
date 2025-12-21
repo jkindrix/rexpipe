@@ -33,6 +33,17 @@ pub struct PipelineSettings {
     /// Timeout in milliseconds for regex matching per line (0 = no timeout)
     #[serde(default)]
     pub timeout_ms: u64,
+    /// Allow shell command execution in transforms (set via --no-shell CLI flag)
+    /// Defaults to true for backwards compatibility
+    #[serde(default = "default_allow_shell")]
+    pub allow_shell: bool,
+    /// Strict mode - reject patterns with potential ReDoS vulnerabilities
+    #[serde(default)]
+    pub strict_mode: bool,
+}
+
+fn default_allow_shell() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -353,6 +364,35 @@ impl PipelineConfig {
 
     pub fn enabled_steps(&self) -> impl Iterator<Item = &PipelineStep> {
         self.step.iter().filter(|step| step.enabled.unwrap_or(true))
+    }
+
+    /// Check if any step uses shell transforms.
+    ///
+    /// Shell transforms execute external commands and may be restricted
+    /// for security reasons when processing untrusted input.
+    pub fn has_shell_transforms(&self) -> bool {
+        self.step.iter().any(|step| {
+            matches!(
+                &step.transform,
+                Some(TransformAction::Shell { .. })
+            )
+        })
+    }
+
+    /// Get a list of shell commands used in this pipeline.
+    ///
+    /// Returns the commands that would be executed by shell transforms.
+    pub fn get_shell_commands(&self) -> Vec<&str> {
+        self.step
+            .iter()
+            .filter_map(|step| {
+                if let Some(TransformAction::Shell { command }) = &step.transform {
+                    Some(command.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect()
     }
 
     pub fn summary(&self) -> String {

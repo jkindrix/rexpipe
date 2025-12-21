@@ -1,3 +1,71 @@
+//! # COMPASS Strategic Collaboration Agent Framework
+//!
+//! COMPASS is a structured problem-solving framework implemented as an AI agent
+//! that guides analysis through six distinct phases. Each phase has quality gates
+//! that must be passed before advancing.
+//!
+//! ## The COMPASS Phases
+//!
+//! 1. **C**larify - Understand the core intent and problem statement
+//! 2. **O**rient - Gather evidence and research context
+//! 3. **M**ap - Design the solution space
+//! 4. **P**ause - Validate strategy and alignment
+//! 5. **A**rchitect - Create detailed implementation specifications
+//! 6. **S**ynthesize - Final quality assurance and synthesis
+//!
+//! ## Usage
+//!
+//! The COMPASS framework can be used in two ways:
+//!
+//! ### CLI Usage
+//!
+//! ```bash
+//! # Run COMPASS analysis on rexpipe itself
+//! rexpipe --compass
+//!
+//! # Run COMPASS analysis on a specific pipeline configuration
+//! rexpipe --compass --config my-pipeline.toml
+//! ```
+//!
+//! ### Library Usage
+//!
+//! ```rust
+//! use rexpipe::compass::CompassAgent;
+//! use rexpipe::pipeline::PipelineConfig;
+//!
+//! // Analyze rexpipe architecture
+//! let mut agent = CompassAgent::new();
+//!
+//! // Or analyze a specific pipeline
+//! let config = PipelineConfig::from_inline_pattern(r"\d+", Some("[NUM]"));
+//! let mut agent = CompassAgent::for_pipeline(&config);
+//!
+//! // Run through phases
+//! agent.clarify_intent("Build efficient text processor")?;
+//! agent.advance_phase()?;
+//! // ... continue through remaining phases
+//!
+//! // Generate final report
+//! println!("{}", agent.generate_report());
+//! # Ok::<(), anyhow::Error>(())
+//! ```
+//!
+//! ## Quality Gates
+//!
+//! Each phase has quality gates that must pass before advancing:
+//!
+//! - **Clarify**: Clear problem statement, success criteria defined, scope boundaries clear
+//! - **Orient**: Sufficient evidence gathered, sources credible, gaps identified
+//! - **Map**: Solution addresses problem, value proposition clear, feasibility validated
+//! - **Pause**: Solution aligns with intent, risks acceptable, resources validated
+//! - **Architect**: Requirements specified, architecture complete, implementation ready
+//! - **Synthesize**: All phases complete, internal consistency, quality standards met
+//!
+//! ## Escalation
+//!
+//! When the agent encounters situations requiring human decision-making, it can
+//! escalate with a reason. This is tracked and reported in the final synthesis.
+
 use anyhow::{Result, anyhow};
 use std::collections::HashMap;
 use std::fmt;

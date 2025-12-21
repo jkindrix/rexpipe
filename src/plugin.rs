@@ -334,11 +334,29 @@ impl PluginRegistry {
     ///
     /// The command's stdout, or an error message
     ///
-    /// # Security Note
+    /// # Security Considerations
     ///
-    /// This executes arbitrary shell commands. Only use with trusted input.
+    /// This executes shell commands defined in the configuration file.
+    /// The matched text is passed via stdin (NOT interpolated into the command),
+    /// which prevents shell injection from regex matches.
+    ///
+    /// **Safe pattern**: The command template comes from the config file (user-controlled)
+    /// and the matched text is piped to stdin, not embedded in the command string.
+    ///
+    /// **Timeout**: Commands have a 30-second timeout to prevent hanging.
+    ///
+    /// # Example Configuration (TOML)
+    /// ```toml
+    /// [[step]]
+    /// type = "transform"
+    /// pattern = "\\d+"
+    /// transform_action = { shell = { command = "python -c 'import sys; print(int(sys.stdin.read()) * 2)'" } }
+    /// ```
     pub fn execute_shell(command: &str, input: &str) -> Result<String, String> {
         use std::io::Write;
+        use std::time::Duration;
+
+        const SHELL_TIMEOUT_SECS: u64 = 30;
 
         #[cfg(target_os = "windows")]
         let shell_cmd = ("cmd", "/C");
@@ -354,24 +372,49 @@ impl PluginRegistry {
             .spawn()
             .map_err(|e| format!("Failed to spawn shell command: {}", e))?;
 
-        // Write input to stdin
+        // Write input to stdin (safe - no shell interpolation)
         if let Some(ref mut stdin) = child.stdin {
             stdin
                 .write_all(input.as_bytes())
                 .map_err(|e| format!("Failed to write to stdin: {}", e))?;
         }
+        // Close stdin so the child process knows input is complete
+        drop(child.stdin.take());
 
-        let output = child
-            .wait_with_output()
-            .map_err(|e| format!("Failed to wait for command: {}", e))?;
+        // Wait with timeout to prevent hanging commands
+        let timeout = Duration::from_secs(SHELL_TIMEOUT_SECS);
+        let start = std::time::Instant::now();
 
-        if output.status.success() {
-            Ok(String::from_utf8_lossy(&output.stdout)
-                .trim_end()
-                .to_string())
-        } else {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            Err(format!("Command failed: {}", stderr.trim()))
+        loop {
+            match child.try_wait() {
+                Ok(Some(status)) => {
+                    // Process exited, read output
+                    let output = child.wait_with_output()
+                        .map_err(|e| format!("Failed to read command output: {}", e))?;
+
+                    if status.success() {
+                        return Ok(String::from_utf8_lossy(&output.stdout)
+                            .trim_end()
+                            .to_string());
+                    } else {
+                        let stderr = String::from_utf8_lossy(&output.stderr);
+                        return Err(format!("Command failed: {}", stderr.trim()));
+                    }
+                }
+                Ok(None) => {
+                    // Still running, check timeout
+                    if start.elapsed() >= timeout {
+                        let _ = child.kill();
+                        return Err(format!(
+                            "Shell command timed out after {} seconds",
+                            SHELL_TIMEOUT_SECS
+                        ));
+                    }
+                    // Brief sleep before retry
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(e) => return Err(format!("Failed to check command status: {}", e)),
+            }
         }
     }
 }

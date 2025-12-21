@@ -231,6 +231,47 @@ pub fn output_file_list_json(paths: &[PathBuf], mode: &str) -> Result<String, se
     response.to_json()
 }
 
+/// Output a single file result as compact JSONL (JSON Lines format).
+///
+/// This is used for streaming output where each file's result is printed
+/// as it's processed, rather than buffering all results. Each line is a
+/// valid JSON object representing one file's result.
+///
+/// # Example Output
+/// ```jsonl
+/// {"path":"file1.txt","matches_found":5,"lines_processed":100,"modified":true}
+/// {"path":"file2.txt","matches_found":0,"lines_processed":50,"modified":false}
+/// ```
+pub fn output_file_result_jsonl(
+    result: &crate::files::FileResult,
+) -> Result<String, serde_json::Error> {
+    let data = FileResultJson {
+        path: result.path.display().to_string(),
+        matches_found: result.matches_found,
+        lines_processed: result.lines_processed,
+        modified: result.modified,
+        error: result.error.clone(),
+    };
+    // Compact JSON for JSONL (no pretty printing, no newlines)
+    serde_json::to_string(&data)
+}
+
+/// Output a streaming summary as JSONL footer.
+///
+/// This is printed after all file results to provide aggregate statistics.
+pub fn output_streaming_summary_jsonl(
+    result: &crate::files::MultiFileResult,
+) -> Result<String, serde_json::Error> {
+    let data = MultiFileSummary {
+        files_processed: result.files_processed,
+        files_matched: result.files_matched,
+        files_modified: result.files_modified,
+        total_matches: result.total_matches,
+        total_lines: result.total_lines,
+    };
+    serde_json::to_string(&data)
+}
+
 /// Output a standardized JSON response for performance metrics
 pub fn output_performance_json(
     result: &crate::pipeline::PipelineResult,

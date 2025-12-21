@@ -12,6 +12,7 @@ pub struct Inspector {
     show_capture_groups: bool,
     show_performance: bool,
     max_matches_per_line: Option<usize>,
+    use_color: bool,
 }
 
 #[derive(Debug)]
@@ -55,7 +56,23 @@ impl Inspector {
             show_capture_groups: true,
             show_performance: false,
             max_matches_per_line: Some(10),
+            use_color: true,
         })
+    }
+
+    /// Enable or disable colored output.
+    pub fn with_color(mut self, use_color: bool) -> Self {
+        self.use_color = use_color;
+        self
+    }
+
+    /// Get the ColorChoice based on the use_color setting.
+    fn color_choice(&self) -> ColorChoice {
+        if self.use_color {
+            ColorChoice::Auto
+        } else {
+            ColorChoice::Never
+        }
     }
 
     pub fn with_options(mut self, options: InspectorOptions) -> Self {
@@ -113,23 +130,23 @@ impl Inspector {
                 // Calculate transformed line by applying all replacements
                 let transformed_line = self.calculate_transformed_line(&line, &limited_matches);
 
-                result.line_matches.push(LineMatch {
+                let line_match = LineMatch {
                     line_number,
                     original_line: line.clone(),
                     matches: limited_matches,
                     transformed_line,
-                });
+                };
 
                 if self.interactive_mode {
-                    self.display_interactive_match(
-                        &line,
-                        line_number,
-                        result.line_matches.last().unwrap(),
-                    )?;
+                    self.display_interactive_match(&line, line_number, &line_match)?;
+
+                    result.line_matches.push(line_match);
 
                     if self.should_pause()? {
                         break;
                     }
+                } else {
+                    result.line_matches.push(line_match);
                 }
             }
         }
@@ -178,7 +195,7 @@ impl Inspector {
     }
 
     pub fn display_results(&self, result: &InspectionResult) -> Result<()> {
-        let mut stdout = StandardStream::stdout(ColorChoice::Auto);
+        let mut stdout = StandardStream::stdout(self.color_choice());
 
         self.print_header(&mut stdout)?;
 
@@ -282,7 +299,7 @@ impl Inspector {
         _line_number: u64,
         line_match: &LineMatch,
     ) -> Result<()> {
-        let mut stdout = StandardStream::stdout(ColorChoice::Auto);
+        let mut stdout = StandardStream::stdout(self.color_choice());
 
         stdout.set_color(ColorSpec::new().set_fg(Some(Color::Cyan)).set_bold(true))?;
         writeln!(stdout, "\n--- Interactive Match Display ---")?;
