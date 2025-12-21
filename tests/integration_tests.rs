@@ -56,6 +56,7 @@ fn test_end_to_end_log_processing() {
                 ..Default::default()
             },
         ],
+        ..Default::default()
     };
 
     let mut processor = StreamProcessor::new(config).unwrap();
@@ -152,6 +153,7 @@ another DEBUG to drop"#;
             enabled: Some(true),
                 ..Default::default()
         }],
+        ..Default::default()
     };
 
     let mut processor = StreamProcessor::new(config).unwrap();
@@ -209,6 +211,7 @@ Invalid line without timestamp
             enabled: Some(true),
                 ..Default::default()
         }],
+        ..Default::default()
     };
 
     let mut processor = StreamProcessor::new(config).unwrap();
@@ -253,6 +256,7 @@ fn test_extract_step_type() {
             enabled: Some(true),
                 ..Default::default()
         }],
+        ..Default::default()
     };
 
     let mut processor = StreamProcessor::new(config).unwrap();
@@ -287,6 +291,7 @@ fn test_error_handling() {
             enabled: Some(true),
                 ..Default::default()
         }],
+        ..Default::default()
     };
 
     // Should fail to create processor due to invalid regex
@@ -314,6 +319,7 @@ fn test_disabled_steps() {
             enabled: Some(false), // Disabled step
             ..Default::default()
         }],
+        ..Default::default()
     };
 
     let mut processor = StreamProcessor::new(config).unwrap();
@@ -349,6 +355,7 @@ fn test_transform_uppercase() {
             enabled: Some(true),
                 ..Default::default()
         }],
+        ..Default::default()
     };
 
     let mut processor = StreamProcessor::new(config).unwrap();
@@ -382,6 +389,7 @@ fn test_transform_lowercase() {
             enabled: Some(true),
                 ..Default::default()
         }],
+        ..Default::default()
     };
 
     let mut processor = StreamProcessor::new(config).unwrap();
@@ -429,6 +437,7 @@ fn test_pcre_positive_lookahead() {
             enabled: Some(true),
                 ..Default::default()
         }],
+        ..Default::default()
     };
 
     let mut processor = StreamProcessor::new(config).unwrap();
@@ -470,6 +479,7 @@ fn test_pcre_negative_lookahead() {
             enabled: Some(true),
                 ..Default::default()
         }],
+        ..Default::default()
     };
 
     let mut processor = StreamProcessor::new(config).unwrap();
@@ -511,6 +521,7 @@ fn test_pcre_positive_lookbehind() {
             enabled: Some(true),
                 ..Default::default()
         }],
+        ..Default::default()
     };
 
     let mut processor = StreamProcessor::new(config).unwrap();
@@ -552,6 +563,7 @@ fn test_pcre_negative_lookbehind() {
             enabled: Some(true),
                 ..Default::default()
         }],
+        ..Default::default()
     };
 
     let mut processor = StreamProcessor::new(config).unwrap();
@@ -597,6 +609,7 @@ fn test_pcre_combined_lookaround() {
             enabled: Some(true),
                 ..Default::default()
         }],
+        ..Default::default()
     };
 
     let mut processor = StreamProcessor::new(config).unwrap();
@@ -653,6 +666,7 @@ INFO: Processing complete"#;
             enabled: Some(true),
                 ..Default::default()
         }],
+        ..Default::default()
     };
 
     let mut processor = StreamProcessor::new(config).unwrap();
@@ -700,6 +714,7 @@ fn test_fixed_string_basic_replacement() {
             enabled: Some(true),
                 ..Default::default()
         }],
+        ..Default::default()
     };
 
     let mut processor = StreamProcessor::new(config).unwrap();
@@ -741,6 +756,7 @@ fn test_fixed_string_special_chars() {
             enabled: Some(true),
                 ..Default::default()
         }],
+        ..Default::default()
     };
 
     let mut processor = StreamProcessor::new(config).unwrap();
@@ -787,6 +803,7 @@ Line with ERROR without brackets"#;
             enabled: Some(true),
                 ..Default::default()
         }],
+        ..Default::default()
     };
 
     let mut processor = StreamProcessor::new(config).unwrap();
@@ -831,6 +848,7 @@ fn test_fixed_string_backslashes() {
             enabled: Some(true),
                 ..Default::default()
         }],
+        ..Default::default()
     };
 
     let mut processor = StreamProcessor::new(config).unwrap();
@@ -872,6 +890,7 @@ fn test_fixed_string_multiple_occurrences() {
             enabled: Some(true),
                 ..Default::default()
         }],
+        ..Default::default()
     };
 
     let mut processor = StreamProcessor::new(config).unwrap();
@@ -910,6 +929,7 @@ fn test_unicode_basic_matching() {
             enabled: Some(true),
                 ..Default::default()
         }],
+        ..Default::default()
     };
 
     let mut processor = StreamProcessor::new(config).unwrap();
@@ -945,6 +965,7 @@ fn test_unicode_character_classes() {
             enabled: Some(true),
                 ..Default::default()
         }],
+        ..Default::default()
     };
 
     let mut processor = StreamProcessor::new(config).unwrap();
@@ -979,6 +1000,7 @@ fn test_unicode_emoji() {
             enabled: Some(true),
                 ..Default::default()
         }],
+        ..Default::default()
     };
 
     let mut processor = StreamProcessor::new(config).unwrap();
@@ -1017,6 +1039,7 @@ Mixed: English 和 中文"#;
             enabled: Some(true),
                 ..Default::default()
         }],
+        ..Default::default()
     };
 
     let mut processor = StreamProcessor::new(config).unwrap();
@@ -1056,6 +1079,7 @@ fn test_unicode_transform() {
             enabled: Some(true),
                 ..Default::default()
         }],
+        ..Default::default()
     };
 
     let mut processor = StreamProcessor::new(config).unwrap();
@@ -1091,6 +1115,7 @@ fn test_unicode_accented_characters() {
             enabled: Some(true),
                 ..Default::default()
         }],
+        ..Default::default()
     };
 
     let mut processor = StreamProcessor::new(config).unwrap();
@@ -1126,6 +1151,7 @@ fn test_unicode_word_boundaries() {
             enabled: Some(true),
                 ..Default::default()
         }],
+        ..Default::default()
     };
 
     let mut processor = StreamProcessor::new(config).unwrap();
@@ -1164,6 +1190,7 @@ fn test_error_invalid_regex_pattern() {
             enabled: Some(true),
                 ..Default::default()
         }],
+        ..Default::default()
     };
 
     let result = StreamProcessor::new(config);
@@ -1190,6 +1217,7 @@ fn test_error_missing_replacement() {
             enabled: Some(true),
                 ..Default::default()
         }],
+        ..Default::default()
     };
 
     let result = config.validate();
@@ -1218,6 +1246,7 @@ fn test_error_missing_filter_action() {
             enabled: Some(true),
                 ..Default::default()
         }],
+        ..Default::default()
     };
 
     let result = config.validate();
@@ -1236,6 +1265,7 @@ fn test_error_empty_pipeline() {
         patterns_include: Vec::new(),
         settings: PipelineSettings::default(),
         step: vec![], // Empty steps
+        ..Default::default()
     };
 
     let result = config.validate();
@@ -1264,6 +1294,7 @@ fn test_error_empty_pattern() {
             enabled: Some(true),
                 ..Default::default()
         }],
+        ..Default::default()
     };
 
     let result = config.validate();
@@ -1347,6 +1378,7 @@ fn test_pcre_mode_disabled_error() {
             enabled: Some(true),
                 ..Default::default()
         }],
+        ..Default::default()
     };
 
     // Should fail because pcre_mode is true but feature is not enabled
@@ -1710,6 +1742,7 @@ fn test_max_line_length_configuration() {
             enabled: Some(true),
                 ..Default::default()
         }],
+        ..Default::default()
     };
 
     // Should create processor successfully
@@ -1746,6 +1779,7 @@ fn test_max_line_action_truncate_config() {
             enabled: Some(true),
                 ..Default::default()
         }],
+        ..Default::default()
     };
 
     // Should create processor successfully with truncate action
@@ -1966,6 +2000,7 @@ fn test_context_lines_at_boundaries() {
             enabled: Some(true),
                 ..Default::default()
         }],
+        ..Default::default()
     };
 
     let mut processor = StreamProcessor::new(config).unwrap();

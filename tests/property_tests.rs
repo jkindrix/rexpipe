@@ -304,6 +304,7 @@ proptest! {
             patterns_include: Vec::new(),
             settings: PipelineSettings::default(),
             step: vec![step],
+            ..Default::default()
         };
 
         let result = StreamProcessor::new(config);
@@ -385,6 +386,7 @@ proptest! {
             patterns_include: Vec::new(),
             settings: PipelineSettings::default(),
             step: vec![step],
+            ..Default::default()
         };
 
         if let Ok(mut processor) = StreamProcessor::new(config) {
@@ -429,6 +431,7 @@ proptest! {
             patterns_include: Vec::new(),
             settings: PipelineSettings::default(),
             step: vec![step],
+            ..Default::default()
         };
 
         if let Ok(mut processor) = StreamProcessor::new(config) {
@@ -493,6 +496,7 @@ proptest! {
             patterns_include: Vec::new(),
             settings: PipelineSettings::default(),
             step: vec![step1, step2],
+            ..Default::default()
         };
 
         if let Ok(mut processor) = StreamProcessor::new(config) {
@@ -543,6 +547,7 @@ proptest! {
             patterns_include: Vec::new(),
             settings: PipelineSettings::default(),
             step: vec![disabled_step],
+            ..Default::default()
         };
 
         if let Ok(mut processor) = StreamProcessor::new(config) {
@@ -599,6 +604,7 @@ proptest! {
             patterns_include: Vec::new(),
             settings: PipelineSettings::default(),
             step: vec![step],
+            ..Default::default()
         };
 
         if let Ok(mut processor) = StreamProcessor::new(config) {
@@ -678,6 +684,7 @@ proptest! {
             patterns_include: Vec::new(),
             settings: PipelineSettings::default(),
             step: vec![step],
+            ..Default::default()
         };
 
         if let Ok(mut processor) = StreamProcessor::new(config) {

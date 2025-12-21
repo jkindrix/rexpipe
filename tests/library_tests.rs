@@ -259,6 +259,7 @@ exists = 'pattern'
             enabled: Some(true),
                 ..Default::default()
         }],
+        ..Default::default()
     };
 
     let mut resolver = LibraryResolver::new(Some(dir.path()));
@@ -303,6 +304,7 @@ suffix = 'END$'
             enabled: Some(true),
                 ..Default::default()
         }],
+        ..Default::default()
     };
 
     let mut resolver = LibraryResolver::new(Some(dir.path()));
