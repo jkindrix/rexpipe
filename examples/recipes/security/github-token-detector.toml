@@ -1,0 +1,17 @@
+# GitHub Token Detector
+name = "GitHub Token Detector"
+
+[[step]]
+type = "filter"
+pattern = 'gh[ps]_[A-Za-z0-9_]{36}'
+action = "keep_line"
+
+[[step]]
+type = "filter"
+pattern = 'github_pat_[A-Za-z0-9_]{22,}'
+action = "keep_line"
+
+[[step]]
+type = "substitute"
+pattern = '^(.*)$'
+replacement = '[GITHUB TOKEN] $1'

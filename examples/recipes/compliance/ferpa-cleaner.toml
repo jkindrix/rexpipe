@@ -1,0 +1,15 @@
+# FERPA Student Data Cleaner
+name = "FERPA Cleaner"
+description = "Anonymizes student educational records"
+
+[[step]]
+type = "substitute"
+pattern = '\b(student[_-]?id|sid)\s*[:=]\s*\w+'
+replacement = "$1: [REDACTED]"
+case_insensitive = true
+
+[[step]]
+type = "substitute"
+pattern = '\b(grade|gpa|score)\s*[:=]\s*[\d.]+%?'
+replacement = "$1: [ACADEMIC]"
+case_insensitive = true

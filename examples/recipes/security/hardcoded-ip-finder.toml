@@ -1,0 +1,12 @@
+# Hardcoded IP Finder
+name = "Hardcoded IP Finder"
+
+[[step]]
+type = "filter"
+pattern = '(["\'])\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\1'
+action = "keep_line"
+
+[[step]]
+type = "substitute"
+pattern = '^(.*)$'
+replacement = '[HARDCODED IP] $1'

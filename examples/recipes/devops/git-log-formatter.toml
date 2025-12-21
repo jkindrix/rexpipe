@@ -1,0 +1,21 @@
+# Git Log Formatter
+name = "Git Log Formatter"
+description = "Formats git log output for readability"
+
+[[step]]
+type = "substitute"
+pattern = '^commit ([a-f0-9]{40})'
+replacement = '\n=== Commit: $1 ==='
+description = "Format commit hash"
+
+[[step]]
+type = "substitute"
+pattern = '^Author:\s*(.+)\s*<(.+)>'
+replacement = 'By: $1 ($2)'
+description = "Format author"
+
+[[step]]
+type = "substitute"
+pattern = '^Date:\s*(.+)'
+replacement = 'When: $1'
+description = "Format date"

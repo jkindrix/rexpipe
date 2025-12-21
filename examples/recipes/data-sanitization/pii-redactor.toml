@@ -1,0 +1,45 @@
+# PII Redactor - Removes Personally Identifiable Information
+# Usage: rexpipe -c pii-redactor.toml < input.txt
+
+name = "PII Redactor"
+description = "Redacts common PII patterns (SSN, credit cards, phone numbers, emails)"
+
+[[step]]
+type = "substitute"
+pattern = '\b\d{3}-\d{2}-\d{4}\b'
+replacement = "[SSN-REDACTED]"
+description = "Redact Social Security Numbers"
+
+[[step]]
+type = "substitute"
+pattern = '\b\d{4}[- ]?\d{4}[- ]?\d{4}[- ]?\d{4}\b'
+replacement = "[CC-REDACTED]"
+description = "Redact credit card numbers"
+
+[[step]]
+type = "substitute"
+pattern = '\b\d{3}[-.]?\d{3}[-.]?\d{4}\b'
+replacement = "[PHONE-REDACTED]"
+description = "Redact phone numbers (US format)"
+
+[[step]]
+type = "substitute"
+pattern = '[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'
+replacement = "[EMAIL-REDACTED]"
+description = "Redact email addresses"
+
+[[step]]
+type = "substitute"
+pattern = '\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b'
+replacement = "[IP-REDACTED]"
+description = "Redact IP addresses"
+
+[[tests]]
+name = "ssn_redaction"
+input = "SSN: 123-45-6789"
+expected_output = "SSN: [SSN-REDACTED]"
+
+[[tests]]
+name = "email_redaction"
+input = "Contact: user@example.com"
+expected_output = "Contact: [EMAIL-REDACTED]"

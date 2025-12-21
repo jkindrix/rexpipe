@@ -1,0 +1,9 @@
+# DNS Name Extractor
+name = "DNS Extractor"
+description = "Extracts domain names from text"
+
+[[step]]
+type = "filter"
+pattern = '\b([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}\b'
+action = "keep_line"
+case_insensitive = true

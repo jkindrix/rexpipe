@@ -1,0 +1,21 @@
+# Email Extractor - Extracts email addresses from text
+# Usage: rexpipe -c email-extractor.toml < contacts.txt
+
+name = "Email Extractor"
+description = "Extracts all email addresses from text"
+
+[[step]]
+type = "filter"
+pattern = '[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'
+action = "keep_line"
+description = "Keep lines with emails"
+
+[[step]]
+type = "extract"
+pattern = '([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})'
+description = "Extract email addresses"
+
+[[tests]]
+name = "extract_email"
+input = "Contact: john.doe@example.com or support@company.org"
+min_matches = 2

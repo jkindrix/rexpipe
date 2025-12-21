@@ -1,0 +1,28 @@
+# Kubernetes Log Processor
+# Usage: kubectl logs pod-name | rexpipe -c kubernetes-logs.toml
+
+name = "Kubernetes Log Processor"
+description = "Processes and formats Kubernetes pod logs"
+
+[[step]]
+type = "substitute"
+pattern = '^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+Z)'
+replacement = '[TIME:$1]'
+description = "Format ISO timestamps"
+
+[[step]]
+type = "filter"
+pattern = '(OOMKilled|CrashLoopBackOff|Error|Failed)'
+action = "keep_line"
+description = "Filter for issues"
+
+[[step]]
+type = "substitute"
+pattern = 'pod/([a-z0-9-]+)'
+replacement = 'POD:$1'
+description = "Highlight pod names"
+
+[[tests]]
+name = "format_k8s_log"
+input = "2024-01-01T00:00:00.000Z Error: pod/my-app-xyz crashed"
+min_matches = 1

@@ -1,0 +1,7 @@
+# Currency Extractor
+name = "Currency Extractor"
+
+[[step]]
+type = "filter"
+pattern = '[$€£¥]\s*\d+([.,]\d{1,2})?|\d+([.,]\d{1,2})?\s*(USD|EUR|GBP|JPY)'
+action = "keep_line"

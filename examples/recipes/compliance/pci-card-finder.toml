@@ -1,0 +1,41 @@
+# PCI Card Finder - Detects credit card data for PCI compliance
+# Usage: rexpipe -c pci-card-finder.toml -R logs/
+
+name = "PCI Card Data Finder"
+description = "Detects potential credit card data (PCI-DSS)"
+
+[[step]]
+type = "filter"
+pattern = '\b4\d{3}[- ]?\d{4}[- ]?\d{4}[- ]?\d{4}\b'
+action = "keep_line"
+description = "Find Visa card patterns"
+
+[[step]]
+type = "filter"
+pattern = '\b5[1-5]\d{2}[- ]?\d{4}[- ]?\d{4}[- ]?\d{4}\b'
+action = "keep_line"
+description = "Find Mastercard patterns"
+
+[[step]]
+type = "filter"
+pattern = '\b3[47]\d{2}[- ]?\d{6}[- ]?\d{5}\b'
+action = "keep_line"
+description = "Find Amex patterns"
+
+[[step]]
+type = "filter"
+pattern = '\b(CVV|CVC|CVV2|CID)\s*[:=]?\s*\d{3,4}\b'
+action = "keep_line"
+case_insensitive = true
+description = "Find CVV codes"
+
+[[step]]
+type = "substitute"
+pattern = '^(.*)$'
+replacement = '[PCI VIOLATION] $1'
+description = "Mark PCI violations"
+
+[[tests]]
+name = "detect_visa"
+input = "Card: 4111-1111-1111-1111"
+expected_output = "[PCI VIOLATION] Card: 4111-1111-1111-1111"

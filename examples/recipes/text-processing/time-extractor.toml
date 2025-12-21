@@ -1,0 +1,7 @@
+# Time Extractor
+name = "Time Extractor"
+
+[[step]]
+type = "filter"
+pattern = '\b\d{1,2}:\d{2}(:\d{2})?\s*(AM|PM|am|pm)?\b'
+action = "keep_line"

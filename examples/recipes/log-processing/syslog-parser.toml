@@ -1,0 +1,22 @@
+# Syslog Parser - Processes standard syslog format
+# Usage: rexpipe -c syslog-parser.toml < /var/log/syslog
+
+name = "Syslog Parser"
+description = "Parses and formats syslog entries"
+
+[[step]]
+type = "extract"
+pattern = '^(\w{3}\s+\d+\s+\d+:\d+:\d+)\s+(\S+)\s+(\S+)\[?(\d*)\]?:\s*(.*)$'
+groups = ["timestamp", "host", "service", "pid", "message"]
+description = "Extract syslog fields"
+
+[[step]]
+type = "substitute"
+pattern = '(kernel|systemd|sshd|cron)(\[?\d*\]?:)'
+replacement = '[$1]$2'
+description = "Highlight common services"
+
+[[tests]]
+name = "parse_syslog"
+input = "Jan  1 00:00:00 server sshd[12345]: Accepted publickey for user"
+min_matches = 1

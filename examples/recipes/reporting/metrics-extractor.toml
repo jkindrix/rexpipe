@@ -1,0 +1,13 @@
+# Metrics Extractor
+name = "Metrics Extractor"
+description = "Extracts numeric metrics from text"
+
+[[step]]
+type = "filter"
+pattern = '\b\d+(\.\d+)?\s*(ms|s|sec|min|hr|%|MB|GB|KB|bytes|ops|req)\b'
+action = "keep_line"
+description = "Keep lines with metrics"
+
+[[step]]
+type = "extract"
+pattern = '(\d+(?:\.\d+)?)\s*(ms|s|sec|min|hr|%|MB|GB|KB|bytes|ops|req)'

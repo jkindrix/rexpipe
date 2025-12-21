@@ -1,0 +1,21 @@
+# Whitespace Normalizer
+name = "Whitespace Normalizer"
+description = "Normalizes whitespace in text"
+
+[[step]]
+type = "substitute"
+pattern = '\t'
+replacement = "    "
+description = "Convert tabs to spaces"
+
+[[step]]
+type = "substitute"
+pattern = ' {2,}'
+replacement = " "
+description = "Collapse multiple spaces"
+
+[[step]]
+type = "substitute"
+pattern = '^\s+|\s+$'
+replacement = ""
+description = "Trim lines"

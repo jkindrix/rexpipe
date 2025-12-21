@@ -1,0 +1,28 @@
+# Phone Number Normalizer - Standardizes phone number formats
+# Usage: rexpipe -c phone-normalizer.toml < contacts.csv
+
+name = "Phone Number Normalizer"
+description = "Converts various phone formats to standard format"
+
+[[step]]
+type = "substitute"
+pattern = '\((\d{3})\)\s*(\d{3})[-.]?(\d{4})'
+replacement = "+1-$1-$2-$3"
+description = "Convert (xxx) xxx-xxxx format"
+
+[[step]]
+type = "substitute"
+pattern = '(\d{3})[-.](\d{3})[-.](\d{4})'
+replacement = "+1-$1-$2-$3"
+description = "Convert xxx-xxx-xxxx format"
+
+[[step]]
+type = "substitute"
+pattern = '1?[-.]?(\d{3})[-.]?(\d{3})[-.]?(\d{4})'
+replacement = "+1-$1-$2-$3"
+description = "Convert loose formats"
+
+[[tests]]
+name = "normalize_phone"
+input = "(555) 123-4567"
+expected_output = "+1-555-123-4567"

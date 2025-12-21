@@ -1,0 +1,20 @@
+# AWS Key Detector
+name = "AWS Key Detector"
+description = "Detects AWS access keys and secret keys"
+
+[[step]]
+type = "filter"
+pattern = 'AKIA[0-9A-Z]{16}'
+action = "keep_line"
+description = "Find AWS access key IDs"
+
+[[step]]
+type = "filter"
+pattern = 'aws_secret_access_key|AWS_SECRET_ACCESS_KEY'
+action = "keep_line"
+case_insensitive = true
+
+[[step]]
+type = "substitute"
+pattern = '^(.*)$'
+replacement = '[AWS KEY] $1'

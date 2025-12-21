@@ -1,0 +1,11 @@
+# Social Media Mention Extractor
+name = "Mention Extractor"
+
+[[step]]
+type = "filter"
+pattern = '@[a-zA-Z]\w*'
+action = "keep_line"
+
+[[step]]
+type = "extract"
+pattern = '(@[a-zA-Z]\w*)'

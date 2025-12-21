@@ -1,0 +1,9 @@
+# Class Definition Extractor
+name = "Class Extractor"
+description = "Extracts class definitions from code"
+
+[[step]]
+type = "filter"
+pattern = '^\s*(class|struct|interface|trait|impl|type)\s+\w+'
+action = "keep_line"
+description = "Keep class/struct definitions"

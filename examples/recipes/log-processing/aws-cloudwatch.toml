@@ -1,0 +1,21 @@
+# AWS CloudWatch Log Processor
+name = "AWS CloudWatch Processor"
+description = "Processes AWS CloudWatch log format"
+
+[[step]]
+type = "substitute"
+pattern = 'RequestId:\s*([a-f0-9-]{36})'
+replacement = 'RequestId: [UUID]'
+description = "Anonymize request IDs"
+
+[[step]]
+type = "substitute"
+pattern = 'Duration:\s*(\d+\.?\d*)\s*ms'
+replacement = 'Duration: $1ms'
+description = "Normalize duration format"
+
+[[step]]
+type = "filter"
+pattern = 'ERROR|Timeout|Exception'
+action = "keep_line"
+description = "Filter for issues"

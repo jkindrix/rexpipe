@@ -1,0 +1,9 @@
+# Line Numberer (conceptual - uses substitute)
+name = "Line Prefix"
+description = "Adds prefixes to lines"
+
+[[step]]
+type = "substitute"
+pattern = '^(.+)$'
+replacement = ">>> $1"
+description = "Add prefix to non-empty lines"

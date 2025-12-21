@@ -1,0 +1,11 @@
+# Version Number Extractor
+name = "Version Extractor"
+
+[[step]]
+type = "filter"
+pattern = 'v?\d+\.\d+(\.\d+)?(-\w+)?'
+action = "keep_line"
+
+[[step]]
+type = "extract"
+pattern = '(v?\d+\.\d+(?:\.\d+)?(?:-\w+)?)'

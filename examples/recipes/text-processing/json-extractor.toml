@@ -1,0 +1,11 @@
+# JSON Object Extractor
+name = "JSON Extractor"
+
+[[step]]
+type = "filter"
+pattern = '\{[^{}]*\}'
+action = "keep_line"
+
+[[step]]
+type = "extract"
+pattern = '(\{[^{}]*\})'

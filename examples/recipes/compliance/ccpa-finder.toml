@@ -1,0 +1,13 @@
+# CCPA Data Finder
+name = "CCPA Data Finder"
+
+[[step]]
+type = "filter"
+pattern = '(California|CA)\s+resident|do not sell|CCPA'
+action = "keep_line"
+case_insensitive = true
+
+[[step]]
+type = "substitute"
+pattern = '^(.*)$'
+replacement = '[CCPA] $1'

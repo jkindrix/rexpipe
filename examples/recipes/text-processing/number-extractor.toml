@@ -1,0 +1,11 @@
+# Number Extractor
+name = "Number Extractor"
+
+[[step]]
+type = "filter"
+pattern = '\b\d+(\.\d+)?\b'
+action = "keep_line"
+
+[[step]]
+type = "extract"
+pattern = '(\b\d+(?:\.\d+)?\b)'

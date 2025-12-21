@@ -1,0 +1,12 @@
+# Date Masker
+name = "Date Masker"
+
+[[step]]
+type = "substitute"
+pattern = '\b\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}:\d{2})?\b'
+replacement = "[DATE]"
+
+[[step]]
+type = "substitute"
+pattern = '\b\d{1,2}/\d{1,2}/\d{2,4}\b'
+replacement = "[DATE]"

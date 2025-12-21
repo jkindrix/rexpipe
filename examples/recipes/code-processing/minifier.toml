@@ -1,0 +1,34 @@
+# Basic Minifier - Removes whitespace and comments
+# Usage: rexpipe -c minifier.toml < source.js
+
+name = "Basic Minifier"
+description = "Reduces file size by removing unnecessary whitespace"
+
+[[step]]
+type = "substitute"
+pattern = '//.*$'
+replacement = ""
+description = "Remove single-line comments"
+
+[[step]]
+type = "substitute"
+pattern = '/\*[\s\S]*?\*/'
+replacement = ""
+description = "Remove multi-line comments"
+
+[[step]]
+type = "substitute"
+pattern = '\s*\n\s*'
+replacement = ""
+description = "Remove newlines and surrounding whitespace"
+
+[[step]]
+type = "substitute"
+pattern = '\s{2,}'
+replacement = " "
+description = "Collapse multiple spaces"
+
+[[tests]]
+name = "minify_js"
+input = "function   test()  {\n  return  1;\n}"
+min_matches = 1

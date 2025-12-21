@@ -1,0 +1,8 @@
+# URL Parser
+name = "URL Parser"
+description = "Extracts and parses URL components"
+
+[[step]]
+type = "extract"
+pattern = '(https?)://([^/:]+)(?::(\d+))?(/[^?#]*)?(?:\?([^#]*))?(?:#(.*))?'
+groups = ["protocol", "host", "port", "path", "query", "fragment"]

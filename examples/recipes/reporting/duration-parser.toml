@@ -1,0 +1,14 @@
+# Duration Parser
+name = "Duration Parser"
+
+[[step]]
+type = "filter"
+pattern = '\d+\s*(ms|s|sec|min|hour|hr|h|d|day)'
+action = "keep_line"
+case_insensitive = true
+
+[[step]]
+type = "substitute"
+pattern = '(\d+)\s*(ms|millisecond)'
+replacement = '$1 milliseconds'
+case_insensitive = true

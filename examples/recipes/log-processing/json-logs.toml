@@ -1,0 +1,29 @@
+# JSON Log Processor - Handles structured JSON logs
+# Usage: rexpipe -c json-logs.toml < app.log
+
+name = "JSON Log Processor"
+description = "Extracts and formats JSON-structured log entries"
+
+[[step]]
+type = "substitute"
+pattern = '"level"\s*:\s*"(error|fatal|critical)"'
+replacement = '"level": "!!! $1 !!!"'
+case_insensitive = true
+description = "Highlight error levels"
+
+[[step]]
+type = "substitute"
+pattern = '"timestamp"\s*:\s*"([^"]+)"'
+replacement = '"time": "$1"'
+description = "Normalize timestamp field name"
+
+[[step]]
+type = "substitute"
+pattern = '"stack_trace"\s*:\s*"([^"]+)"'
+replacement = '"stack": "[TRACE...]"'
+description = "Abbreviate stack traces"
+
+[[tests]]
+name = "highlight_error"
+input = '{"level": "error", "message": "failed"}'
+expected_output = '{"level": "!!! error !!!", "message": "failed"}'

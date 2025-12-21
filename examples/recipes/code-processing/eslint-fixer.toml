@@ -1,0 +1,27 @@
+# ESLint Quick Fixer
+name = "ESLint Quick Fixer"
+description = "Fixes common ESLint issues"
+
+[[step]]
+type = "substitute"
+pattern = ';\s*;+'
+replacement = ";"
+description = "Remove duplicate semicolons"
+
+[[step]]
+type = "substitute"
+pattern = '===\s*true'
+replacement = ""
+description = "Remove redundant === true"
+
+[[step]]
+type = "substitute"
+pattern = '===\s*false'
+replacement = "!"
+description = "Simplify === false"
+
+[[step]]
+type = "substitute"
+pattern = 'var\s+'
+replacement = "let "
+description = "Convert var to let"

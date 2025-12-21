@@ -1,0 +1,12 @@
+# GitHub Actions Output
+name = "GitHub Actions Output"
+
+[[step]]
+type = "filter"
+pattern = '##\[error\]|##\[warning\]|::error|::warning'
+action = "keep_line"
+
+[[step]]
+type = "substitute"
+pattern = '##\[(error|warning)\]'
+replacement = '[$1]'

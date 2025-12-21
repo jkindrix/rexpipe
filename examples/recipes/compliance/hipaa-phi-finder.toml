@@ -1,0 +1,43 @@
+# HIPAA PHI Finder - Detects Protected Health Information
+# Usage: rexpipe -c hipaa-phi-finder.toml < medical-records.txt
+
+name = "HIPAA PHI Finder"
+description = "Detects potential Protected Health Information (PHI)"
+
+[[step]]
+type = "filter"
+pattern = '\b\d{3}-\d{2}-\d{4}\b'
+action = "keep_line"
+description = "Find SSN patterns"
+
+[[step]]
+type = "filter"
+pattern = '\b(patient|diagnosis|medical|prescription|treatment|physician|hospital)\b'
+action = "keep_line"
+case_insensitive = true
+description = "Find medical terms"
+
+[[step]]
+type = "filter"
+pattern = '\b(DOB|Date of Birth|birthdate)\s*[:=]?\s*\d'
+action = "keep_line"
+case_insensitive = true
+description = "Find date of birth"
+
+[[step]]
+type = "filter"
+pattern = '\b(MRN|Medical Record|Patient ID)\s*[:=]?\s*\w+'
+action = "keep_line"
+case_insensitive = true
+description = "Find medical record numbers"
+
+[[step]]
+type = "substitute"
+pattern = '^(.*)$'
+replacement = '[PHI] $1'
+description = "Mark potential PHI"
+
+[[tests]]
+name = "detect_ssn"
+input = "Patient SSN: 123-45-6789"
+expected_output = "[PHI] Patient SSN: 123-45-6789"

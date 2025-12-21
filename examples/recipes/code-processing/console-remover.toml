@@ -1,0 +1,15 @@
+# Console Statement Remover
+name = "Console Remover"
+description = "Removes console.* statements from JavaScript"
+
+[[step]]
+type = "substitute"
+pattern = '\bconsole\.(log|debug|info|warn|error|trace|dir|table|time|timeEnd)\s*\([^)]*\)\s*;?'
+replacement = ""
+description = "Remove console statements"
+
+[[step]]
+type = "filter"
+pattern = '^\s*$'
+action = "drop_line"
+description = "Remove empty lines"

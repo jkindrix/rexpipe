@@ -1,0 +1,14 @@
+# Port Scanner Output Processor
+name = "Port Scanner Processor"
+description = "Processes nmap/port scanner output"
+
+[[step]]
+type = "filter"
+pattern = '\d+/(tcp|udp)\s+open'
+action = "keep_line"
+description = "Keep open ports"
+
+[[step]]
+type = "substitute"
+pattern = '(\d+)/(tcp|udp)\s+open\s+(\S+)'
+replacement = "Port $1/$2: $3 (OPEN)"

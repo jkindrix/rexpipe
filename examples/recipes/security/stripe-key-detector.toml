@@ -1,0 +1,17 @@
+# Stripe Key Detector
+name = "Stripe Key Detector"
+
+[[step]]
+type = "filter"
+pattern = 'sk_(live|test)_[0-9a-zA-Z]{24,}'
+action = "keep_line"
+
+[[step]]
+type = "filter"
+pattern = 'pk_(live|test)_[0-9a-zA-Z]{24,}'
+action = "keep_line"
+
+[[step]]
+type = "substitute"
+pattern = '^(.*)$'
+replacement = '[STRIPE KEY] $1'

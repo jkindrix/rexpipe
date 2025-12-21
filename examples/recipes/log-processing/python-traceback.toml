@@ -1,0 +1,15 @@
+# Python Traceback Formatter
+name = "Python Traceback Formatter"
+description = "Formats Python tracebacks for readability"
+
+[[step]]
+type = "substitute"
+pattern = 'File "([^"]+)", line (\d+), in (\w+)'
+replacement = '  $3() at $1:$2'
+description = "Format file references"
+
+[[step]]
+type = "substitute"
+pattern = '^(\w+Error|\w+Exception):\s*(.+)$'
+replacement = '!!! $1: $2'
+description = "Highlight error types"

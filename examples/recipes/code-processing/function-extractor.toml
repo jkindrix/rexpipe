@@ -1,0 +1,15 @@
+# Function Definition Extractor
+name = "Function Extractor"
+description = "Extracts function definitions from code"
+
+[[step]]
+type = "filter"
+pattern = '^\s*(def|function|func|fn|pub fn|async fn|const\s+\w+\s*=\s*(\(|async))'
+action = "keep_line"
+description = "Keep function definitions"
+
+[[step]]
+type = "substitute"
+pattern = '^\s*'
+replacement = ""
+description = "Remove leading whitespace"

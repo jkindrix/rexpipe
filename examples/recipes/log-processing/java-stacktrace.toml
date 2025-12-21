@@ -1,0 +1,21 @@
+# Java Stack Trace Formatter
+name = "Java Stack Trace Formatter"
+description = "Formats and summarizes Java stack traces"
+
+[[step]]
+type = "substitute"
+pattern = '\tat ([a-zA-Z0-9$.]+)\(([^:]+):(\d+)\)'
+replacement = '  -> $1 ($2:$3)'
+description = "Format stack trace lines"
+
+[[step]]
+type = "substitute"
+pattern = '(Exception|Error):\s*(.+)'
+replacement = '!!! $1: $2'
+description = "Highlight exception messages"
+
+[[step]]
+type = "filter"
+pattern = 'Caused by:'
+action = "keep_line"
+description = "Keep root cause lines"

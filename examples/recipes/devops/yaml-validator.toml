@@ -1,0 +1,14 @@
+# YAML Indentation Checker
+name = "YAML Indentation Checker"
+description = "Checks YAML indentation issues"
+
+[[step]]
+type = "filter"
+pattern = '^\s*\t'
+action = "keep_line"
+description = "Find tabs (should be spaces)"
+
+[[step]]
+type = "substitute"
+pattern = '^(.*)$'
+replacement = '[TAB INDENT] $1'

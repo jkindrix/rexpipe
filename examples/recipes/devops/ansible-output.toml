@@ -1,0 +1,21 @@
+# Ansible Output Processor
+name = "Ansible Output Processor"
+description = "Processes Ansible playbook output"
+
+[[step]]
+type = "filter"
+pattern = '(ok|changed|failed|skipped|unreachable):'
+action = "keep_line"
+description = "Keep status lines"
+
+[[step]]
+type = "substitute"
+pattern = 'changed=([1-9]\d*)'
+replacement = 'CHANGED=$1'
+description = "Highlight changes"
+
+[[step]]
+type = "substitute"
+pattern = 'failed=([1-9]\d*)'
+replacement = '!!! FAILED=$1 !!!'
+description = "Highlight failures"

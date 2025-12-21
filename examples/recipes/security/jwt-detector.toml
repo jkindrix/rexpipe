@@ -1,0 +1,14 @@
+# JWT Token Detector
+name = "JWT Detector"
+description = "Detects JWT tokens in code and logs"
+
+[[step]]
+type = "filter"
+pattern = 'eyJ[A-Za-z0-9_-]*\.eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]*'
+action = "keep_line"
+description = "Find JWT tokens"
+
+[[step]]
+type = "substitute"
+pattern = '^(.*)$'
+replacement = '[JWT TOKEN] $1'

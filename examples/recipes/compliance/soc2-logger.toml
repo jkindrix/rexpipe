@@ -1,0 +1,18 @@
+# SOC2 Log Sanitizer
+name = "SOC2 Log Sanitizer"
+description = "Sanitizes logs for SOC2 compliance"
+
+[[step]]
+type = "substitute"
+pattern = '\b\d{3}-\d{2}-\d{4}\b'
+replacement = "[SSN]"
+
+[[step]]
+type = "substitute"
+pattern = '[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'
+replacement = "[EMAIL]"
+
+[[step]]
+type = "substitute"
+pattern = '\b\d{4}[- ]?\d{4}[- ]?\d{4}[- ]?\d{4}\b'
+replacement = "[CARD]"

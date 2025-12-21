@@ -1,0 +1,34 @@
+# XSS Finder - Detects potential cross-site scripting vulnerabilities
+# Usage: rexpipe -c xss-finder.toml -R src/
+
+name = "XSS Vulnerability Finder"
+description = "Finds potential XSS vulnerabilities in web code"
+
+[[step]]
+type = "filter"
+pattern = 'innerHTML\s*=|document\.write\s*\(|\.html\s*\('
+action = "keep_line"
+description = "Find DOM manipulation without escaping"
+
+[[step]]
+type = "filter"
+pattern = 'dangerouslySetInnerHTML'
+action = "keep_line"
+description = "Find React dangerous HTML"
+
+[[step]]
+type = "filter"
+pattern = '\|\s*safe|\|raw'
+action = "keep_line"
+description = "Find template unsafe filters"
+
+[[step]]
+type = "substitute"
+pattern = '^(.*)$'
+replacement = '[XSS RISK] $1'
+description = "Mark potential vulnerabilities"
+
+[[tests]]
+name = "detect_innerhtml"
+input = 'element.innerHTML = userInput;'
+expected_output = '[XSS RISK] element.innerHTML = userInput;'

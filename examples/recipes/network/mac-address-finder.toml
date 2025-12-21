@@ -1,0 +1,8 @@
+# MAC Address Finder
+name = "MAC Address Finder"
+description = "Finds MAC addresses in text"
+
+[[step]]
+type = "filter"
+pattern = '([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})'
+action = "keep_line"

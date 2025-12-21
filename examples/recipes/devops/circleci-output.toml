@@ -1,0 +1,7 @@
+# CircleCI Output Processor
+name = "CircleCI Processor"
+
+[[step]]
+type = "filter"
+pattern = '(Success|Fail|Error|Skipped):|^\s*-\s+.*:\s+(PASS|FAIL)'
+action = "keep_line"

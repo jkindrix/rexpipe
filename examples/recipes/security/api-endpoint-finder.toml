@@ -1,0 +1,13 @@
+# API Endpoint Finder
+name = "API Endpoint Finder"
+
+[[step]]
+type = "filter"
+pattern = '/(api|v\d)/[a-z0-9/_-]+'
+action = "keep_line"
+case_insensitive = true
+
+[[step]]
+type = "extract"
+pattern = '(/(api|v\d)/[a-z0-9/_-]+)'
+case_insensitive = true

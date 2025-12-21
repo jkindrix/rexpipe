@@ -1,0 +1,8 @@
+# Word Filter (long words)
+name = "Long Word Filter"
+
+[[step]]
+type = "filter"
+pattern = '\b\w{10,}\b'
+action = "keep_line"
+description = "Keep lines with long words"
