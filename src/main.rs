@@ -446,6 +446,31 @@ fn build_cli() -> Command {
                 .help("Validate a pattern library file")
                 .value_hint(ValueHint::FilePath),
         )
+        // === Git Filter Integration ===
+        .arg(
+            Arg::new("git-filter-setup")
+                .long("git-filter-setup")
+                .value_name("FILTER_NAME")
+                .help("Generate git filter configuration for clean/smudge operations")
+                .long_help(
+                    "Generate configuration for using rexpipe as a git clean/smudge filter. \
+                     This outputs git config commands and .gitattributes entries. Use with a \
+                     pipeline config to automatically transform files on commit (clean) and \
+                     checkout (smudge). Example: rexpipe --git-filter-setup sanitize -c sanitize.toml"
+                ),
+        )
+        // === Pattern Discovery ===
+        .arg(
+            Arg::new("discover")
+                .long("discover")
+                .help("Discover potential patterns in input (frequency analysis)")
+                .long_help(
+                    "Analyze input to discover potential patterns not covered by current pipeline. \
+                     Uses frequency analysis to find repeated structures like IDs, dates, emails, \
+                     phone numbers, etc. Outputs suggested patterns with match counts."
+                )
+                .action(ArgAction::SetTrue),
+        )
         // === Misc ===
         .arg(
             Arg::new("performance")
@@ -596,6 +621,16 @@ fn run_application(matches: &clap::ArgMatches) -> Result<()> {
 
     if let Some(library_path) = matches.get_one::<String>("validate-library") {
         return validate_library_file(library_path);
+    }
+
+    // Handle git filter setup
+    if let Some(filter_name) = matches.get_one::<String>("git-filter-setup") {
+        return print_git_filter_setup(filter_name, matches);
+    }
+
+    // Handle pattern discovery mode
+    if matches.get_flag("discover") {
+        return run_pattern_discovery(matches);
     }
 
     // Build pipeline settings from CLI flags
@@ -1381,6 +1416,188 @@ fn run_processing_mode(
     if json_output && matches.get_flag("performance") {
         // If both json and performance are requested, output performance as JSON
         eprintln!("{}", json_schema::output_performance_json(&result)?);
+    }
+
+    Ok(())
+}
+
+/// Print git filter setup instructions
+fn print_git_filter_setup(filter_name: &str, matches: &clap::ArgMatches) -> Result<()> {
+    let config_path = matches.get_one::<String>("config");
+
+    println!("# Git Filter Setup: {}", filter_name);
+    println!("#");
+    println!("# This configures rexpipe as a git clean/smudge filter.");
+    println!("# - 'clean' runs on commit (working directory → repository)");
+    println!("# - 'smudge' runs on checkout (repository → working directory)");
+    println!();
+
+    // Generate the command
+    let rexpipe_cmd = if let Some(cfg) = config_path {
+        format!("rexpipe -c {}", cfg)
+    } else {
+        println!("# NOTE: No config file specified. Add -c <config.toml> for transformation rules.");
+        "rexpipe -c .rexpipe/filter.toml".to_string()
+    };
+
+    println!("# Step 1: Add to your git config (run in repository root):");
+    println!();
+    println!("git config filter.{}.clean '{}'", filter_name, rexpipe_cmd);
+    println!("git config filter.{}.smudge 'cat'", filter_name);
+    println!("git config filter.{}.required true", filter_name);
+    println!();
+
+    println!("# Step 2: Add to .gitattributes (patterns to filter):");
+    println!();
+    println!("# Example: sanitize all log files");
+    println!("*.log filter={}", filter_name);
+    println!("# Example: sanitize environment files");
+    println!("*.env filter={}", filter_name);
+    println!("# Example: sanitize specific config files");
+    println!("config/*.json filter={}", filter_name);
+    println!();
+
+    println!("# Step 3: Create pipeline config (.rexpipe/filter.toml):");
+    println!();
+    println!("# Example sanitization pipeline:");
+    println!(r#"[[step]]"#);
+    println!(r#"type = "substitute""#);
+    println!(r#"pattern = 'password\s*=\s*"[^"]*"'"#);
+    println!(r#"replacement = 'password = "***REDACTED***"'"#);
+    println!();
+    println!(r#"[[step]]"#);
+    println!(r#"type = "substitute""#);
+    println!(r#"pattern = 'api_key\s*=\s*"[^"]*"'"#);
+    println!(r#"replacement = 'api_key = "***REDACTED***"'"#);
+    println!();
+
+    println!("# For bidirectional filters (reversible), consider using deterministic masking");
+    println!("# (feature in development).");
+    println!();
+
+    println!("# Global setup (applies to all repositories):");
+    println!("# git config --global filter.{}.clean '{}'", filter_name, rexpipe_cmd);
+    println!("# git config --global filter.{}.smudge 'cat'", filter_name);
+
+    Ok(())
+}
+
+/// Run pattern discovery/learning mode
+fn run_pattern_discovery(matches: &clap::ArgMatches) -> Result<()> {
+    use std::collections::HashMap;
+    use regex::Regex;
+    use std::io::BufRead;
+
+    // Common pattern templates to search for
+    let pattern_templates: Vec<(&str, &str, Regex)> = vec![
+        ("email", r"Email addresses", Regex::new(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}").unwrap()),
+        ("ipv4", r"IPv4 addresses", Regex::new(r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b").unwrap()),
+        ("phone_us", r"US phone numbers", Regex::new(r"\b\d{3}[-.]?\d{3}[-.]?\d{4}\b").unwrap()),
+        ("date_iso", r"ISO dates (YYYY-MM-DD)", Regex::new(r"\b\d{4}-\d{2}-\d{2}\b").unwrap()),
+        ("date_us", r"US dates (MM/DD/YYYY)", Regex::new(r"\b\d{1,2}/\d{1,2}/\d{4}\b").unwrap()),
+        ("time_24h", r"24-hour time", Regex::new(r"\b\d{1,2}:\d{2}(:\d{2})?\b").unwrap()),
+        ("uuid", r"UUIDs", Regex::new(r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b").unwrap()),
+        ("hex_id", r"Hex identifiers (8+ chars)", Regex::new(r"\b[0-9a-fA-F]{8,}\b").unwrap()),
+        ("url", r"URLs", Regex::new(r#"https?://[^\s<>"']+"#).unwrap()),
+        ("ssn", r"SSN-like patterns", Regex::new(r"\b\d{3}-\d{2}-\d{4}\b").unwrap()),
+        ("credit_card", r"Credit card patterns", Regex::new(r"\b\d{4}[- ]?\d{4}[- ]?\d{4}[- ]?\d{4}\b").unwrap()),
+        ("api_key", r"API key patterns", Regex::new(r"\b[A-Za-z0-9_-]{20,}\b").unwrap()),
+        ("base64_blob", r"Base64 blobs (20+ chars)", Regex::new(r"\b[A-Za-z0-9+/]{20,}={0,2}\b").unwrap()),
+    ];
+
+    // Count matches
+    let mut pattern_counts: HashMap<&str, (u64, Vec<String>)> = HashMap::new();
+    for (name, _, _) in &pattern_templates {
+        pattern_counts.insert(name, (0, Vec::new()));
+    }
+
+    let mut total_lines = 0u64;
+
+    // Helper to process a line
+    fn process_line<'a>(
+        line: &str,
+        pattern_templates: &[(&'a str, &str, Regex)],
+        pattern_counts: &mut HashMap<&'a str, (u64, Vec<String>)>,
+    ) {
+        for (name, _, regex) in pattern_templates {
+            for cap in regex.find_iter(line) {
+                let entry = pattern_counts.get_mut(name).unwrap();
+                entry.0 += 1;
+                // Store up to 3 examples
+                if entry.1.len() < 3 && !entry.1.contains(&cap.as_str().to_string()) {
+                    entry.1.push(cap.as_str().to_string());
+                }
+            }
+        }
+    }
+
+    // Read input
+    if let Some(input_file) = matches.get_one::<String>("input") {
+        let reader = BufReader::new(File::open(input_file)?);
+        for line_result in reader.lines() {
+            let line = line_result?;
+            total_lines += 1;
+            process_line(&line, &pattern_templates, &mut pattern_counts);
+        }
+    } else if !io::stdin().is_terminal() {
+        let reader = BufReader::new(io::stdin());
+        for line_result in reader.lines() {
+            let line = line_result?;
+            total_lines += 1;
+            process_line(&line, &pattern_templates, &mut pattern_counts);
+        }
+    } else {
+        return Err(anyhow!("No input provided. Pipe data to stdin or use -f <file>"));
+    }
+
+    // Report findings
+    println!("Pattern Discovery Report");
+    println!("========================");
+    println!("Analyzed {} lines\n", total_lines);
+
+    // Sort by count descending
+    let mut findings: Vec<_> = pattern_templates
+        .iter()
+        .filter_map(|(name, desc, regex)| {
+            let (count, examples) = pattern_counts.get(name).unwrap();
+            if *count > 0 {
+                Some((name, desc, regex.as_str(), *count, examples.clone()))
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    findings.sort_by(|a, b| b.3.cmp(&a.3));
+
+    if findings.is_empty() {
+        println!("No common patterns detected.");
+    } else {
+        println!("Detected Patterns:");
+        println!();
+        for (name, desc, pattern, count, examples) in &findings {
+            println!("  {} ({} matches)", name, count);
+            println!("    Description: {}", desc);
+            println!("    Pattern: {}", pattern);
+            if !examples.is_empty() {
+                println!("    Examples: {}", examples.join(", "));
+            }
+            println!();
+        }
+
+        // Generate suggested config
+        println!("Suggested Pipeline Config:");
+        println!("--------------------------");
+        for (name, _desc, pattern, count, _examples) in &findings {
+            if *count >= 5 {
+                println!();
+                println!("[[step]]");
+                println!("# {} occurrences", count);
+                println!("type = \"substitute\"");
+                println!("pattern = '{}'", pattern.replace('\'', "\\'"));
+                println!("replacement = '[{}]'", name.to_uppercase());
+            }
+        }
     }
 
     Ok(())
