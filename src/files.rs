@@ -9,6 +9,35 @@
 //! To avoid overhead on small file sets, parallel processing is only used when the
 //! file count exceeds [`PARALLEL_THRESHOLD`].
 //!
+//! ## Permission Error Handling
+//!
+//! During directory recursion, permission errors are handled gracefully:
+//!
+//! - **Inaccessible files/directories are skipped** rather than stopping processing
+//! - **Errors are logged** at debug level for troubleshooting
+//! - **Errors are collected** in [`MultiFileResult::walk_errors`] for reporting
+//! - **Processing continues** with all accessible files
+//!
+//! This behavior matches tools like ripgrep and find, which continue processing
+//! when encountering permission denied errors. Use `discover_files_with_errors()`
+//! to get detailed error information.
+//!
+//! ## Symlink Handling
+//!
+//! By default, symlink directories are **not followed** during recursion for security:
+//!
+//! - Prevents path traversal attacks via malicious symlinks
+//! - Avoids infinite loops from circular symlink chains
+//! - Matches the default behavior of tools like ripgrep
+//!
+//! However, **symlink files ARE discovered and processed** - they are valid file entries
+//! that can be read. This means:
+//!
+//! - `link.txt -> real.txt` - Both files are discovered during directory walk
+//! - `link_dir/ -> real_dir/` - The symlinked directory is NOT followed
+//!
+//! Broken symlinks (pointing to non-existent targets) are skipped gracefully.
+//!
 //! # Example
 //!
 //! ```no_run
@@ -53,6 +82,117 @@ use std::sync::Arc;
 /// synchronization) can exceed the benefit. This threshold ensures parallel
 /// processing is only used when it's likely to provide a performance gain.
 pub const PARALLEL_THRESHOLD: usize = 4;
+
+/// Number of bytes to read when checking if a file is binary.
+/// Checking the first 8KB is usually sufficient to detect binary files.
+const BINARY_DETECTION_BYTES: usize = 8 * 1024;
+
+/// Binary file handling mode.
+///
+/// Controls how rexpipe handles files that appear to be binary (contain NUL bytes).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BinaryMode {
+    /// Automatically skip binary files (default behavior).
+    /// Files are detected as binary if they contain a NUL byte in the first 8KB.
+    #[default]
+    Auto,
+    /// Process all files as text, even if they contain binary data.
+    /// Use this when you know files are text but contain embedded NUL bytes.
+    Text,
+    /// Always skip binary files without processing.
+    Skip,
+}
+
+impl BinaryMode {
+    /// Parse a binary mode from a string.
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s.to_lowercase().as_str() {
+            "auto" => Some(BinaryMode::Auto),
+            "text" => Some(BinaryMode::Text),
+            "skip" => Some(BinaryMode::Skip),
+            _ => None,
+        }
+    }
+}
+
+/// Check if a file appears to be binary by looking for NUL bytes.
+///
+/// This uses the same heuristic as ripgrep: a file is considered binary
+/// if it contains a NUL byte in the first few kilobytes.
+pub fn is_binary_file(path: &Path) -> std::io::Result<bool> {
+    use std::io::Read;
+
+    let file = File::open(path)?;
+    let mut reader = BufReader::new(file);
+    let mut buffer = [0u8; BINARY_DETECTION_BYTES];
+
+    let bytes_read = reader.read(&mut buffer)?;
+
+    // Check for NUL bytes in the buffer
+    Ok(buffer[..bytes_read].contains(&0))
+}
+
+/// Format a directory walk error into a human-readable message.
+///
+/// This function translates `ignore::Error` into actionable messages
+/// that help users understand what went wrong and how to fix it.
+fn format_walk_error(err: &ignore::Error) -> String {
+    use std::io::ErrorKind;
+
+    // The ignore crate wraps various error types
+    match err {
+        ignore::Error::Io(io_err) => {
+            let kind = io_err.kind();
+            match kind {
+                ErrorKind::PermissionDenied => {
+                    format!(
+                        "Permission denied: {} (run with elevated privileges or exclude this path)",
+                        io_err
+                    )
+                }
+                ErrorKind::NotFound => {
+                    format!("Path not found: {}", io_err)
+                }
+                _ => {
+                    format!("I/O error: {} ({})", io_err, kind)
+                }
+            }
+        }
+        ignore::Error::WithPath { path, err: inner } => {
+            // Recursively format the inner error with path context
+            let inner_msg = format_walk_error(inner);
+            format!("{}: {}", path.display(), inner_msg)
+        }
+        ignore::Error::WithDepth { depth, err: inner } => {
+            let inner_msg = format_walk_error(inner);
+            format!("At depth {}: {}", depth, inner_msg)
+        }
+        ignore::Error::WithLineNumber { line, err: inner } => {
+            let inner_msg = format_walk_error(inner);
+            format!("Line {}: {}", line, inner_msg)
+        }
+        ignore::Error::Loop { ancestor, child } => {
+            format!(
+                "Filesystem loop detected: {} points back to {}",
+                child.display(),
+                ancestor.display()
+            )
+        }
+        ignore::Error::Glob { glob, err } => {
+            format!("Invalid glob pattern '{}': {}", glob.as_deref().unwrap_or("<unknown>"), err)
+        }
+        ignore::Error::UnrecognizedFileType(file_type) => {
+            format!("Unrecognized file type: {}", file_type)
+        }
+        ignore::Error::InvalidDefinition => {
+            "Invalid file type definition".to_string()
+        }
+        ignore::Error::Partial(errors) => {
+            let msgs: Vec<String> = errors.iter().map(format_walk_error).collect();
+            format!("Multiple errors: {}", msgs.join("; "))
+        }
+    }
+}
 
 // ============================================================================
 // Graceful Shutdown Support
@@ -160,10 +300,18 @@ pub struct MultiFileResult {
     pub files_processed: u64,
     pub files_matched: u64,
     pub files_modified: u64,
+    /// Number of files skipped (e.g., binary files)
+    pub files_skipped: u64,
     pub total_matches: u64,
     pub total_lines: u64,
     pub file_results: Vec<FileResult>,
+    /// Errors that occurred during file processing
     pub errors: Vec<String>,
+    /// Errors that occurred during directory walking (permission denied, etc.)
+    ///
+    /// These are non-fatal errors that didn't stop processing but indicate
+    /// that some files/directories were skipped.
+    pub walk_errors: Vec<String>,
     /// Set if processing was interrupted by a shutdown signal
     pub interrupted: Option<ShutdownInterrupted>,
 }
@@ -204,6 +352,8 @@ pub struct FileProcessingOptions {
     pub streaming_output: bool,
     /// Optional shutdown signal for graceful termination
     pub shutdown_signal: Option<ShutdownSignal>,
+    /// Binary file handling mode
+    pub binary_mode: BinaryMode,
 }
 
 impl std::fmt::Debug for FileProcessingOptions {
@@ -224,6 +374,7 @@ impl std::fmt::Debug for FileProcessingOptions {
             .field("show_progress", &self.show_progress)
             .field("streaming_output", &self.streaming_output)
             .field("shutdown_signal", &self.shutdown_signal.is_some())
+            .field("binary_mode", &self.binary_mode)
             .finish()
     }
 }
@@ -246,6 +397,7 @@ impl Default for FileProcessingOptions {
             show_progress: false,
             streaming_output: false,
             shutdown_signal: None,
+            binary_mode: BinaryMode::Auto,
         }
     }
 }
@@ -348,6 +500,40 @@ impl FileProcessingOptions {
         self.shutdown_signal = Some(signal);
         self
     }
+
+    /// Set binary file handling mode.
+    ///
+    /// - `BinaryMode::Auto` (default): Skip files detected as binary
+    /// - `BinaryMode::Text`: Process all files as text
+    /// - `BinaryMode::Skip`: Always skip binary files
+    pub fn binary_mode(mut self, mode: BinaryMode) -> Self {
+        self.binary_mode = mode;
+        self
+    }
+
+    /// Check if a file should be skipped based on binary detection settings.
+    ///
+    /// Returns `true` if the file should be skipped, `false` if it should be processed.
+    pub fn should_skip_file(&self, path: &Path) -> bool {
+        match self.binary_mode {
+            BinaryMode::Text => false, // Never skip in text mode
+            BinaryMode::Skip | BinaryMode::Auto => {
+                // Check if file is binary
+                match is_binary_file(path) {
+                    Ok(true) => {
+                        trace!("Skipping binary file: {}", path.display());
+                        true
+                    }
+                    Ok(false) => false,
+                    Err(e) => {
+                        // If we can't read the file, let the actual processing handle the error
+                        trace!("Could not check if file is binary: {}: {}", path.display(), e);
+                        false
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// Create a progress bar for file processing
@@ -407,6 +593,28 @@ impl MultiFileProcessor {
     }
 
     fn walk_directory(&self, dir: &Path) -> Result<Vec<PathBuf>> {
+        self.walk_directory_with_errors(dir).map(|(files, _)| files)
+    }
+
+    /// Walk directory and return both discovered files and any errors encountered.
+    ///
+    /// Unlike `walk_directory`, this method returns partial results even when some
+    /// files or directories cannot be accessed due to permission errors.
+    ///
+    /// # Returns
+    ///
+    /// A tuple of (discovered_files, errors) where:
+    /// - `discovered_files`: All accessible files matching the criteria
+    /// - `errors`: Human-readable error messages for inaccessible entries
+    ///
+    /// # Permission Error Behavior
+    ///
+    /// Permission errors during directory walking are handled gracefully:
+    /// - Inaccessible files/directories are skipped
+    /// - Errors are logged and collected for reporting
+    /// - Processing continues with accessible files
+    /// - The operation only fails if the root directory itself is inaccessible
+    pub fn walk_directory_with_errors(&self, dir: &Path) -> Result<(Vec<PathBuf>, Vec<String>)> {
         let mut builder = WalkBuilder::new(dir);
 
         // Security: Do not follow symlinks (default, but explicit for clarity)
@@ -427,9 +635,20 @@ impl MultiFileProcessor {
         }
 
         let mut files = Vec::new();
+        let mut errors = Vec::new();
 
-        for entry in builder.build() {
-            let entry = entry?;
+        for entry_result in builder.build() {
+            let entry = match entry_result {
+                Ok(e) => e,
+                Err(e) => {
+                    // Handle permission and other errors gracefully
+                    let error_msg = format_walk_error(&e);
+                    debug!("Directory walk error: {}", error_msg);
+                    errors.push(error_msg);
+                    continue;
+                }
+            };
+
             let path = entry.path();
 
             if !path.is_file() {
@@ -461,7 +680,59 @@ impl MultiFileProcessor {
             files.push(path.to_path_buf());
         }
 
-        Ok(files)
+        Ok((files, errors))
+    }
+
+    /// Discover files with detailed error reporting.
+    ///
+    /// Like `discover_files`, but returns both discovered files and any permission
+    /// or access errors encountered during directory traversal.
+    ///
+    /// # Returns
+    ///
+    /// A tuple of (discovered_files, walk_errors) where:
+    /// - `discovered_files`: All accessible files matching the criteria
+    /// - `walk_errors`: Errors encountered while walking directories
+    pub fn discover_files_with_errors(
+        &self,
+        paths: &[PathBuf],
+    ) -> Result<(Vec<PathBuf>, Vec<String>)> {
+        debug!("Discovering files from {} starting paths", paths.len());
+        let mut files = Vec::new();
+        let mut all_errors = Vec::new();
+
+        for path in paths {
+            if path.is_file() {
+                trace!("Adding file: {}", path.display());
+                files.push(path.clone());
+            } else if path.is_dir() {
+                debug!("Walking directory: {}", path.display());
+                let (discovered, errors) = self.walk_directory_with_errors(path)?;
+                debug!(
+                    "Found {} files in {} ({} errors)",
+                    discovered.len(),
+                    path.display(),
+                    errors.len()
+                );
+                files.extend(discovered);
+                all_errors.extend(errors);
+            } else {
+                // Path doesn't exist or is a special file
+                let msg = format!(
+                    "{}: No such file or directory (or insufficient permissions)",
+                    path.display()
+                );
+                debug!("{}", msg);
+                all_errors.push(msg);
+            }
+        }
+
+        info!(
+            "File discovery complete: {} files found, {} errors",
+            files.len(),
+            all_errors.len()
+        );
+        Ok((files, all_errors))
     }
 
     /// Process multiple files
@@ -607,6 +878,17 @@ impl MultiFileProcessor {
                 }
             }
 
+            // Skip binary files based on binary_mode setting
+            if self.options.should_skip_file(file) {
+                debug!("Skipping binary file: {}", file.display());
+                result.files_skipped += 1;
+                processed_count += 1;
+                if let Some(ref pb) = progress {
+                    pb.inc(1);
+                }
+                continue;
+            }
+
             match self.process_single_file(file) {
                 Ok(file_result) => {
                     result.files_processed += 1;
@@ -692,6 +974,16 @@ impl MultiFileProcessor {
                     }
                 }
 
+                // Skip binary files based on binary_mode setting
+                if self.options.should_skip_file(file) {
+                    debug!("Skipping binary file: {}", file.display());
+                    files_skipped.fetch_add(1, Ordering::Relaxed);
+                    if let Some(ref pb) = progress {
+                        pb.inc(1);
+                    }
+                    return None; // Skip binary file
+                }
+
                 let result = match self.process_single_file(file) {
                     Ok(file_result) => {
                         files_processed.fetch_add(1, Ordering::Relaxed);
@@ -743,10 +1035,12 @@ impl MultiFileProcessor {
             files_processed: files_processed.load(Ordering::Relaxed),
             files_matched: files_matched.load(Ordering::Relaxed),
             files_modified: files_modified.load(Ordering::Relaxed),
+            files_skipped: skipped_count,
             total_matches: total_matches.load(Ordering::Relaxed),
             total_lines: total_lines.load(Ordering::Relaxed),
             file_results,
             errors,
+            walk_errors: Vec::new(), // Walk errors are collected during discovery, not processing
             interrupted: None,
         };
 
@@ -1013,17 +1307,29 @@ impl MultiFileProcessor {
 impl MultiFileResult {
     pub fn summary(&self) -> String {
         let mut summary = format!(
-            "Files: {} processed, {} matched, {} modified\n\
-             Lines: {} total\n\
-             Matches: {} total\n\
-             Errors: {}",
-            self.files_processed,
-            self.files_matched,
-            self.files_modified,
-            self.total_lines,
-            self.total_matches,
-            self.errors.len()
+            "Files: {} processed, {} matched, {} modified",
+            self.files_processed, self.files_matched, self.files_modified
         );
+
+        if self.files_skipped > 0 {
+            summary.push_str(&format!(", {} skipped", self.files_skipped));
+        }
+
+        summary.push_str(&format!(
+            "\nLines: {} total\nMatches: {} total",
+            self.total_lines, self.total_matches
+        ));
+
+        if !self.errors.is_empty() {
+            summary.push_str(&format!("\nProcessing errors: {}", self.errors.len()));
+        }
+
+        if !self.walk_errors.is_empty() {
+            summary.push_str(&format!(
+                "\nAccess errors: {} (some files/directories were inaccessible)",
+                self.walk_errors.len()
+            ));
+        }
 
         if let Some(ref interrupted) = self.interrupted {
             summary.push_str(&format!(
@@ -1042,6 +1348,19 @@ impl MultiFileResult {
     /// Check if any errors occurred during processing.
     pub fn has_errors(&self) -> bool {
         !self.errors.is_empty()
+    }
+
+    /// Check if any permission/access errors occurred during directory walking.
+    ///
+    /// When true, some files or directories were inaccessible and skipped.
+    /// Check `walk_errors` field for details.
+    pub fn has_walk_errors(&self) -> bool {
+        !self.walk_errors.is_empty()
+    }
+
+    /// Check if any errors occurred (processing errors or walk errors).
+    pub fn has_any_errors(&self) -> bool {
+        self.has_errors() || self.has_walk_errors()
     }
 
     /// Check if processing was interrupted by a shutdown signal.
@@ -1546,5 +1865,219 @@ mod tests {
             .unwrap();
 
         assert_eq!(discovered.len(), 2); // Only .txt files
+    }
+
+    // ========================================================================
+    // Symlink handling tests (Unix-only)
+    // ========================================================================
+
+    #[cfg(unix)]
+    mod symlink_tests {
+        use super::*;
+        use std::os::unix::fs::symlink;
+
+        #[test]
+        fn test_symlink_files_discovered_but_directories_not_followed() {
+            let temp_dir = TempDir::new().unwrap();
+
+            // Create a real file
+            let real_file = temp_dir.path().join("real.txt");
+            fs::write(&real_file, "content 123").unwrap();
+
+            // Create a symlink to the file
+            // Note: symlink files ARE discovered (the symlink itself is a valid file entry)
+            // This matches the behavior of ripgrep and other tools
+            let link_file = temp_dir.path().join("link.txt");
+            symlink(&real_file, &link_file).unwrap();
+
+            let config = PipelineConfig::from_inline_pattern(r"\d+", None);
+            let options = FileProcessingOptions::default();
+            let processor = MultiFileProcessor::new(config, options);
+
+            let discovered = processor
+                .discover_files(&[temp_dir.path().to_path_buf()])
+                .unwrap();
+
+            // Both the real file and symlink file are discovered
+            // This is correct behavior - symlinks to files ARE valid files
+            // Only symlinks to directories are not followed (to prevent infinite loops)
+            assert_eq!(discovered.len(), 2);
+        }
+
+        #[test]
+        fn test_symlink_directory_not_followed() {
+            let temp_dir = TempDir::new().unwrap();
+
+            // Create a subdirectory with a file
+            let subdir = temp_dir.path().join("subdir");
+            fs::create_dir(&subdir).unwrap();
+            fs::write(subdir.join("file.txt"), "content 456").unwrap();
+
+            // Create a symlink to the subdirectory
+            let link_dir = temp_dir.path().join("link_dir");
+            symlink(&subdir, &link_dir).unwrap();
+
+            let config = PipelineConfig::from_inline_pattern(r"\d+", None);
+            let options = FileProcessingOptions::default();
+            let processor = MultiFileProcessor::new(config, options);
+
+            let discovered = processor
+                .discover_files(&[temp_dir.path().to_path_buf()])
+                .unwrap();
+
+            // Only one file should be discovered (from the real subdir)
+            // The symlinked directory should not be followed
+            assert_eq!(discovered.len(), 1);
+        }
+
+        #[test]
+        fn test_symlink_loop_handled_gracefully() {
+            let temp_dir = TempDir::new().unwrap();
+
+            // Create a circular symlink (link pointing to itself)
+            let link_path = temp_dir.path().join("loop_link");
+            // Create a symlink pointing to the parent (would cause infinite loop if followed)
+            symlink(temp_dir.path(), &link_path).unwrap();
+
+            // Create a real file
+            fs::write(temp_dir.path().join("real.txt"), "content").unwrap();
+
+            let config = PipelineConfig::from_inline_pattern(r"\d+", None);
+            let options = FileProcessingOptions::default();
+            let processor = MultiFileProcessor::new(config, options);
+
+            // Should not hang or crash - should handle the loop gracefully
+            let discovered = processor
+                .discover_files(&[temp_dir.path().to_path_buf()])
+                .unwrap();
+
+            // Only the real file should be discovered
+            assert_eq!(discovered.len(), 1);
+            assert_eq!(discovered[0].file_name().unwrap(), "real.txt");
+        }
+
+        #[test]
+        fn test_broken_symlink_handled_gracefully() {
+            let temp_dir = TempDir::new().unwrap();
+
+            // Create a symlink to a non-existent file
+            let broken_link = temp_dir.path().join("broken.txt");
+            symlink("/nonexistent/path/file.txt", &broken_link).unwrap();
+
+            // Create a real file
+            fs::write(temp_dir.path().join("real.txt"), "content").unwrap();
+
+            let config = PipelineConfig::from_inline_pattern(r"\d+", None);
+            let options = FileProcessingOptions::default();
+            let processor = MultiFileProcessor::new(config, options);
+
+            // Should not crash on broken symlink
+            let discovered = processor
+                .discover_files(&[temp_dir.path().to_path_buf()])
+                .unwrap();
+
+            // Only the real file should be discovered
+            assert_eq!(discovered.len(), 1);
+            assert_eq!(discovered[0].file_name().unwrap(), "real.txt");
+        }
+
+        #[test]
+        fn test_explicit_symlink_file_can_be_processed() {
+            let temp_dir = TempDir::new().unwrap();
+
+            // Create a real file
+            let real_file = temp_dir.path().join("real.txt");
+            fs::write(&real_file, "content 123").unwrap();
+
+            // Create a symlink to the file
+            let link_file = temp_dir.path().join("link.txt");
+            symlink(&real_file, &link_file).unwrap();
+
+            let config = PipelineConfig::from_inline_pattern(r"\d+", None);
+            let options = FileProcessingOptions::default();
+            let processor = MultiFileProcessor::new(config, options);
+
+            // When a symlink is explicitly specified, it should be processable
+            // (the symlink itself passes is_file() check)
+            let result = processor.count_matches(&[link_file.clone()]).unwrap();
+
+            // The symlink file should be processed
+            assert_eq!(result.files_processed, 1);
+            assert_eq!(result.files_matched, 1);
+        }
+    }
+
+    // ========================================================================
+    // Binary file handling tests
+    // ========================================================================
+
+    #[test]
+    fn test_binary_file_detection() {
+        let temp_dir = TempDir::new().unwrap();
+
+        // Create a text file
+        let text_file = temp_dir.path().join("text.txt");
+        fs::write(&text_file, "Hello world\nThis is text\n").unwrap();
+
+        // Create a binary file (contains NUL bytes)
+        let binary_file = temp_dir.path().join("binary.bin");
+        fs::write(&binary_file, b"Hello\x00World\x00Binary").unwrap();
+
+        assert!(!is_binary_file(&text_file).unwrap());
+        assert!(is_binary_file(&binary_file).unwrap());
+    }
+
+    #[test]
+    fn test_binary_mode_auto_skips_binary() {
+        let temp_dir = TempDir::new().unwrap();
+
+        // Create a text file
+        fs::write(temp_dir.path().join("text.txt"), "content 123").unwrap();
+
+        // Create a binary file
+        fs::write(temp_dir.path().join("binary.bin"), b"data\x00with\x00nulls 456").unwrap();
+
+        let config = PipelineConfig::from_inline_pattern(r"\d+", None);
+        let options = FileProcessingOptions::default()
+            .binary_mode(BinaryMode::Auto);
+        let processor = MultiFileProcessor::new(config, options);
+
+        let files = vec![
+            temp_dir.path().join("text.txt"),
+            temp_dir.path().join("binary.bin"),
+        ];
+
+        let result = processor.process_files(&files).unwrap();
+
+        // Text file processed, binary file skipped
+        assert_eq!(result.files_processed, 1);
+        assert_eq!(result.files_skipped, 1);
+    }
+
+    #[test]
+    fn test_binary_mode_text_processes_all() {
+        let temp_dir = TempDir::new().unwrap();
+
+        // Create a text file
+        fs::write(temp_dir.path().join("text.txt"), "content 123").unwrap();
+
+        // Create a binary file
+        fs::write(temp_dir.path().join("binary.bin"), b"data\x00with\x00nulls 456").unwrap();
+
+        let config = PipelineConfig::from_inline_pattern(r"\d+", None);
+        let options = FileProcessingOptions::default()
+            .binary_mode(BinaryMode::Text);
+        let processor = MultiFileProcessor::new(config, options);
+
+        let files = vec![
+            temp_dir.path().join("text.txt"),
+            temp_dir.path().join("binary.bin"),
+        ];
+
+        let result = processor.process_files(&files).unwrap();
+
+        // Both files processed in text mode
+        assert_eq!(result.files_processed, 2);
+        assert_eq!(result.files_skipped, 0);
     }
 }

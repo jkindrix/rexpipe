@@ -40,10 +40,44 @@ pub struct PipelineSettings {
     /// Strict mode - reject patterns with potential ReDoS vulnerabilities
     #[serde(default)]
     pub strict_mode: bool,
+    /// Preserve CRLF line endings in in-place editing mode
+    ///
+    /// When true, the processor detects and preserves the original line ending
+    /// style (LF or CRLF) for each line. When false (default), all output uses
+    /// LF line endings regardless of input.
+    #[serde(default)]
+    pub preserve_line_endings: bool,
+    /// Maximum line length in bytes (0 = no limit)
+    ///
+    /// Lines exceeding this limit will be handled according to `max_line_action`.
+    /// This prevents memory issues when processing files with very long lines
+    /// (e.g., minified JavaScript). Default: 0 (no limit).
+    #[serde(default)]
+    pub max_line_length: usize,
+    /// Action to take when a line exceeds `max_line_length`
+    ///
+    /// - "skip": Skip the line entirely (default)
+    /// - "error": Return an error
+    /// - "truncate": Truncate the line at the limit
+    #[serde(default)]
+    pub max_line_action: MaxLineAction,
 }
 
 fn default_allow_shell() -> bool {
     true
+}
+
+/// Action to take when a line exceeds the maximum length
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MaxLineAction {
+    /// Skip lines exceeding the limit (output unchanged, log warning)
+    #[default]
+    Skip,
+    /// Return an error when a line exceeds the limit
+    Error,
+    /// Truncate lines at the limit and continue processing
+    Truncate,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -347,6 +381,14 @@ impl PipelineConfig {
                         errors.push(format!("Step {}: Filter type requires action", i + 1));
                     }
                 }
+                StepType::Transform => {
+                    if step.transform.is_none() {
+                        errors.push(format!(
+                            "Step {}: Transform type requires transform action",
+                            i + 1
+                        ));
+                    }
+                }
                 _ => {}
             }
 
@@ -355,11 +397,230 @@ impl PipelineConfig {
             }
         }
 
+        // Check for pattern references without loaded libraries
+        if self.patterns_include.is_empty() {
+            for (i, step) in self.step.iter().enumerate() {
+                if crate::library::has_pattern_references(&step.pattern) {
+                    errors.push(format!(
+                        "Step {}: Pattern uses reference syntax (${{...}}) but no pattern libraries are included. \
+                         Add 'patterns_include' to your config or use --library",
+                        i + 1
+                    ));
+                }
+            }
+        }
+
+        // Check for contradictory filter configurations
+        errors.extend(self.check_contradictory_filters());
+
         if errors.is_empty() {
             Ok(())
         } else {
             Err(errors)
         }
+    }
+
+    /// Check for contradictory filter configurations between steps.
+    ///
+    /// Detects when two filter steps have opposite actions (keep_line vs drop_line)
+    /// on identical patterns, which would make the second step ineffective.
+    fn check_contradictory_filters(&self) -> Vec<String> {
+        let mut errors = Vec::new();
+        let enabled_steps: Vec<_> = self
+            .step
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| s.enabled.unwrap_or(true))
+            .collect();
+
+        for i in 0..enabled_steps.len() {
+            let (idx1, step1) = enabled_steps[i];
+            if !matches!(step1.step_type, StepType::Filter) {
+                continue;
+            }
+
+            for j in (i + 1)..enabled_steps.len() {
+                let (idx2, step2) = enabled_steps[j];
+                if !matches!(step2.step_type, StepType::Filter) {
+                    continue;
+                }
+
+                // Check if patterns are identical
+                if step1.pattern != step2.pattern {
+                    continue;
+                }
+
+                // Check if actions are contradictory
+                if let (Some(action1), Some(action2)) = (&step1.action, &step2.action) {
+                    let contradictory = matches!(
+                        (action1, action2),
+                        (FilterAction::KeepLine, FilterAction::DropLine)
+                            | (FilterAction::DropLine, FilterAction::KeepLine)
+                            | (FilterAction::KeepMatch, FilterAction::DropMatch)
+                            | (FilterAction::DropMatch, FilterAction::KeepMatch)
+                    );
+
+                    if contradictory {
+                        let action1_str = match action1 {
+                            FilterAction::KeepLine => "keep_line",
+                            FilterAction::DropLine => "drop_line",
+                            FilterAction::KeepMatch => "keep_match",
+                            FilterAction::DropMatch => "drop_match",
+                        };
+                        let action2_str = match action2 {
+                            FilterAction::KeepLine => "keep_line",
+                            FilterAction::DropLine => "drop_line",
+                            FilterAction::KeepMatch => "keep_match",
+                            FilterAction::DropMatch => "drop_match",
+                        };
+                        errors.push(format!(
+                            "Contradictory filters: Step {} ({} on '{}') conflicts with \
+                             Step {} ({} on same pattern). The second filter will have no effect.",
+                            idx1 + 1, action1_str, step1.pattern, idx2 + 1, action2_str
+                        ));
+                    }
+                }
+            }
+        }
+
+        errors
+    }
+
+    /// Comprehensive validation that returns structured errors.
+    ///
+    /// This method returns `ValidationError` types for better error handling
+    /// and more informative error messages.
+    pub fn validate_comprehensive(&self) -> std::result::Result<(), crate::error::ValidationError> {
+        let mut errors = Vec::new();
+
+        if self.step.is_empty() {
+            return Err(crate::error::ValidationError::EmptyPipeline);
+        }
+
+        for (i, step) in self.step.iter().enumerate() {
+            let step_num = i + 1;
+
+            // Check empty pattern
+            if step.pattern.is_empty() {
+                let step_type_str = match step.step_type {
+                    StepType::Substitute => "substitute",
+                    StepType::Filter => "filter",
+                    StepType::Extract => "extract",
+                    StepType::Validate => "validate",
+                    StepType::Transform => "transform",
+                };
+                errors.push(crate::error::ValidationError::missing_field(
+                    step_num,
+                    "pattern",
+                    step_type_str,
+                ));
+            }
+
+            // Check type-specific requirements
+            match step.step_type {
+                StepType::Substitute => {
+                    if step.replacement.is_none() {
+                        errors.push(crate::error::ValidationError::missing_field(
+                            step_num,
+                            "replacement",
+                            "substitute",
+                        ));
+                    }
+                }
+                StepType::Filter => {
+                    if step.action.is_none() {
+                        errors.push(crate::error::ValidationError::missing_field(
+                            step_num,
+                            "action",
+                            "filter",
+                        ));
+                    }
+                }
+                StepType::Transform => {
+                    if step.transform.is_none() {
+                        errors.push(crate::error::ValidationError::step_error(
+                            step_num,
+                            "Transform type requires a 'transform' field",
+                            "Add a transform action like 'uppercase', 'lowercase', 'trim', etc.",
+                        ));
+                    }
+                }
+                _ => {}
+            }
+
+            // Check for pattern references without libraries
+            if self.patterns_include.is_empty()
+                && crate::library::has_pattern_references(&step.pattern)
+            {
+                errors.push(crate::error::ValidationError::step_error(
+                    step_num,
+                    format!("Pattern uses reference syntax (${{...}}) but no libraries are loaded"),
+                    "Add 'patterns_include' to your config or use --library flag",
+                ));
+            }
+        }
+
+        // Check for contradictory filters
+        if let Some(conflict) = self.find_contradictory_filters() {
+            errors.push(conflict);
+        }
+
+        // Return first error or success
+        if let Some(first_error) = errors.into_iter().next() {
+            Err(first_error)
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Find contradictory filter configurations and return a structured error.
+    fn find_contradictory_filters(&self) -> Option<crate::error::ValidationError> {
+        let enabled_steps: Vec<_> = self
+            .step
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| s.enabled.unwrap_or(true))
+            .collect();
+
+        for i in 0..enabled_steps.len() {
+            let (idx1, step1) = enabled_steps[i];
+            if !matches!(step1.step_type, StepType::Filter) {
+                continue;
+            }
+
+            for j in (i + 1)..enabled_steps.len() {
+                let (idx2, step2) = enabled_steps[j];
+                if !matches!(step2.step_type, StepType::Filter) {
+                    continue;
+                }
+
+                if step1.pattern != step2.pattern {
+                    continue;
+                }
+
+                if let (Some(action1), Some(action2)) = (&step1.action, &step2.action) {
+                    let contradictory = matches!(
+                        (action1, action2),
+                        (FilterAction::KeepLine, FilterAction::DropLine)
+                            | (FilterAction::DropLine, FilterAction::KeepLine)
+                            | (FilterAction::KeepMatch, FilterAction::DropMatch)
+                            | (FilterAction::DropMatch, FilterAction::KeepMatch)
+                    );
+
+                    if contradictory {
+                        return Some(crate::error::ValidationError::ContradictoryFilters {
+                            step1: idx1 + 1,
+                            step2: idx2 + 1,
+                            pattern: step1.pattern.clone(),
+                            action1: format!("{:?}", action1),
+                            action2: format!("{:?}", action2),
+                        });
+                    }
+                }
+            }
+        }
+
+        None
     }
 
     pub fn enabled_steps(&self) -> impl Iterator<Item = &PipelineStep> {
@@ -645,5 +906,252 @@ mod tests {
         result.add_step_result(step_result);
         assert_eq!(result.matches_found, 5);
         assert_eq!(result.transformations_applied, 3);
+    }
+
+    #[test]
+    fn test_contradictory_filter_detection() {
+        let config = PipelineConfig {
+            name: Some("Test".to_string()),
+            description: None,
+            version: None,
+            patterns_include: Vec::new(),
+            settings: PipelineSettings::default(),
+            step: vec![
+                PipelineStep {
+                    step_type: StepType::Filter,
+                    pattern: "ERROR".to_string(),
+                    replacement: None,
+                    action: Some(FilterAction::KeepLine),
+                    transform: None,
+                    flags: None,
+                    description: None,
+                    enabled: Some(true),
+                },
+                PipelineStep {
+                    step_type: StepType::Filter,
+                    pattern: "ERROR".to_string(),
+                    replacement: None,
+                    action: Some(FilterAction::DropLine),
+                    transform: None,
+                    flags: None,
+                    description: None,
+                    enabled: Some(true),
+                },
+            ],
+        };
+
+        let result = config.validate();
+        assert!(result.is_err());
+        let errors = result.unwrap_err();
+        assert!(errors.iter().any(|e| e.contains("Contradictory")));
+    }
+
+    #[test]
+    fn test_non_contradictory_filters_same_pattern() {
+        // keep_line followed by drop_match is NOT contradictory
+        let config = PipelineConfig {
+            name: Some("Test".to_string()),
+            description: None,
+            version: None,
+            patterns_include: Vec::new(),
+            settings: PipelineSettings::default(),
+            step: vec![
+                PipelineStep {
+                    step_type: StepType::Filter,
+                    pattern: "ERROR".to_string(),
+                    replacement: None,
+                    action: Some(FilterAction::KeepLine),
+                    transform: None,
+                    flags: None,
+                    description: None,
+                    enabled: Some(true),
+                },
+                PipelineStep {
+                    step_type: StepType::Filter,
+                    pattern: "ERROR".to_string(),
+                    replacement: None,
+                    action: Some(FilterAction::KeepLine),
+                    transform: None,
+                    flags: None,
+                    description: None,
+                    enabled: Some(true),
+                },
+            ],
+        };
+
+        // Same action twice is redundant but not contradictory
+        let result = config.validate();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_transform_step_requires_transform_action() {
+        let config = PipelineConfig {
+            name: Some("Test".to_string()),
+            description: None,
+            version: None,
+            patterns_include: Vec::new(),
+            settings: PipelineSettings::default(),
+            step: vec![PipelineStep {
+                step_type: StepType::Transform,
+                pattern: "test".to_string(),
+                replacement: None,
+                action: None,
+                transform: None, // Missing!
+                flags: None,
+                description: None,
+                enabled: Some(true),
+            }],
+        };
+
+        let result = config.validate();
+        assert!(result.is_err());
+        let errors = result.unwrap_err();
+        assert!(errors.iter().any(|e| e.contains("Transform")));
+    }
+
+    #[test]
+    fn test_transform_step_with_action_validates() {
+        let config = PipelineConfig {
+            name: Some("Test".to_string()),
+            description: None,
+            version: None,
+            patterns_include: Vec::new(),
+            settings: PipelineSettings::default(),
+            step: vec![PipelineStep {
+                step_type: StepType::Transform,
+                pattern: "test".to_string(),
+                replacement: None,
+                action: None,
+                transform: Some(TransformAction::Uppercase),
+                flags: None,
+                description: None,
+                enabled: Some(true),
+            }],
+        };
+
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_pattern_reference_without_library_warning() {
+        let config = PipelineConfig {
+            name: Some("Test".to_string()),
+            description: None,
+            version: None,
+            patterns_include: Vec::new(), // No libraries!
+            settings: PipelineSettings::default(),
+            step: vec![PipelineStep {
+                step_type: StepType::Substitute,
+                pattern: "${email}".to_string(), // Uses reference
+                replacement: Some("REDACTED".to_string()),
+                action: None,
+                transform: None,
+                flags: None,
+                description: None,
+                enabled: Some(true),
+            }],
+        };
+
+        let result = config.validate();
+        assert!(result.is_err());
+        let errors = result.unwrap_err();
+        assert!(errors.iter().any(|e| e.contains("${") && e.contains("library")));
+    }
+
+    #[test]
+    fn test_disabled_step_not_checked_for_contradictions() {
+        let config = PipelineConfig {
+            name: Some("Test".to_string()),
+            description: None,
+            version: None,
+            patterns_include: Vec::new(),
+            settings: PipelineSettings::default(),
+            step: vec![
+                PipelineStep {
+                    step_type: StepType::Filter,
+                    pattern: "ERROR".to_string(),
+                    replacement: None,
+                    action: Some(FilterAction::KeepLine),
+                    transform: None,
+                    flags: None,
+                    description: None,
+                    enabled: Some(true),
+                },
+                PipelineStep {
+                    step_type: StepType::Filter,
+                    pattern: "ERROR".to_string(),
+                    replacement: None,
+                    action: Some(FilterAction::DropLine),
+                    transform: None,
+                    flags: None,
+                    description: None,
+                    enabled: Some(false), // Disabled!
+                },
+            ],
+        };
+
+        // Should not detect contradiction since second step is disabled
+        let result = config.validate();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_comprehensive_validation_empty_pipeline() {
+        let config = PipelineConfig {
+            name: Some("Test".to_string()),
+            description: None,
+            version: None,
+            patterns_include: Vec::new(),
+            settings: PipelineSettings::default(),
+            step: vec![],
+        };
+
+        let result = config.validate_comprehensive();
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            crate::error::ValidationError::EmptyPipeline
+        ));
+    }
+
+    #[test]
+    fn test_comprehensive_validation_contradictory_filters() {
+        let config = PipelineConfig {
+            name: Some("Test".to_string()),
+            description: None,
+            version: None,
+            patterns_include: Vec::new(),
+            settings: PipelineSettings::default(),
+            step: vec![
+                PipelineStep {
+                    step_type: StepType::Filter,
+                    pattern: "ERROR".to_string(),
+                    replacement: None,
+                    action: Some(FilterAction::KeepLine),
+                    transform: None,
+                    flags: None,
+                    description: None,
+                    enabled: Some(true),
+                },
+                PipelineStep {
+                    step_type: StepType::Filter,
+                    pattern: "ERROR".to_string(),
+                    replacement: None,
+                    action: Some(FilterAction::DropLine),
+                    transform: None,
+                    flags: None,
+                    description: None,
+                    enabled: Some(true),
+                },
+            ],
+        };
+
+        let result = config.validate_comprehensive();
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            crate::error::ValidationError::ContradictoryFilters { .. }
+        ));
     }
 }

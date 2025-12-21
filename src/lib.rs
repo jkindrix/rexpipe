@@ -96,4 +96,4 @@ pub mod processor;
 pub use error::{ConfigError, LibraryError, PatternError, RexpipeError, ValidationError};
 
 // Re-export shutdown signal types for graceful termination
-pub use files::{ShutdownInterrupted, ShutdownSignal};
+pub use files::{BinaryMode, ShutdownInterrupted, ShutdownSignal, is_binary_file};

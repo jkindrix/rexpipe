@@ -1,7 +1,7 @@
 use crate::error::{PatternError, ValidationError};
 use crate::pipeline::{
-    ErrorType, FilterAction, PipelineConfig, PipelineError, PipelineResult, PipelineSettings,
-    RegexFlag, StepResult, StepType, TransformAction,
+    ErrorType, FilterAction, MaxLineAction, PipelineConfig, PipelineError, PipelineResult,
+    PipelineSettings, RegexFlag, StepResult, StepType, TransformAction,
 };
 use anyhow::{Context, Result};
 use log::{debug, trace};
@@ -20,11 +20,46 @@ static REPETITION_REGEX: LazyLock<Regex> =
 #[cfg(feature = "pcre")]
 use fancy_regex::Regex as FancyRegex;
 
+/// Represents the line ending style detected in input
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LineEnding {
+    /// Unix-style line ending (LF, `\n`)
+    #[default]
+    Lf,
+    /// Windows-style line ending (CRLF, `\r\n`)
+    Crlf,
+    /// No line ending (last line of file without trailing newline)
+    None,
+}
+
+impl LineEnding {
+    /// Get the byte sequence for this line ending
+    pub fn as_bytes(&self) -> &'static [u8] {
+        match self {
+            LineEnding::Lf => b"\n",
+            LineEnding::Crlf => b"\r\n",
+            LineEnding::None => b"",
+        }
+    }
+}
+
+/// Detect the line ending style from a line buffer
+fn detect_line_ending(line: &str) -> LineEnding {
+    if line.ends_with("\r\n") {
+        LineEnding::Crlf
+    } else if line.ends_with('\n') {
+        LineEnding::Lf
+    } else {
+        LineEnding::None
+    }
+}
+
 /// Represents a line with its metadata for context tracking
 #[derive(Debug, Clone)]
 struct ContextLine {
     line_number: u64,
     content: String,
+    line_ending: LineEnding,
 }
 
 pub struct StreamProcessor {
@@ -357,6 +392,11 @@ impl StreamProcessor {
             return Ok(CompiledPattern::Fixed(pattern.to_string()));
         }
 
+        // Check for zero-width match patterns that could cause unexpected behavior
+        if let Some(warning) = Self::check_zero_width_pattern(pattern) {
+            eprintln!("{}", warning);
+        }
+
         // PCRE mode - use fancy-regex for advanced features
         #[cfg(feature = "pcre")]
         if settings.pcre_mode {
@@ -364,13 +404,10 @@ impl StreamProcessor {
             if let Some(warning) = Self::check_redos_risk(pattern, true) {
                 if settings.strict_mode {
                     // In strict mode, reject potentially dangerous patterns
-                    return Err(PatternError::InvalidRegex {
-                        pattern: pattern.to_string(),
-                        message: format!(
-                            "Pattern rejected in strict mode: {}",
-                            warning.replace("ReDoS Warning:\n", "")
-                        ),
-                    })
+                    return Err(PatternError::potential_redos(
+                        pattern,
+                        warning.replace("ReDoS Warning:\n", ""),
+                    ))
                     .context("Use --no-strict to allow potentially dangerous patterns");
                 }
                 eprintln!("{}", warning);
@@ -379,15 +416,8 @@ impl StreamProcessor {
             match FancyRegex::new(pattern) {
                 Ok(re) => return Ok(CompiledPattern::Pcre(re)),
                 Err(e) => {
-                    let error = PatternError::InvalidRegex {
-                        pattern: pattern.to_string(),
-                        message: e.to_string(),
-                    };
-                    return Err(error).context(Self::format_regex_error(
-                        pattern,
-                        &e.to_string(),
-                        true,
-                    ));
+                    return Err(PatternError::invalid_regex(pattern, e.to_string()))
+                        .context("PCRE pattern compilation failed");
                 }
             }
         }
@@ -402,64 +432,9 @@ impl StreamProcessor {
         // Standard regex mode
         match Self::build_regex(pattern, flags) {
             Ok(regex) => Ok(CompiledPattern::Standard(regex)),
-            Err(e) => {
-                let error = PatternError::InvalidRegex {
-                    pattern: pattern.to_string(),
-                    message: e.to_string(),
-                };
-                Err(error).context(Self::format_regex_error(pattern, &e.to_string(), false))
-            }
+            Err(e) => Err(PatternError::invalid_regex(pattern, e.to_string()))
+                .context("Regex pattern compilation failed"),
         }
-    }
-
-    /// Format regex compilation errors with helpful suggestions
-    fn format_regex_error(pattern: &str, error: &str, is_pcre: bool) -> String {
-        let mut msg = format!("Invalid regex pattern: '{}'\n", pattern);
-        msg.push_str(&format!("Error: {}\n", error));
-
-        // Add context-specific suggestions
-        if error.contains("look")
-            || error.contains("(?=")
-            || error.contains("(?!")
-            || error.contains("(?<")
-        {
-            if !is_pcre {
-                msg.push_str("\nSuggestion: This pattern uses lookahead/lookbehind which requires PCRE mode.\n");
-                msg.push_str("Try running with the -P flag: rexpipe -P -p 'pattern' ...\n");
-            }
-        } else if error.contains("unclosed")
-            || error.contains("unbalanced")
-            || error.contains("unopened")
-        {
-            msg.push_str(
-                "\nSuggestion: Check for missing closing brackets, parentheses, or braces.\n",
-            );
-            msg.push_str("Common fixes:\n");
-            msg.push_str("  - Ensure all ( have matching )\n");
-            msg.push_str("  - Ensure all [ have matching ]\n");
-            msg.push_str("  - Ensure all { have matching }\n");
-        } else if error.contains("escape") || error.contains("backslash") {
-            msg.push_str("\nSuggestion: Check escape sequences. In regex:\n");
-            msg.push_str("  - \\d matches digits, \\w matches word chars\n");
-            msg.push_str("  - To match literal backslash, use \\\\\n");
-            msg.push_str("  - Consider using -F for fixed string matching\n");
-        } else if error.contains("quantifier") || error.contains("nothing to repeat") {
-            msg.push_str("\nSuggestion: Quantifiers (+, *, ?, {n}) must follow something.\n");
-            msg.push_str("  - Invalid: +abc or *test\n");
-            msg.push_str("  - Valid: a+bc or te+st\n");
-        } else if error.contains("invalid") || error.contains("unknown") {
-            msg.push_str(
-                "\nSuggestion: Check the regex syntax. If you're trying to match literal text,\n",
-            );
-            msg.push_str("consider using -F for fixed string mode.\n");
-        }
-
-        // General tips
-        msg.push_str("\nTips:\n");
-        msg.push_str("  - Use --inspect to test pattern matching before processing\n");
-        msg.push_str("  - Use -F for literal string matching (no regex interpretation)\n");
-
-        msg
     }
 
     /// Default regex size limit (10MB) to prevent ReDoS via compilation complexity
@@ -504,6 +479,66 @@ impl StreamProcessor {
         }
 
         builder.build()
+    }
+
+    /// Check for zero-width match patterns that could produce unexpected results.
+    ///
+    /// Zero-width assertions (like `^`, `$`, `\b`, `(?=...)`, `(?!...)`) match positions
+    /// rather than characters. While Rust's regex crate handles these safely (no infinite
+    /// loops), users should be warned when using them in replacement contexts as they
+    /// may produce unexpected output.
+    ///
+    /// Returns a warning message if the pattern is primarily zero-width.
+    fn check_zero_width_pattern(pattern: &str) -> Option<String> {
+        // Patterns that are purely positional assertions
+        let pure_zero_width = [
+            "^", "$", r"\b", r"\B", r"\A", r"\z", r"\Z",
+            "^$", r"^\b", r"\b$",
+        ];
+
+        // Check for pure zero-width patterns
+        if pure_zero_width.contains(&pattern) {
+            return Some(format!(
+                "Warning: Pattern '{}' is a zero-width assertion.\n  \
+                 It matches positions, not characters. In replacement mode, this may insert\n  \
+                 text at every position in the input.\n  \
+                 Consider adding actual characters to match, e.g., '^(.*)' or '\\bword\\b'",
+                pattern
+            ));
+        }
+
+        // Check for patterns that can match empty strings
+        let can_match_empty = [
+            ".*", ".?", "\\s*", "\\S*", "\\d*", "\\D*", "\\w*", "\\W*",
+            "[^a]*", "()*", "()?", "(?:)*", "(?:)?",
+        ];
+
+        for empty_pattern in &can_match_empty {
+            if pattern == *empty_pattern {
+                return Some(format!(
+                    "Warning: Pattern '{}' can match empty strings.\n  \
+                     This may produce unexpected results in replacement mode.\n  \
+                     Consider using '+' instead of '*' or '?' to require at least one character.",
+                    pattern
+                ));
+            }
+        }
+
+        // Check for lookahead/lookbehind only patterns
+        if (pattern.starts_with("(?=") || pattern.starts_with("(?!") ||
+            pattern.starts_with("(?<=") || pattern.starts_with("(?<!")) &&
+            pattern.ends_with(")") &&
+            pattern.matches("(?").count() == 1 {
+            return Some(format!(
+                "Warning: Pattern '{}' is a pure lookahead/lookbehind assertion.\n  \
+                 It matches positions, not characters. In replacement mode, this will\n  \
+                 insert text at matched positions without consuming any input.\n  \
+                 Consider wrapping with a capture group to match actual text.",
+                pattern
+            ));
+        }
+
+        None
     }
 
     /// Check pattern for potential ReDoS vulnerabilities (primarily for PCRE mode)
@@ -589,14 +624,74 @@ impl StreamProcessor {
         let context_before = self.config.settings.context_before;
         let context_after = self.config.settings.context_after;
         let use_context = self.has_context();
+        let preserve_line_endings = self.config.settings.preserve_line_endings;
+
+        let max_line_length = self.config.settings.max_line_length;
+        let max_line_action = self.config.settings.max_line_action;
 
         while reader.read_line(&mut line_buffer)? > 0 {
             line_number += 1;
             self.stats.lines_read += 1;
             self.stats.bytes_processed += line_buffer.len() as u64;
 
+            // Check for lines exceeding the maximum length
+            if max_line_length > 0 && line_buffer.len() > max_line_length {
+                match max_line_action {
+                    MaxLineAction::Error => {
+                        return Err(anyhow::anyhow!(
+                            "Line {} exceeds maximum length ({} > {} bytes). \
+                             Use --max-line-action=skip to skip long lines, or \
+                             --max-line-action=truncate to truncate them.",
+                            line_number,
+                            line_buffer.len(),
+                            max_line_length
+                        ));
+                    }
+                    MaxLineAction::Skip => {
+                        debug!(
+                            "Skipping line {} ({} bytes exceeds limit of {})",
+                            line_number,
+                            line_buffer.len(),
+                            max_line_length
+                        );
+                        // Output the original line unchanged
+                        writer.write_all(line_buffer.as_bytes())?;
+                        line_buffer.clear();
+                        continue;
+                    }
+                    MaxLineAction::Truncate => {
+                        debug!(
+                            "Truncating line {} from {} to {} bytes",
+                            line_number,
+                            line_buffer.len(),
+                            max_line_length
+                        );
+                        // Truncate at a UTF-8 character boundary
+                        let truncate_at = line_buffer
+                            .char_indices()
+                            .take_while(|(i, _)| *i < max_line_length)
+                            .last()
+                            .map(|(i, c)| i + c.len_utf8())
+                            .unwrap_or(max_line_length);
+                        line_buffer.truncate(truncate_at);
+                        // Ensure we have a newline after truncation
+                        if !line_buffer.ends_with('\n') {
+                            line_buffer.push('\n');
+                        }
+                    }
+                }
+            }
+
+            // Detect original line ending style for this line
+            let line_ending = if preserve_line_endings {
+                detect_line_ending(&line_buffer)
+            } else {
+                LineEnding::Lf
+            };
+
             let processed_line = self.process_line(&line_buffer, line_number, &mut result)?;
-            let line_content = line_buffer.trim_end_matches('\n').to_string();
+            // Strip both \r\n and \n when extracting content
+            let line_content = line_buffer.trim_end_matches(['\r', '\n']).to_string();
 
             if use_context {
                 // Handle context-aware output
@@ -605,7 +700,7 @@ impl StreamProcessor {
                     // Output before-context lines that haven't been output yet
                     for ctx_line in self.context_before_buffer.iter() {
                         if ctx_line.line_number > self.last_output_line {
-                            self.write_context_line(&mut writer, ctx_line, false)?;
+                            self.write_context_line(&mut writer, ctx_line)?;
                             self.last_output_line = ctx_line.line_number;
                         }
                     }
@@ -613,9 +708,7 @@ impl StreamProcessor {
                     // Output the matching line
                     if line_number > self.last_output_line {
                         writer.write_all(output.as_bytes())?;
-                        if !output.ends_with('\n') {
-                            writer.write_all(b"\n")?;
-                        }
+                        self.write_line_ending(&mut writer, &output, line_ending)?;
                         self.last_output_line = line_number;
                     }
 
@@ -625,7 +718,7 @@ impl StreamProcessor {
                     // No match, but we're in after-context mode
                     if line_number > self.last_output_line {
                         writer.write_all(line_content.as_bytes())?;
-                        writer.write_all(b"\n")?;
+                        writer.write_all(line_ending.as_bytes())?;
                         self.last_output_line = line_number;
                     }
                     self.after_context_remaining -= 1;
@@ -635,6 +728,7 @@ impl StreamProcessor {
                 self.context_before_buffer.push_back(ContextLine {
                     line_number,
                     content: line_content,
+                    line_ending,
                 });
 
                 // Keep only the needed number of before-context lines
@@ -645,9 +739,7 @@ impl StreamProcessor {
                 // No context - simple output
                 if let Some(output) = processed_line {
                     writer.write_all(output.as_bytes())?;
-                    if !output.ends_with('\n') {
-                        writer.write_all(b"\n")?;
-                    }
+                    self.write_line_ending(&mut writer, &output, line_ending)?;
                 }
             }
 
@@ -666,15 +758,26 @@ impl StreamProcessor {
         Ok(result)
     }
 
-    /// Write a context line with optional separator
-    fn write_context_line<W: Write>(
+    /// Write a context line with its preserved line ending
+    fn write_context_line<W: Write>(&self, writer: &mut W, ctx_line: &ContextLine) -> Result<()> {
+        writer.write_all(ctx_line.content.as_bytes())?;
+        writer.write_all(ctx_line.line_ending.as_bytes())?;
+        Ok(())
+    }
+
+    /// Write line ending, respecting the output content and original line ending
+    fn write_line_ending<W: Write>(
         &self,
         writer: &mut W,
-        ctx_line: &ContextLine,
-        _is_separator: bool,
+        output: &str,
+        line_ending: LineEnding,
     ) -> Result<()> {
-        writer.write_all(ctx_line.content.as_bytes())?;
-        writer.write_all(b"\n")?;
+        // Don't add line ending if output already has one
+        if output.ends_with('\n') || output.ends_with("\r\n") {
+            return Ok(());
+        }
+        // Use the original line ending style
+        writer.write_all(line_ending.as_bytes())?;
         Ok(())
     }
 
@@ -685,7 +788,8 @@ impl StreamProcessor {
         result: &mut PipelineResult,
     ) -> Result<Option<String>> {
         trace!("Processing line {}: {:?}", line_number, line);
-        let mut current_line = line.trim_end_matches('\n').to_string();
+        // Strip both CRLF and LF line endings
+        let mut current_line = line.trim_end_matches(['\r', '\n']).to_string();
         let mut should_output = true;
         let line_start = Instant::now();
         let timeout_ms = self.config.settings.timeout_ms;
@@ -1306,6 +1410,9 @@ mod tests {
                 timeout_ms: 0,
                 allow_shell: true,
                 strict_mode: false,
+                preserve_line_endings: false,
+                max_line_length: 0,
+                max_line_action: MaxLineAction::Skip,
             },
             step: vec![PipelineStep {
                 step_type: StepType::Filter,
@@ -1351,6 +1458,9 @@ mod tests {
                 timeout_ms: 0,
                 allow_shell: true,
                 strict_mode: false,
+                preserve_line_endings: false,
+                max_line_length: 0,
+                max_line_action: MaxLineAction::Skip,
             },
             step: vec![PipelineStep {
                 step_type: StepType::Filter,
@@ -1398,6 +1508,200 @@ mod tests {
             result.matches_found >= 5,
             "Expected at least 5 matches, got {}",
             result.matches_found
+        );
+    }
+
+    #[test]
+    fn test_crlf_preservation() {
+        // Test that CRLF line endings are preserved when preserve_line_endings is true
+        let mut config = PipelineConfig::from_inline_pattern(r"\d+", Some("NUM"));
+        config.settings.preserve_line_endings = true;
+
+        let mut processor = StreamProcessor::new(config).unwrap();
+
+        // Input with CRLF line endings
+        let input = "Line 1: 123\r\nLine 2: 456\r\nLine 3: 789\r\n";
+        let reader = Cursor::new(input);
+        let mut output = Vec::new();
+
+        processor.process_stream(reader, &mut output).unwrap();
+        let output_bytes = output;
+
+        // Output should preserve CRLF endings
+        assert!(
+            output_bytes.windows(2).any(|w| w == b"\r\n"),
+            "Expected CRLF in output, got: {:?}",
+            String::from_utf8_lossy(&output_bytes)
+        );
+
+        // Should not have bare LF without CR
+        let output_str = String::from_utf8(output_bytes).unwrap();
+        let lines: Vec<&str> = output_str.split("\r\n").collect();
+        assert!(
+            lines.len() >= 3,
+            "Expected at least 3 CRLF-delimited lines"
+        );
+    }
+
+    #[test]
+    fn test_default_lf_output() {
+        // Test that default behavior outputs LF line endings
+        let config = PipelineConfig::from_inline_pattern(r"\d+", Some("NUM"));
+        let mut processor = StreamProcessor::new(config).unwrap();
+
+        // Input with CRLF line endings
+        let input = "Line 1: 123\r\nLine 2: 456\r\n";
+        let reader = Cursor::new(input);
+        let mut output = Vec::new();
+
+        processor.process_stream(reader, &mut output).unwrap();
+        let output_str = String::from_utf8(output).unwrap();
+
+        // Default behavior: output should have LF, not CRLF
+        // (CRLF from input is stripped, and only LF is added)
+        assert!(
+            !output_str.contains("\r\n"),
+            "Expected LF-only output, but got CRLF: {:?}",
+            output_str
+        );
+    }
+
+    #[test]
+    fn test_mixed_line_endings_preserved() {
+        // Test that mixed line endings are preserved per-line
+        let mut config = PipelineConfig::from_inline_pattern(r"\d+", Some("NUM"));
+        config.settings.preserve_line_endings = true;
+
+        let mut processor = StreamProcessor::new(config).unwrap();
+
+        // Mixed input: first line has LF, second has CRLF
+        let input = "Unix line 123\nWindows line 456\r\n";
+        let reader = Cursor::new(input);
+        let mut output = Vec::new();
+
+        processor.process_stream(reader, &mut output).unwrap();
+        let output_bytes = output;
+        let output_str = String::from_utf8_lossy(&output_bytes).to_string();
+
+        // First line should have LF
+        assert!(
+            output_str.starts_with("Unix line NUM\n"),
+            "First line should have LF: {:?}",
+            output_str
+        );
+        // Second line should have CRLF
+        assert!(
+            output_str.contains("Windows line NUM\r\n"),
+            "Second line should have CRLF: {:?}",
+            output_str
+        );
+    }
+
+    #[test]
+    fn test_max_line_length_skip() {
+        // Test that lines exceeding max length are skipped (output unchanged)
+        let mut config = PipelineConfig::from_inline_pattern(r"\d+", Some("NUM"));
+        config.settings.max_line_length = 20;
+        config.settings.max_line_action = MaxLineAction::Skip;
+
+        let mut processor = StreamProcessor::new(config).unwrap();
+
+        // First line is short (processed), second is long (skipped)
+        let input = "Short 123\nThis is a very long line with 456 numbers\n";
+        let reader = Cursor::new(input);
+        let mut output = Vec::new();
+
+        processor.process_stream(reader, &mut output).unwrap();
+        let output_str = String::from_utf8(output).unwrap();
+
+        // Short line should be processed
+        assert!(
+            output_str.contains("Short NUM"),
+            "Short line should be processed: {:?}",
+            output_str
+        );
+        // Long line should be unchanged (skipped)
+        assert!(
+            output_str.contains("456"),
+            "Long line should be unchanged (not replaced): {:?}",
+            output_str
+        );
+    }
+
+    #[test]
+    fn test_max_line_length_error() {
+        // Test that lines exceeding max length cause an error
+        let mut config = PipelineConfig::from_inline_pattern(r"\d+", Some("NUM"));
+        config.settings.max_line_length = 20;
+        config.settings.max_line_action = MaxLineAction::Error;
+
+        let mut processor = StreamProcessor::new(config).unwrap();
+
+        // Long line should cause error
+        let input = "This is a very long line exceeding the limit\n";
+        let reader = Cursor::new(input);
+        let mut output = Vec::new();
+
+        let result = processor.process_stream(reader, &mut output);
+        assert!(result.is_err(), "Expected error for long line");
+        assert!(
+            result.unwrap_err().to_string().contains("exceeds maximum length"),
+            "Error should mention exceeding max length"
+        );
+    }
+
+    #[test]
+    fn test_max_line_length_truncate() {
+        // Test that lines exceeding max length are truncated
+        let mut config = PipelineConfig::from_inline_pattern(r"\d+", Some("NUM"));
+        config.settings.max_line_length = 15;
+        config.settings.max_line_action = MaxLineAction::Truncate;
+
+        let mut processor = StreamProcessor::new(config).unwrap();
+
+        // Long line should be truncated
+        let input = "Line 123456789 extra content\n";
+        let reader = Cursor::new(input);
+        let mut output = Vec::new();
+
+        processor.process_stream(reader, &mut output).unwrap();
+        let output_str = String::from_utf8(output).unwrap();
+
+        // Output should be truncated and processed
+        assert!(
+            output_str.len() < input.len(),
+            "Output should be shorter: {:?}",
+            output_str
+        );
+        // Numbers should be replaced in the truncated portion
+        assert!(
+            output_str.contains("NUM") || !output_str.contains("123"),
+            "Numbers should be processed or truncated: {:?}",
+            output_str
+        );
+    }
+
+    #[test]
+    fn test_max_line_length_zero_means_unlimited() {
+        // Test that max_line_length = 0 means no limit
+        let mut config = PipelineConfig::from_inline_pattern(r"\d+", Some("NUM"));
+        config.settings.max_line_length = 0; // No limit
+
+        let mut processor = StreamProcessor::new(config).unwrap();
+
+        // Very long line should be processed normally
+        let long_line = format!("Long line with {} numbers\n", "1".repeat(10000));
+        let reader = Cursor::new(long_line.clone());
+        let mut output = Vec::new();
+
+        processor.process_stream(reader, &mut output).unwrap();
+        let output_str = String::from_utf8(output).unwrap();
+
+        // Numbers should be replaced
+        assert!(
+            output_str.contains("NUM"),
+            "Numbers should be replaced: {:?}",
+            output_str
         );
     }
 }

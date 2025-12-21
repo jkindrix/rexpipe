@@ -14,19 +14,34 @@ use rexpipe::inspector::{Inspector, InspectorOptions};
 use rexpipe::json_schema;
 use rexpipe::library;
 use rexpipe::library::LibraryResolver;
-use rexpipe::pipeline::{PipelineConfig, PipelineSettings};
+use rexpipe::pipeline::{MaxLineAction, PipelineConfig, PipelineSettings};
 use rexpipe::processor::StreamProcessor;
 
-/// Exit codes for different error conditions
+/// Exit codes for different error conditions.
+///
+/// These follow the standard Unix/grep convention:
+/// - 0: Success (matches found, or operation completed successfully)
+/// - 1: No matches found (not an error, but nothing matched)
+/// - 2+: Various error conditions
+///
+/// This allows scripts to distinguish between "no matches" (exit 1) and
+/// "something went wrong" (exit 2+):
+///
+/// ```bash
+/// rexpipe -p 'pattern' file.txt
+/// case $? in
+///     0) echo "Matches found" ;;
+///     1) echo "No matches" ;;
+///     *) echo "Error occurred" ;;
+/// esac
+/// ```
 mod exit_codes {
-    /// Success - operation completed normally (implicit, not explicitly used).
-    /// Defined for completeness but Rust's main() returns 0 implicitly on success.
-    #[allow(dead_code)]
+    /// Success - operation completed normally with matches found.
     pub const SUCCESS: i32 = 0;
-    /// No matches found (used with -q/--quiet mode)
+    /// No matches found (grep-like behavior: not an error, just no results)
     pub const NO_MATCHES: i32 = 1;
-    /// General error (unspecified)
-    pub const GENERAL_ERROR: i32 = 1;
+    /// General/unspecified error
+    pub const GENERAL_ERROR: i32 = 2;
     /// Invalid command line usage or missing arguments
     pub const USAGE_ERROR: i32 = 2;
     /// Configuration file error (not found, invalid TOML, etc.)
@@ -113,6 +128,84 @@ fn categorize_error(error: &AnyhowError) -> i32 {
     }
 }
 
+/// Help text with examples shown at the end of --help output
+const EXAMPLES_HELP: &str = r#"
+EXAMPLES:
+    Basic substitution (stdin):
+        echo "Hello 123 World" | rexpipe -p '\d+' -r 'NUM'
+        # Output: Hello NUM World
+
+    Find and replace in files:
+        rexpipe -p 'TODO' -r 'DONE' -i *.txt
+        # Edits files in-place
+
+    With backup before editing:
+        rexpipe -p 'old' -r 'new' -i -b .bak src/*.rs
+        # Creates .bak backups
+
+    Using a config file:
+        rexpipe -c pipeline.toml < input.txt
+
+    Debug/preview pattern matching:
+        rexpipe -p 'ERROR.*code=(\d+)' --inspect < logs.txt
+        # Shows matches with highlighting
+
+    Preview changes before applying (dry-run):
+        rexpipe -p 'foo' -r 'bar' --dry-run -i *.txt
+        # Shows diff without modifying files
+
+    Process all files recursively:
+        rexpipe -p '\d{4}-\d{2}-\d{2}' -R src/
+        # Finds date patterns in src/
+
+    Only show files with matches:
+        rexpipe -p 'FIXME' -l -R .
+        # Lists files containing FIXME
+
+    Count matches per file:
+        rexpipe -p 'TODO' --count -R .
+
+    PCRE mode (lookahead/lookbehind):
+        rexpipe -P -p '(?<=user=)\w+' < logs.txt
+        # Uses PCRE regex engine
+
+    Fixed string mode (no regex):
+        rexpipe -F -p '*.txt' -r '[files]' < input.txt
+        # Matches literal *.txt
+
+    Use pattern library:
+        rexpipe -p '${email}' --library patterns/common.toml < data.txt
+        # Uses predefined email pattern
+
+    List available patterns:
+        rexpipe --list-patterns patterns/common.toml
+
+    JSON output:
+        rexpipe -p '\w+@\w+\.\w+' --json < emails.txt
+
+CONFIGURATION FILE EXAMPLE:
+    [[step]]
+    type = "filter"
+    pattern = "ERROR"
+    action = "keep_line"
+
+    [[step]]
+    type = "substitute"
+    pattern = "password=\\w+"
+    replacement = "password=***"
+
+EXIT CODES:
+    0    Success (matches found or operation completed)
+    1    No matches found
+    2    General error
+    3    Configuration error
+    4    Pattern/regex error
+    5    I/O error
+    6    Validation error
+
+For more information, see: https://github.com/rexpipe/rexpipe
+"#;
+
 /// Build the CLI command structure
 /// Separated for use with clap_complete shell completion generation
 fn build_cli() -> Command {
@@ -120,6 +213,7 @@ fn build_cli() -> Command {
         .version("1.1.0")
         .author("Strategic Collaboration Agent")
         .about("Unified regex pipeline processor with COMPASS framework integration")
+        .after_long_help(EXAMPLES_HELP)
         // === Pattern and Config ===
         .arg(
             Arg::new("config")
@@ -213,6 +307,14 @@ fn build_cli() -> Command {
                 .long("max-depth")
                 .value_name("NUM")
                 .help("Maximum directory recursion depth"),
+        )
+        .arg(
+            Arg::new("binary")
+                .long("binary")
+                .value_name("MODE")
+                .help("Binary file handling: 'auto' (skip, default), 'text' (process as text), 'skip' (always skip)")
+                .value_parser(["auto", "text", "skip"])
+                .default_value("auto"),
         )
         // === Processing Modes ===
         .arg(
@@ -368,6 +470,47 @@ fn build_cli() -> Command {
                 .long("no-shell")
                 .help("Disable shell command execution in transforms (security)")
                 .action(ArgAction::SetTrue),
+        )
+        // === Line Endings ===
+        .arg(
+            Arg::new("crlf")
+                .long("crlf")
+                .visible_alias("preserve-line-endings")
+                .help("Preserve CRLF (Windows) line endings in output")
+                .long_help(
+                    "Preserve original line endings when processing files. By default, all \
+                     output uses Unix-style LF line endings. With this flag, lines that had \
+                     CRLF (Windows) endings in the input will have CRLF endings in the output."
+                )
+                .action(ArgAction::SetTrue),
+        )
+        // === Large Line Handling ===
+        .arg(
+            Arg::new("max-line-length")
+                .long("max-line-length")
+                .short('M')
+                .value_name("SIZE")
+                .help("Maximum line length (e.g., 1M, 512K, 10000)")
+                .long_help(
+                    "Maximum line length in bytes. Lines exceeding this limit will be handled \
+                     according to --max-line-action. Supports suffixes: K (kilobytes), M (megabytes), \
+                     G (gigabytes). Default: unlimited. Use this to prevent memory issues with \
+                     minified files or binary content misidentified as text."
+                ),
+        )
+        .arg(
+            Arg::new("max-line-action")
+                .long("max-line-action")
+                .value_name("ACTION")
+                .value_parser(["skip", "error", "truncate"])
+                .default_value("skip")
+                .help("Action for lines exceeding --max-line-length")
+                .long_help(
+                    "Action to take when a line exceeds --max-line-length:\n\
+                     - skip: Output the line unchanged without processing (default)\n\
+                     - error: Exit with an error\n\
+                     - truncate: Truncate the line at the limit and process"
+                ),
         )
         .arg(
             Arg::new("strict")
@@ -551,6 +694,23 @@ fn build_pipeline_settings(matches: &clap::ArgMatches) -> PipelineSettings {
 
     let timeout_ms = matches.get_one::<u64>("timeout").copied().unwrap_or(0);
 
+    // Parse max-line-length
+    let max_line_length = matches
+        .get_one::<String>("max-line-length")
+        .and_then(|s| parse_size(s))
+        .unwrap_or(0);
+
+    // Parse max-line-action
+    let max_line_action = matches
+        .get_one::<String>("max-line-action")
+        .map(|s| match s.to_lowercase().as_str() {
+            "skip" => MaxLineAction::Skip,
+            "error" => MaxLineAction::Error,
+            "truncate" => MaxLineAction::Truncate,
+            _ => MaxLineAction::Skip,
+        })
+        .unwrap_or_default();
+
     PipelineSettings {
         pcre_mode: matches.get_flag("pcre"),
         fixed_strings: matches.get_flag("fixed"),
@@ -561,6 +721,31 @@ fn build_pipeline_settings(matches: &clap::ArgMatches) -> PipelineSettings {
         allow_shell: !matches.get_flag("no-shell"),
         // --strict enables ReDoS pattern rejection
         strict_mode: matches.get_flag("strict"),
+        // --crlf preserves Windows line endings in in-place editing
+        preserve_line_endings: matches.get_flag("crlf"),
+        // --max-line-length limits line length
+        max_line_length,
+        max_line_action,
+    }
+}
+
+/// Parse a size string like "1M", "512K", "1024"
+fn parse_size(s: &str) -> Option<usize> {
+    let s = s.trim().to_uppercase();
+    if s.ends_with('K') {
+        s[..s.len() - 1].parse::<usize>().ok().map(|n| n * 1024)
+    } else if s.ends_with('M') {
+        s[..s.len() - 1]
+            .parse::<usize>()
+            .ok()
+            .map(|n| n * 1024 * 1024)
+    } else if s.ends_with('G') {
+        s[..s.len() - 1]
+            .parse::<usize>()
+            .ok()
+            .map(|n| n * 1024 * 1024 * 1024)
+    } else {
+        s.parse().ok()
     }
 }
 
@@ -601,6 +786,12 @@ fn run_multi_file_mode(
         }
     }
 
+    // Parse binary mode
+    let binary_mode = matches
+        .get_one::<String>("binary")
+        .and_then(|s| rexpipe::BinaryMode::from_str(s))
+        .unwrap_or_default();
+
     // Build file processing options
     let mut options = FileProcessingOptions::new()
         .in_place(matches.get_flag("in-place"))
@@ -613,7 +804,8 @@ fn run_multi_file_mode(
         .files_without_matches(matches.get_flag("files-without-matches"))
         .quiet(quiet)
         .show_progress(matches.get_flag("progress"))
-        .shutdown_signal(shutdown_signal);
+        .shutdown_signal(shutdown_signal)
+        .binary_mode(binary_mode);
 
     // Add max depth
     if let Some(depth) = matches.get_one::<String>("max-depth") {
