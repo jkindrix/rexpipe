@@ -1,0 +1,35 @@
+# Context Lines Example
+#
+# This example demonstrates context line settings, similar to grep -A/-B/-C.
+# When matching patterns, rexpipe can show surrounding lines for context.
+#
+# Usage:
+#   rexpipe --config examples/context-lines.toml < server.log
+#
+# Example output shows 2 lines before and 3 lines after each match.
+
+name = "Error Context Finder"
+description = "Find errors and show surrounding context for debugging"
+version = "1.0.0"
+
+[settings]
+# Show 2 lines before each match (like grep -B2)
+context_before = 2
+# Show 3 lines after each match (like grep -A3)
+context_after = 3
+# Preserve original line endings
+preserve_line_endings = true
+
+[[step]]
+type = "filter"
+description = "Keep only error lines with their context"
+pattern = 'ERROR|CRITICAL|FATAL'
+action = "keep_line"
+enabled = true
+
+# Alternative: Match specific error patterns with context
+# [[step]]
+# type = "filter"
+# pattern = 'Exception|Stack trace|at line \d+'
+# action = "keep_line"
+# enabled = false

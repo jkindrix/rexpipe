@@ -1,0 +1,73 @@
+# In-Place Editing Example
+#
+# This example demonstrates in-place file editing with backup.
+# Files are modified directly, with optional backup before changes.
+#
+# Usage:
+#   rexpipe --config examples/inplace-editing.toml --in-place config.json
+#   rexpipe --config examples/inplace-editing.toml -i --backup .bak *.json
+#
+# WARNING: In-place editing modifies files directly. Always use --backup
+# when processing important files, or test with --dry-run first.
+
+name = "Config Migrator"
+description = "Migrate configuration files to new format"
+version = "1.0.0"
+
+[settings]
+# Preserve CRLF line endings (important for Windows config files)
+preserve_line_endings = true
+# Fixed string mode for literal matching (no regex interpretation)
+fixed_strings = false
+
+# In-place editing CLI options:
+#
+#   -i, --in-place          Edit files in place
+#   --backup SUFFIX         Create backup with suffix (e.g., .bak, .orig)
+#   --dry-run               Show what would change without modifying
+#   --no-backup             Don't create backups (dangerous!)
+#
+# Example safe workflow:
+#   1. Test with dry-run: rexpipe -c config.toml --dry-run myfile.json
+#   2. Run with backup:   rexpipe -c config.toml -i --backup .orig myfile.json
+#   3. Verify changes, then delete backups if satisfied
+
+[[step]]
+type = "substitute"
+description = "Update deprecated API version"
+pattern = '"api_version":\s*"v1"'
+replacement = '"api_version": "v2"'
+flags = ["global"]
+enabled = true
+
+[[step]]
+type = "substitute"
+description = "Rename deprecated field 'timeout_sec' to 'timeout_seconds'"
+pattern = '"timeout_sec":'
+replacement = '"timeout_seconds":'
+flags = ["global"]
+enabled = true
+
+[[step]]
+type = "substitute"
+description = "Update deprecated boolean format"
+pattern = ':\s*True\b'
+replacement = ': true'
+flags = ["global"]
+enabled = true
+
+[[step]]
+type = "substitute"
+description = "Update deprecated boolean format (false)"
+pattern = ':\s*False\b'
+replacement = ': false'
+flags = ["global"]
+enabled = true
+
+[[step]]
+type = "substitute"
+description = "Migrate old URL scheme"
+pattern = '"url":\s*"http://'
+replacement = '"url": "https://'
+flags = ["global"]
+enabled = true
