@@ -148,6 +148,29 @@ pub struct PipelineStep {
     /// Number of context lines after trigger to include in block
     #[serde(default)]
     pub block_context: Option<usize>,
+    // === Syntax-aware processing fields (requires tree-sitter feature) ===
+    /// Language for syntax-aware processing (e.g., "rust", "python", "javascript")
+    /// When specified, patterns are matched only within the specified scope.
+    /// Use `language` for a single language or `languages` for multiple.
+    #[serde(default)]
+    pub language: Option<String>,
+    /// Multiple languages for syntax-aware processing.
+    /// When specified, the step is applied to files matching any of these languages.
+    /// Example: `languages = ["rust", "python", "typescript"]`
+    #[serde(default)]
+    pub languages: Option<Vec<String>>,
+    /// Scope filter for syntax-aware matching:
+    /// - "all" or "*": Match anywhere (default)
+    /// - "code": Match only in code, excluding strings and comments
+    /// - "strings": Match only in string literals
+    /// - "comments": Match only in comments
+    /// - "functions": Match only in function/method bodies
+    #[serde(default)]
+    pub scope: Option<String>,
+    /// Scopes to exclude from matching.
+    /// Example: `exclude_scopes = ["comments", "strings"]`
+    #[serde(default)]
+    pub exclude_scopes: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -232,10 +255,19 @@ pub enum TransformAction {
     #[serde(rename = "fpe_encrypt")]
     FpeEncrypt {
         /// Encryption key (hex-encoded, 16/24/32 bytes for AES-128/192/256)
-        key: String,
+        /// Either `key` or `key_file` must be provided
+        #[serde(default)]
+        key: Option<String>,
+        /// Path to file containing the encryption key (alternative to inline key)
+        /// File should contain hex-encoded key, whitespace is trimmed
+        #[serde(default)]
+        key_file: Option<String>,
         /// Optional tweak value (hex-encoded, up to 16 bytes)
         #[serde(default)]
         tweak: String,
+        /// Path to file containing the tweak value (alternative to inline tweak)
+        #[serde(default)]
+        tweak_file: Option<String>,
         /// Character set for encryption (default: "0123456789")
         /// Common values: "0123456789", "0123456789ABCDEF", "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
         #[serde(default = "default_fpe_radix")]
@@ -247,10 +279,18 @@ pub enum TransformAction {
     #[serde(rename = "fpe_decrypt")]
     FpeDecrypt {
         /// Decryption key (hex-encoded, must match encryption key)
-        key: String,
+        /// Either `key` or `key_file` must be provided
+        #[serde(default)]
+        key: Option<String>,
+        /// Path to file containing the decryption key (alternative to inline key)
+        #[serde(default)]
+        key_file: Option<String>,
         /// Optional tweak value (hex-encoded, must match encryption tweak)
         #[serde(default)]
         tweak: String,
+        /// Path to file containing the tweak value (alternative to inline tweak)
+        #[serde(default)]
+        tweak_file: Option<String>,
         /// Character set for decryption (must match encryption radix)
         #[serde(default = "default_fpe_radix")]
         radix: String,
@@ -260,7 +300,12 @@ pub enum TransformAction {
     #[serde(rename = "mask_deterministic")]
     MaskDeterministic {
         /// Seed for deterministic hashing (different seeds produce different outputs)
-        seed: String,
+        /// Either `seed` or `seed_file` must be provided
+        #[serde(default)]
+        seed: Option<String>,
+        /// Path to file containing the seed value (alternative to inline seed)
+        #[serde(default)]
+        seed_file: Option<String>,
         /// Preserve first N characters (e.g., 4 for credit card prefix)
         #[serde(default)]
         preserve_prefix: usize,
@@ -429,6 +474,10 @@ impl PipelineConfig {
             until: None,
             block_action: None,
             block_context: None,
+            language: None,
+            languages: None,
+            scope: None,
+            exclude_scopes: None,
         };
 
         PipelineConfig {

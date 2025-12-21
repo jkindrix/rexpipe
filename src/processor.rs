@@ -451,6 +451,12 @@ struct CompiledStep {
     // Block step fields
     until_pattern: Option<CompiledPattern>,
     block_action: Option<BlockAction>,
+    // Syntax-aware processing fields (require tree-sitter feature)
+    /// Languages this step applies to (if any of these match, the step is applied)
+    #[cfg(feature = "tree-sitter")]
+    languages: Option<Vec<crate::syntax::Language>>,
+    #[cfg(feature = "tree-sitter")]
+    scope_filter: Option<crate::syntax::ScopeFilter>,
 }
 
 /// Runtime statistics collected during stream processing.
@@ -715,20 +721,203 @@ impl StreamProcessor {
                 None
             };
 
+            // Parse language(s) and scope for syntax-aware processing
+            #[cfg(feature = "tree-sitter")]
+            let (languages, scope_filter) = {
+                use crate::syntax::{Language, ScopeFilter};
+                use std::collections::HashSet;
+
+                // Collect languages from either `language` (single) or `languages` (multiple)
+                let langs: Option<Vec<Language>> = {
+                    let mut collected = Vec::new();
+
+                    // Add single language if specified
+                    if let Some(ref lang_str) = step.language {
+                        if let Some(lang) = Language::from_str(lang_str) {
+                            collected.push(lang);
+                        } else {
+                            log::warn!(
+                                "Step {}: unknown language '{}'; syntax-aware processing disabled for this language",
+                                index + 1,
+                                lang_str
+                            );
+                        }
+                    }
+
+                    // Add multiple languages if specified
+                    if let Some(ref lang_strs) = step.languages {
+                        for lang_str in lang_strs {
+                            if let Some(lang) = Language::from_str(lang_str) {
+                                if !collected.contains(&lang) {
+                                    collected.push(lang);
+                                }
+                            } else {
+                                log::warn!(
+                                    "Step {}: unknown language '{}' in languages list",
+                                    index + 1,
+                                    lang_str
+                                );
+                            }
+                        }
+                    }
+
+                    if collected.is_empty() {
+                        None
+                    } else {
+                        Some(collected)
+                    }
+                };
+
+                // Parse scope filter, considering exclude_scopes
+                let scope = if let Some(ref exclude_scopes) = step.exclude_scopes {
+                    // Convert exclude_scopes to a ScopeFilter::Exclude
+                    let excluded: HashSet<String> = exclude_scopes.iter().cloned().collect();
+                    Some(ScopeFilter::Exclude(excluded))
+                } else {
+                    step.scope
+                        .as_ref()
+                        .and_then(|s| ScopeFilter::from_str(s))
+                };
+
+                // Warn if scope is specified without any language
+                if scope.is_some() && langs.is_none() {
+                    log::warn!(
+                        "Step {}: scope specified without language; syntax-aware processing disabled",
+                        index + 1
+                    );
+                }
+                (langs, scope)
+            };
+
+            // Resolve transform action (handles file-based keys/seeds)
+            let transform_action = Self::resolve_transform_action(&step.transform)?;
+
             compiled_steps.push(CompiledStep {
                 step_index: index,
                 pattern,
                 replacement,
                 action: step.action.clone(),
-                transform_action: step.transform.clone(),
+                transform_action,
                 step_type: step.step_type.clone(),
                 is_global,
                 until_pattern,
                 block_action: step.block_action.clone(),
+                #[cfg(feature = "tree-sitter")]
+                languages,
+                #[cfg(feature = "tree-sitter")]
+                scope_filter,
             });
         }
 
         Ok(compiled_steps)
+    }
+
+    /// Resolve transform action, loading keys/seeds from files if specified
+    fn resolve_transform_action(
+        action: &Option<TransformAction>,
+    ) -> Result<Option<TransformAction>> {
+        let action = match action {
+            Some(a) => a,
+            None => return Ok(None),
+        };
+
+        let resolved = match action {
+            #[cfg(feature = "fpe")]
+            TransformAction::FpeEncrypt {
+                key,
+                key_file,
+                tweak,
+                tweak_file,
+                radix,
+            } => {
+                let resolved_key = Self::resolve_secret(key.as_deref(), key_file.as_deref(), "key")?;
+                let resolved_tweak = Self::resolve_secret(
+                    if tweak.is_empty() { None } else { Some(tweak.as_str()) },
+                    tweak_file.as_deref(),
+                    "tweak",
+                )?;
+                TransformAction::FpeEncrypt {
+                    key: Some(resolved_key),
+                    key_file: None,
+                    tweak: resolved_tweak,
+                    tweak_file: None,
+                    radix: radix.clone(),
+                }
+            }
+            #[cfg(feature = "fpe")]
+            TransformAction::FpeDecrypt {
+                key,
+                key_file,
+                tweak,
+                tweak_file,
+                radix,
+            } => {
+                let resolved_key = Self::resolve_secret(key.as_deref(), key_file.as_deref(), "key")?;
+                let resolved_tweak = Self::resolve_secret(
+                    if tweak.is_empty() { None } else { Some(tweak.as_str()) },
+                    tweak_file.as_deref(),
+                    "tweak",
+                )?;
+                TransformAction::FpeDecrypt {
+                    key: Some(resolved_key),
+                    key_file: None,
+                    tweak: resolved_tweak,
+                    tweak_file: None,
+                    radix: radix.clone(),
+                }
+            }
+            TransformAction::MaskDeterministic {
+                seed,
+                seed_file,
+                preserve_prefix,
+                preserve_suffix,
+                mask_char,
+            } => {
+                let resolved_seed =
+                    Self::resolve_secret(seed.as_deref(), seed_file.as_deref(), "seed")?;
+                TransformAction::MaskDeterministic {
+                    seed: Some(resolved_seed),
+                    seed_file: None,
+                    preserve_prefix: *preserve_prefix,
+                    preserve_suffix: *preserve_suffix,
+                    mask_char: *mask_char,
+                }
+            }
+            // All other transform actions pass through unchanged
+            other => other.clone(),
+        };
+
+        Ok(Some(resolved))
+    }
+
+    /// Resolve a secret value from either an inline value or a file path
+    fn resolve_secret(
+        inline_value: Option<&str>,
+        file_path: Option<&str>,
+        secret_name: &str,
+    ) -> Result<String> {
+        match (inline_value, file_path) {
+            (Some(value), None) => Ok(value.to_string()),
+            (None, Some(path)) => {
+                let content = std::fs::read_to_string(path)
+                    .with_context(|| format!("Failed to read {} from file: {}", secret_name, path))?;
+                Ok(content.trim().to_string())
+            }
+            (Some(_), Some(_)) => {
+                anyhow::bail!(
+                    "Both {} and {}_file specified; use only one",
+                    secret_name,
+                    secret_name
+                )
+            }
+            (None, None) => {
+                anyhow::bail!(
+                    "Either {} or {}_file must be specified",
+                    secret_name,
+                    secret_name
+                )
+            }
+        }
     }
 
     fn build_pattern(
@@ -1492,14 +1681,30 @@ impl StreamProcessor {
             TransformAction::CharCount => matched.chars().count().to_string(),
             TransformAction::WordCount => matched.split_whitespace().count().to_string(),
             #[cfg(feature = "fpe")]
-            TransformAction::FpeEncrypt { key, tweak, radix } => {
+            TransformAction::FpeEncrypt {
+                key,
+                key_file: _,
+                tweak,
+                tweak_file: _,
+                radix,
+            } => {
+                // key is resolved during compile_steps, so it's always Some
+                let key = key.as_ref().expect("FPE key should be resolved");
                 fpe_encrypt(matched, key, tweak, radix).unwrap_or_else(|e| {
                     eprintln!("FPE encrypt error: {}", e);
                     matched.to_string()
                 })
             }
             #[cfg(feature = "fpe")]
-            TransformAction::FpeDecrypt { key, tweak, radix } => {
+            TransformAction::FpeDecrypt {
+                key,
+                key_file: _,
+                tweak,
+                tweak_file: _,
+                radix,
+            } => {
+                // key is resolved during compile_steps, so it's always Some
+                let key = key.as_ref().expect("FPE key should be resolved");
                 fpe_decrypt(matched, key, tweak, radix).unwrap_or_else(|e| {
                     eprintln!("FPE decrypt error: {}", e);
                     matched.to_string()
@@ -1507,10 +1712,15 @@ impl StreamProcessor {
             }
             TransformAction::MaskDeterministic {
                 seed,
+                seed_file: _,
                 preserve_prefix,
                 preserve_suffix,
                 mask_char,
-            } => mask_deterministic(matched, seed, *preserve_prefix, *preserve_suffix, *mask_char),
+            } => {
+                // seed is resolved during compile_steps, so it's always Some
+                let seed = seed.as_ref().expect("Mask seed should be resolved");
+                mask_deterministic(matched, seed, *preserve_prefix, *preserve_suffix, *mask_char)
+            }
         }
     }
 
@@ -1655,6 +1865,150 @@ impl StreamProcessor {
                 0.0
             }
         )
+    }
+
+    /// Check if any steps have syntax-aware processing configured.
+    ///
+    /// Returns true if any step specifies both a language and scope filter.
+    /// This can be used to determine if syntax-aware processing is needed.
+    #[cfg(feature = "tree-sitter")]
+    pub fn has_syntax_aware_steps(&self) -> bool {
+        self.compiled_steps
+            .iter()
+            .any(|s| s.languages.is_some() && s.scope_filter.is_some())
+    }
+
+    /// Process file content with syntax-aware scoping.
+    ///
+    /// This method applies pipeline steps with syntax-aware filtering when configured.
+    /// For steps with `language` and `scope` specified, pattern matching and replacement
+    /// is restricted to the specified scope (e.g., only in code, not in strings/comments).
+    ///
+    /// # Arguments
+    ///
+    /// * `content` - The full file content to process
+    ///
+    /// # Returns
+    ///
+    /// The processed file content with syntax-aware transformations applied.
+    ///
+    /// # Example
+    ///
+    /// ```toml
+    /// [[step]]
+    /// type = "substitute"
+    /// pattern = "old_function"
+    /// replacement = "new_function"
+    /// language = "rust"
+    /// scope = "code"  # Only replace in code, not in strings or comments
+    /// ```
+    ///
+    /// For multi-language support, specify languages = ["rust", "python"] and call
+    /// this with the appropriate file_language parameter.
+    #[cfg(feature = "tree-sitter")]
+    pub fn process_file_syntax_aware(
+        &mut self,
+        content: &str,
+        file_language: Option<crate::syntax::Language>,
+    ) -> Result<String> {
+        use crate::syntax::SyntaxAnalyzer;
+
+        let mut result = content.to_string();
+
+        for step in &self.compiled_steps {
+            // Only process steps with syntax configuration
+            let (step_languages, scope) = match (&step.languages, &step.scope_filter) {
+                (Some(langs), Some(scope)) => (langs, scope),
+                _ => continue, // Skip non-syntax-aware steps
+            };
+
+            // Determine which language to use for analysis
+            let analysis_language = if let Some(file_lang) = file_language {
+                // If file language is specified, check if the step applies to it
+                if step_languages.contains(&file_lang) {
+                    file_lang
+                } else {
+                    continue; // Step doesn't apply to this file's language
+                }
+            } else {
+                // No file language specified; use the first language from the step
+                // This maintains backward compatibility for single-language usage
+                step_languages[0]
+            };
+
+            // Create analyzer for the determined language
+            let mut analyzer = match SyntaxAnalyzer::new(analysis_language) {
+                Ok(a) => a,
+                Err(e) => {
+                    log::warn!("Failed to create syntax analyzer: {}", e);
+                    continue;
+                }
+            };
+
+            // Apply step based on type
+            match step.step_type {
+                StepType::Substitute => {
+                    if let Some(ref replacement) = step.replacement {
+                        // Build a standard regex for scoped replacement
+                        let pattern_str = step.pattern.pattern_str();
+                        if let Ok(regex) = regex::Regex::new(pattern_str) {
+                            result = analyzer.scoped_replace(&result, &regex, replacement, scope);
+                        }
+                    }
+                }
+                StepType::Filter => {
+                    // For filter with syntax awareness, we'd need line-by-line handling
+                    // which doesn't fit the AST model well - log warning
+                    log::debug!(
+                        "Filter step with syntax-aware scope not fully supported for file mode"
+                    );
+                }
+                _ => {
+                    log::debug!(
+                        "Step type {:?} with syntax-aware scope not yet implemented",
+                        step.step_type
+                    );
+                }
+            }
+        }
+
+        Ok(result)
+    }
+
+    /// Process file content, applying both regular and syntax-aware transformations.
+    ///
+    /// This is a convenience method that first applies syntax-aware processing
+    /// for steps that specify language/scope, then falls back to regular stream
+    /// processing for other steps.
+    ///
+    /// # Arguments
+    /// * `content` - The file content to process
+    /// * `file_language` - Optional language of the file (for multi-language step support)
+    #[cfg(feature = "tree-sitter")]
+    pub fn process_file_content(
+        &mut self,
+        content: &str,
+        file_language: Option<crate::syntax::Language>,
+    ) -> Result<String> {
+        // First pass: apply syntax-aware transformations
+        let intermediate = if self.has_syntax_aware_steps() {
+            self.process_file_syntax_aware(content, file_language)?
+        } else {
+            content.to_string()
+        };
+
+        // Second pass: apply regular stream processing for non-syntax-aware steps
+        let mut output = Vec::new();
+        self.process_stream(std::io::Cursor::new(intermediate.as_bytes()), &mut output)?;
+
+        String::from_utf8(output)
+            .map_err(|e| anyhow::anyhow!("Invalid UTF-8 in processed output: {}", e))
+    }
+
+    /// Detect language from file extension
+    #[cfg(feature = "tree-sitter")]
+    pub fn detect_language_from_extension(extension: &str) -> Option<crate::syntax::Language> {
+        crate::syntax::Language::from_str(extension)
     }
 }
 
@@ -2476,6 +2830,7 @@ mod tests {
                 until: Some(r"^END$".to_string()),
                 block_action: Some(BlockAction::KeepBlock),
                 block_context: None,
+                ..Default::default()
             }],
         };
 
@@ -2518,6 +2873,7 @@ mod tests {
                 until: Some(r"^END$".to_string()),
                 block_action: Some(BlockAction::DropBlock),
                 block_context: None,
+                ..Default::default()
             }],
         };
 
@@ -2561,6 +2917,7 @@ mod tests {
                     marker: ">>> ".to_string(),
                 }),
                 block_context: None,
+                ..Default::default()
             }],
         };
 

@@ -1,0 +1,63 @@
+# Syntax-Aware Processing Example
+# Requires: --features tree-sitter
+#
+# This pipeline demonstrates structure-aware pattern matching using tree-sitter.
+# Patterns are only applied within specific scopes (code, strings, comments, etc.),
+# allowing you to refactor code without accidentally modifying string literals or comments.
+#
+# Usage:
+#   rexpipe --config examples/syntax-aware.toml src/*.rs
+
+name = "Syntax-Aware Refactoring"
+description = "Rename old_function to new_function in code only (not strings/comments)"
+version = "1.0.0"
+
+# Step 1: Rename function in Rust code, but NOT in strings or comments
+[[step]]
+type = "substitute"
+pattern = "old_function"
+replacement = "new_function"
+language = "rust"
+scope = "code"
+description = "Rename function in code only"
+
+# Example: Given this Rust code:
+#
+#   fn old_function() {
+#       // Call old_function here
+#       let s = "old_function";
+#       old_function();
+#   }
+#
+# Result:
+#
+#   fn new_function() {           <- renamed
+#       // Call old_function here  <- unchanged (comment)
+#       let s = "old_function";    <- unchanged (string)
+#       new_function();            <- renamed
+#   }
+
+# Step 2: Example of matching only in comments
+# [[step]]
+# type = "substitute"
+# pattern = "TODO"
+# replacement = "FIXME"
+# language = "rust"
+# scope = "comments"
+# description = "Convert TODO to FIXME in comments only"
+
+# Supported languages:
+# - rust, rs
+# - python, py
+# - javascript, js
+# - typescript, ts
+# - go, golang
+# - json
+# - yaml, yml
+
+# Supported scopes:
+# - all, * : Match anywhere (default)
+# - code   : Match in code only (exclude strings and comments)
+# - strings: Match only in string literals
+# - comments: Match only in comments
+# - functions: Match only in function/method bodies

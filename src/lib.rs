@@ -80,6 +80,9 @@
 //! - [`library`]: Pattern library loading and resolution
 //! - [`inspector`]: Interactive debugging and pattern inspection
 //! - [`plugin`]: Extensible plugin system for custom transformations
+//! - [`server`]: Streaming pipeline server for network-based processing
+//! - [`stream`]: URI-based streaming source and sink abstractions
+//! - [`syntax`] (requires `tree-sitter` feature): Syntax-aware pattern matching
 pub mod error;
 pub mod files;
 pub mod inspector;
@@ -88,9 +91,16 @@ pub mod library;
 pub mod pipeline;
 pub mod plugin;
 pub mod processor;
+pub mod server;
+pub mod stream;
+#[cfg(feature = "tree-sitter")]
+pub mod syntax;
 
 // Re-export error types for convenience
 pub use error::{ConfigError, LibraryError, PatternError, RexpipeError, ValidationError};
 
 // Re-export shutdown signal types for graceful termination
 pub use files::{BinaryMode, ShutdownInterrupted, ShutdownSignal, is_binary_file};
+
+// Re-export stream types for convenience
+pub use stream::{StreamUri, StreamSource, StreamSink, create_source, create_sink};

@@ -33,10 +33,21 @@ rayon = "1.10"
 regex = "1.11"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+streaming-iterator = { version = "0.1", optional = true }
 termcolor = "1.4"
 thiserror = "2.0"
 tokio = { version = "1.42", features = ["full"], optional = true }
 toml = "0.8"
+rdkafka = { version = "0.37", features = ["cmake-build"], optional = true }
+futures = { version = "0.3", optional = true }
+tree-sitter = { version = "0.25", optional = true }
+tree-sitter-rust = { version = "0.24", optional = true }
+tree-sitter-python = { version = "0.23", optional = true }
+tree-sitter-javascript = { version = "0.23", optional = true }
+tree-sitter-typescript = { version = "0.23", optional = true }
+tree-sitter-go = { version = "0.23", optional = true }
+tree-sitter-json = { version = "0.24", optional = true }
+tree-sitter-yaml = { version = "0.7", optional = true }
 
 [dev-dependencies]
 tempfile = "3.14"
@@ -48,6 +59,18 @@ default = []
 async = ["tokio"]
 pcre = ["fancy-regex"]
 fpe = ["dep:fpe", "dep:aes"]
+kafka = ["dep:rdkafka", "dep:futures", "tokio"]
+tree-sitter = [
+    "dep:tree-sitter",
+    "dep:streaming-iterator",
+    "dep:tree-sitter-rust",
+    "dep:tree-sitter-python",
+    "dep:tree-sitter-javascript",
+    "dep:tree-sitter-typescript",
+    "dep:tree-sitter-go",
+    "dep:tree-sitter-json",
+    "dep:tree-sitter-yaml",
+]
 
 [[bin]]
 name = "rexpipe"

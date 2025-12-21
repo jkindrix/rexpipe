@@ -362,6 +362,50 @@ fn build_cli() -> Command {
                 .help("Preview changes without modifying (works with stdin or -i mode)")
                 .action(ArgAction::SetTrue),
         )
+        // === Server Mode ===
+        .arg(
+            Arg::new("server")
+                .long("server")
+                .help("Start pipeline server mode for network-based processing")
+                .action(ArgAction::SetTrue),
+        )
+        .arg(
+            Arg::new("bind")
+                .long("bind")
+                .value_name("ADDRESS")
+                .help("Address to bind server to (default: 127.0.0.1:8080)")
+                .default_value("127.0.0.1:8080"),
+        )
+        // === Streaming Mode ===
+        .arg(
+            Arg::new("stream")
+                .long("stream")
+                .help("Run in continuous streaming mode (requires --input)")
+                .action(ArgAction::SetTrue),
+        )
+        .arg(
+            Arg::new("input-uri")
+                .long("input")
+                .value_name("URI")
+                .help("Input source URI (stdin://, file:///path, tcp://host:port, udp://host:port)")
+                .long_help("Specify input source using URI format:\n\
+                     - stdin://           Read from standard input\n\
+                     - file:///path       Read from a file\n\
+                     - tcp://host:port    Accept TCP connections\n\
+                     - udp://host:port    Receive UDP datagrams"),
+        )
+        .arg(
+            Arg::new("output-uri")
+                .long("output")
+                .value_name("URI")
+                .help("Output sink URI (stdout://, file:///path, tcp://host:port, udp://host:port)")
+                .long_help("Specify output sink using URI format:\n\
+                     - stdout://          Write to standard output\n\
+                     - stderr://          Write to standard error\n\
+                     - file:///path       Write to a file\n\
+                     - tcp://host:port    Send to TCP socket\n\
+                     - udp://host:port    Send UDP datagrams"),
+        )
         // === Output Modes ===
         .arg(
             Arg::new("count")
@@ -631,6 +675,16 @@ fn run_application(matches: &clap::ArgMatches) -> Result<()> {
     // Handle pattern discovery mode
     if matches.get_flag("discover") {
         return run_pattern_discovery(matches);
+    }
+
+    // Handle server mode
+    if matches.get_flag("server") {
+        return run_server_mode(matches);
+    }
+
+    // Handle streaming mode
+    if matches.get_flag("stream") || matches.contains_id("input-uri") {
+        return run_streaming_mode(matches);
     }
 
     // Build pipeline settings from CLI flags
@@ -1601,6 +1655,154 @@ fn run_pattern_discovery(matches: &clap::ArgMatches) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Run pipeline server mode
+fn run_server_mode(matches: &clap::ArgMatches) -> Result<()> {
+    use rexpipe::server::{PipelineServer, ServerConfig};
+
+    let bind_address = matches
+        .get_one::<String>("bind")
+        .cloned()
+        .unwrap_or_else(|| "127.0.0.1:8080".to_string());
+
+    // Load default pipeline configuration if provided
+    let default_config = if let Some(config_path) = matches.get_one::<String>("config") {
+        Some(load_pipeline_config_from_path(config_path)?)
+    } else {
+        None
+    };
+
+    let server_config = ServerConfig {
+        bind_address: bind_address.clone(),
+        default_config,
+        ..Default::default()
+    };
+
+    info!("Starting pipeline server on {}", bind_address);
+    println!("Pipeline server starting on {}", bind_address);
+    println!();
+    println!("Protocol:");
+    println!("  1. Send JSON pipeline config on a single line (or empty for default)");
+    println!("  2. Send '---' delimiter");
+    println!("  3. Send text to process");
+    println!("  4. Send '---' delimiter or close connection");
+    println!("  5. Server responds with processed text followed by '---'");
+    println!();
+
+    let server = PipelineServer::new(server_config);
+
+    // Check for async mode
+    #[cfg(feature = "async")]
+    if matches.get_flag("async") {
+        // Run with tokio runtime
+        let rt = tokio::runtime::Runtime::new()?;
+        rt.block_on(async {
+            server.run_async().await
+        })?;
+        return Ok(());
+    }
+
+    // Synchronous mode
+    server.run()?;
+
+    Ok(())
+}
+
+/// Run continuous streaming mode with URI-based sources and sinks.
+fn run_streaming_mode(matches: &clap::ArgMatches) -> Result<()> {
+    use rexpipe::stream::{StreamUri, create_source, create_sink};
+    use rexpipe::processor::StreamProcessor;
+
+    // Parse input URI (default to stdin if not specified)
+    let input_uri_str = matches
+        .get_one::<String>("input-uri")
+        .map(|s| s.as_str())
+        .unwrap_or("stdin://");
+    let input_uri = StreamUri::parse(input_uri_str)
+        .map_err(|e| anyhow!("Invalid input URI: {}", e))?;
+
+    // Parse output URI (default to stdout if not specified)
+    let output_uri_str = matches
+        .get_one::<String>("output-uri")
+        .map(|s| s.as_str())
+        .unwrap_or("stdout://");
+    let output_uri = StreamUri::parse(output_uri_str)
+        .map_err(|e| anyhow!("Invalid output URI: {}", e))?;
+
+    // Load pipeline configuration
+    let settings = build_pipeline_settings(matches);
+    let config = load_pipeline_config(matches, settings)?;
+
+    // Create processor
+    let mut processor = StreamProcessor::new(config)?;
+
+    // Create source and sink
+    let mut source = create_source(&input_uri)
+        .map_err(|e| anyhow!("Failed to create input source: {}", e))?;
+    let mut sink = create_sink(&output_uri)
+        .map_err(|e| anyhow!("Failed to create output sink: {}", e))?;
+
+    info!("Streaming: {} -> pipeline -> {}", input_uri_str, output_uri_str);
+    if !matches.get_flag("quiet") {
+        eprintln!("Streaming from {} to {}", input_uri_str, output_uri_str);
+        eprintln!("Press Ctrl+C to stop...");
+    }
+
+    // Process lines continuously
+    loop {
+        match source.read_line() {
+            Ok(Some(line)) => {
+                // Process the line through the pipeline
+                let input = format!("{}\n", line);
+                let mut output = Vec::new();
+
+                match processor.process_stream(std::io::Cursor::new(input.as_bytes()), &mut output) {
+                    Ok(_) => {
+                        // Write output (remove trailing newline since sink adds one)
+                        let output_str = String::from_utf8_lossy(&output);
+                        let output_trimmed = output_str.trim_end_matches('\n');
+                        if !output_trimmed.is_empty() {
+                            sink.write_line(output_trimmed)?;
+                            sink.flush()?;
+                        }
+                    }
+                    Err(e) => {
+                        log::error!("Processing error: {}", e);
+                    }
+                }
+            }
+            Ok(None) => {
+                // Source exhausted (EOF for files, but TCP/UDP continue)
+                if input_uri.scheme == "stdin" || input_uri.scheme == "file" {
+                    break;
+                }
+                // For network sources, this shouldn't happen
+            }
+            Err(e) => {
+                log::error!("Read error: {}", e);
+                // For transient errors, we might want to continue
+                // For fatal errors, we should break
+                if e.kind() == std::io::ErrorKind::UnexpectedEof {
+                    break;
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Load pipeline configuration from a file path.
+fn load_pipeline_config_from_path(path: &str) -> Result<PipelineConfig> {
+    let config = PipelineConfig::from_file(path)?;
+
+    // Validate configuration
+    if let Err(errors) = config.validate() {
+        return Err(anyhow!("Configuration validation failed:\n  {}", errors.join("\n  ")));
+    }
+
+    Ok(config)
 }
 
 #[cfg(test)]
