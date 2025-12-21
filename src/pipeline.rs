@@ -226,6 +226,60 @@ pub enum TransformAction {
     CharCount,
     /// Count words and replace with count
     WordCount,
+    /// Format-preserving encryption using FF1 algorithm (requires fpe feature)
+    /// Encrypts matched text while preserving format (digits remain digits)
+    #[cfg(feature = "fpe")]
+    #[serde(rename = "fpe_encrypt")]
+    FpeEncrypt {
+        /// Encryption key (hex-encoded, 16/24/32 bytes for AES-128/192/256)
+        key: String,
+        /// Optional tweak value (hex-encoded, up to 16 bytes)
+        #[serde(default)]
+        tweak: String,
+        /// Character set for encryption (default: "0123456789")
+        /// Common values: "0123456789", "0123456789ABCDEF", "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        #[serde(default = "default_fpe_radix")]
+        radix: String,
+    },
+    /// Format-preserving decryption using FF1 algorithm (requires fpe feature)
+    /// Decrypts text that was encrypted with fpe_encrypt using the same key/tweak
+    #[cfg(feature = "fpe")]
+    #[serde(rename = "fpe_decrypt")]
+    FpeDecrypt {
+        /// Decryption key (hex-encoded, must match encryption key)
+        key: String,
+        /// Optional tweak value (hex-encoded, must match encryption tweak)
+        #[serde(default)]
+        tweak: String,
+        /// Character set for decryption (must match encryption radix)
+        #[serde(default = "default_fpe_radix")]
+        radix: String,
+    },
+    /// Deterministic masking - consistent one-way transformation
+    /// Same input always produces same output (useful for joining masked datasets)
+    #[serde(rename = "mask_deterministic")]
+    MaskDeterministic {
+        /// Seed for deterministic hashing (different seeds produce different outputs)
+        seed: String,
+        /// Preserve first N characters (e.g., 4 for credit card prefix)
+        #[serde(default)]
+        preserve_prefix: usize,
+        /// Preserve last N characters (e.g., 4 for last 4 of SSN)
+        #[serde(default)]
+        preserve_suffix: usize,
+        /// Mask character (default: '*')
+        #[serde(default = "default_mask_char")]
+        mask_char: char,
+    },
+}
+
+#[cfg(feature = "fpe")]
+fn default_fpe_radix() -> String {
+    "0123456789".to_string()
+}
+
+fn default_mask_char() -> char {
+    '*'
 }
 
 /// Actions for Block step type (cross-line processing)

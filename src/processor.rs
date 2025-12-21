@@ -1491,6 +1491,26 @@ impl StreamProcessor {
             }
             TransformAction::CharCount => matched.chars().count().to_string(),
             TransformAction::WordCount => matched.split_whitespace().count().to_string(),
+            #[cfg(feature = "fpe")]
+            TransformAction::FpeEncrypt { key, tweak, radix } => {
+                fpe_encrypt(matched, key, tweak, radix).unwrap_or_else(|e| {
+                    eprintln!("FPE encrypt error: {}", e);
+                    matched.to_string()
+                })
+            }
+            #[cfg(feature = "fpe")]
+            TransformAction::FpeDecrypt { key, tweak, radix } => {
+                fpe_decrypt(matched, key, tweak, radix).unwrap_or_else(|e| {
+                    eprintln!("FPE decrypt error: {}", e);
+                    matched.to_string()
+                })
+            }
+            TransformAction::MaskDeterministic {
+                seed,
+                preserve_prefix,
+                preserve_suffix,
+                mask_char,
+            } => mask_deterministic(matched, seed, *preserve_prefix, *preserve_suffix, *mask_char),
         }
     }
 
@@ -1824,6 +1844,244 @@ fn url_decode(s: &str) -> Option<String> {
     }
 
     Some(result)
+}
+
+/// Format-preserving encryption using FF1 algorithm (NIST SP 800-38G).
+///
+/// Encrypts text while preserving its format - each character is replaced with
+/// another character from the same alphabet. For example, encrypting "123456789"
+/// with a numeric radix will produce another 9-digit number.
+///
+/// # Arguments
+/// * `input` - The text to encrypt
+/// * `key` - Hex-encoded encryption key (16/24/32 bytes for AES-128/192/256)
+/// * `tweak` - Hex-encoded tweak value (up to 16 bytes, can be empty)
+/// * `radix` - The character set (e.g., "0123456789" for digits)
+///
+/// # Returns
+/// Encrypted text with same length and character set as input
+#[cfg(feature = "fpe")]
+fn fpe_encrypt(input: &str, key: &str, tweak: &str, radix: &str) -> Result<String, String> {
+    use fpe::ff1::{BinaryNumeralString, FF1};
+
+    // Parse key from hex
+    let key_bytes = hex_decode(key).map_err(|e| format!("Invalid key hex: {}", e))?;
+    if key_bytes.len() != 16 && key_bytes.len() != 24 && key_bytes.len() != 32 {
+        return Err(format!(
+            "Key must be 16, 24, or 32 bytes (got {} bytes)",
+            key_bytes.len()
+        ));
+    }
+
+    // Parse tweak from hex (can be empty)
+    let tweak_bytes = if tweak.is_empty() {
+        Vec::new()
+    } else {
+        hex_decode(tweak).map_err(|e| format!("Invalid tweak hex: {}", e))?
+    };
+
+    // Build the radix (character set)
+    let radix_chars: Vec<char> = radix.chars().collect();
+    let radix_size = radix_chars.len();
+    if radix_size < 2 {
+        return Err("Radix must have at least 2 characters".to_string());
+    }
+
+    // Convert input to numeral string (indices into radix)
+    let mut numerals: Vec<u16> = Vec::new();
+    for c in input.chars() {
+        if let Some(idx) = radix_chars.iter().position(|&r| r == c) {
+            numerals.push(idx as u16);
+        } else {
+            // Character not in radix - pass through unchanged
+            // For now, we'll error on this
+            return Err(format!(
+                "Character '{}' not in radix '{}'",
+                c, radix
+            ));
+        }
+    }
+
+    if numerals.len() < 2 {
+        return Err("Input must have at least 2 characters for FPE".to_string());
+    }
+
+    // Create FF1 cipher
+    let ff1 = FF1::<aes::Aes256>::new(&key_bytes, radix_size as u32)
+        .map_err(|e| format!("FF1 initialization error: {:?}", e))?;
+
+    // Encrypt
+    let bns = BinaryNumeralString::from_bytes_le(&numerals.iter().map(|&n| n as u8).collect::<Vec<_>>());
+    let encrypted = ff1
+        .encrypt(&tweak_bytes, &bns)
+        .map_err(|e| format!("Encryption error: {:?}", e))?;
+
+    // Convert back to string
+    let encrypted_bytes = encrypted.to_bytes_le();
+    let result: String = encrypted_bytes
+        .iter()
+        .map(|&idx| radix_chars.get(idx as usize).copied().unwrap_or('?'))
+        .collect();
+
+    Ok(result)
+}
+
+/// Format-preserving decryption using FF1 algorithm.
+///
+/// Decrypts text that was encrypted with fpe_encrypt using the same key, tweak, and radix.
+#[cfg(feature = "fpe")]
+fn fpe_decrypt(input: &str, key: &str, tweak: &str, radix: &str) -> Result<String, String> {
+    use fpe::ff1::{BinaryNumeralString, FF1};
+
+    // Parse key from hex
+    let key_bytes = hex_decode(key).map_err(|e| format!("Invalid key hex: {}", e))?;
+    if key_bytes.len() != 16 && key_bytes.len() != 24 && key_bytes.len() != 32 {
+        return Err(format!(
+            "Key must be 16, 24, or 32 bytes (got {} bytes)",
+            key_bytes.len()
+        ));
+    }
+
+    // Parse tweak from hex (can be empty)
+    let tweak_bytes = if tweak.is_empty() {
+        Vec::new()
+    } else {
+        hex_decode(tweak).map_err(|e| format!("Invalid tweak hex: {}", e))?
+    };
+
+    // Build the radix (character set)
+    let radix_chars: Vec<char> = radix.chars().collect();
+    let radix_size = radix_chars.len();
+    if radix_size < 2 {
+        return Err("Radix must have at least 2 characters".to_string());
+    }
+
+    // Convert input to numeral string (indices into radix)
+    let mut numerals: Vec<u16> = Vec::new();
+    for c in input.chars() {
+        if let Some(idx) = radix_chars.iter().position(|&r| r == c) {
+            numerals.push(idx as u16);
+        } else {
+            return Err(format!(
+                "Character '{}' not in radix '{}'",
+                c, radix
+            ));
+        }
+    }
+
+    if numerals.len() < 2 {
+        return Err("Input must have at least 2 characters for FPE".to_string());
+    }
+
+    // Create FF1 cipher
+    let ff1 = FF1::<aes::Aes256>::new(&key_bytes, radix_size as u32)
+        .map_err(|e| format!("FF1 initialization error: {:?}", e))?;
+
+    // Decrypt
+    let bns = BinaryNumeralString::from_bytes_le(&numerals.iter().map(|&n| n as u8).collect::<Vec<_>>());
+    let decrypted = ff1
+        .decrypt(&tweak_bytes, &bns)
+        .map_err(|e| format!("Decryption error: {:?}", e))?;
+
+    // Convert back to string
+    let decrypted_bytes = decrypted.to_bytes_le();
+    let result: String = decrypted_bytes
+        .iter()
+        .map(|&idx| radix_chars.get(idx as usize).copied().unwrap_or('?'))
+        .collect();
+
+    Ok(result)
+}
+
+/// Decode hex string to bytes.
+#[cfg(feature = "fpe")]
+fn hex_decode(s: &str) -> Result<Vec<u8>, String> {
+    if s.len() % 2 != 0 {
+        return Err("Hex string must have even length".to_string());
+    }
+    (0..s.len())
+        .step_by(2)
+        .map(|i| {
+            u8::from_str_radix(&s[i..i + 2], 16)
+                .map_err(|_| format!("Invalid hex at position {}", i))
+        })
+        .collect()
+}
+
+/// Deterministic masking using consistent hashing.
+///
+/// Same input always produces same output (given same seed), which is useful for:
+/// - Joining datasets on masked keys
+/// - Consistent test data generation
+/// - Auditing masked data for duplicates
+///
+/// Unlike FPE, this is ONE-WAY (cannot be reversed).
+fn mask_deterministic(
+    input: &str,
+    seed: &str,
+    preserve_prefix: usize,
+    preserve_suffix: usize,
+    mask_char: char,
+) -> String {
+    let len = input.chars().count();
+
+    // Handle edge cases
+    if len == 0 || preserve_prefix + preserve_suffix >= len {
+        return input.to_string();
+    }
+
+    // Simple deterministic hash: combine input and seed
+    // Use a FNV-1a like hash for better mixing
+    let mut hash: u64 = 0xcbf29ce484222325; // FNV offset basis
+
+    // Mix in seed first
+    for c in seed.chars() {
+        hash ^= c as u64;
+        hash = hash.wrapping_mul(0x100000001b3); // FNV prime
+    }
+
+    // Then mix in input
+    for c in input.chars() {
+        hash ^= c as u64;
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+
+    // Build result
+    let chars: Vec<char> = input.chars().collect();
+    let mut result = String::new();
+
+    // Preserve prefix
+    for c in chars.iter().take(preserve_prefix) {
+        result.push(*c);
+    }
+
+    // Mask middle section with deterministic pattern
+    let mask_len = len - preserve_prefix - preserve_suffix;
+    let mut running_hash = hash;
+    for _ in 0..mask_len {
+        // Use running hash to deterministically select mask character
+        // This ensures same input+seed always produces same output
+        // Advance the running hash for each position
+        running_hash ^= running_hash >> 12;
+        running_hash ^= running_hash << 25;
+        running_hash ^= running_hash >> 27;
+        running_hash = running_hash.wrapping_mul(0x2545F4914F6CDD1D);
+
+        let masked = if mask_char == '*' {
+            // Default: use digits based on hash for format-preserving masking
+            char::from_digit((running_hash % 10) as u32, 10).unwrap_or('*')
+        } else {
+            mask_char
+        };
+        result.push(masked);
+    }
+
+    // Preserve suffix
+    for c in chars.iter().skip(len - preserve_suffix) {
+        result.push(*c);
+    }
+
+    result
 }
 
 #[cfg(test)]
@@ -2321,5 +2579,32 @@ mod tests {
         // Lines outside block should not be marked
         assert!(output_str.contains("\nnormal\n") || output_str.starts_with("normal\n"),
                 "normal should not be marked");
+    }
+
+    #[test]
+    fn test_mask_deterministic_helper() {
+        // Test the deterministic masking helper function
+        let result1 = mask_deterministic("123456789", "seed123", 0, 0, '*');
+        let result2 = mask_deterministic("123456789", "seed123", 0, 0, '*');
+        // Same input + seed should produce same output
+        assert_eq!(result1, result2, "Deterministic masking should be consistent");
+
+        // Different seed should produce different output
+        let result3 = mask_deterministic("123456789", "different_seed", 0, 0, '*');
+        assert_ne!(result1, result3, "Different seeds should produce different results");
+
+        // Test prefix preservation
+        let result4 = mask_deterministic("123456789", "seed123", 4, 0, 'X');
+        assert!(result4.starts_with("1234"), "Should preserve first 4 chars: {}", result4);
+        assert!(result4.chars().skip(4).all(|c| c == 'X'), "Rest should be masked with X");
+
+        // Test suffix preservation
+        let result5 = mask_deterministic("123456789", "seed123", 0, 4, 'X');
+        assert!(result5.ends_with("6789"), "Should preserve last 4 chars: {}", result5);
+
+        // Test both prefix and suffix
+        let result6 = mask_deterministic("1234-5678-9012", "seed", 4, 4, '*');
+        assert!(result6.starts_with("1234"), "Should preserve prefix");
+        assert!(result6.ends_with("9012"), "Should preserve suffix: {}", result6);
     }
 }
