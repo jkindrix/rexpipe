@@ -708,6 +708,8 @@ fn build_pipeline_settings(matches: &clap::ArgMatches) -> PipelineSettings {
         // --max-line-length limits line length
         max_line_length,
         max_line_action,
+        // Use defaults for new configurable settings
+        ..Default::default()
     }
 }
 
@@ -746,35 +748,30 @@ fn export_configuration(config: &PipelineConfig, format: &str) -> Result<()> {
     Ok(())
 }
 
-fn run_multi_file_mode(
-    config: &PipelineConfig,
-    matches: &clap::ArgMatches,
-    paths: Vec<PathBuf>,
-) -> Result<()> {
-    let quiet = matches.get_flag("quiet");
-    let json_output = matches.get_flag("json");
-    let jsonl_output = matches.get_flag("jsonl");
-
-    debug!(
-        "Entering multi-file mode with {} paths",
-        if paths.is_empty() { 1 } else { paths.len() }
-    );
-
-    // Set up graceful shutdown handling
-    let shutdown_signal = rexpipe::ShutdownSignal::new();
-    if let Err(e) = shutdown_signal.install_handlers() {
-        if !quiet {
-            eprintln!("Warning: Could not install signal handlers: {}", e);
-        }
-    }
-
+/// Build file processing options from command-line arguments.
+///
+/// Extracts configuration for file operations including:
+/// - In-place editing settings
+/// - Gitignore and hidden file handling
+/// - Parallelization options
+/// - Output modes (count, files-with-matches, etc.)
+/// - Glob and exclude patterns
+fn build_file_processing_options(matches: &clap::ArgMatches) -> Result<FileProcessingOptions> {
     // Parse binary mode
     let binary_mode = matches
         .get_one::<String>("binary")
         .and_then(|s| rexpipe::BinaryMode::from_str(s))
         .unwrap_or_default();
 
-    // Build file processing options
+    // Set up graceful shutdown handling
+    let shutdown_signal = rexpipe::ShutdownSignal::new();
+    if let Err(e) = shutdown_signal.install_handlers() {
+        if !matches.get_flag("quiet") {
+            eprintln!("Warning: Could not install signal handlers: {}", e);
+        }
+    }
+
+    // Build base options
     let mut options = FileProcessingOptions::new()
         .in_place(matches.get_flag("in-place"))
         .backup_suffix(matches.get_one::<String>("backup").cloned())
@@ -784,7 +781,7 @@ fn run_multi_file_mode(
         .count_only(matches.get_flag("count"))
         .files_with_matches(matches.get_flag("files-with-matches"))
         .files_without_matches(matches.get_flag("files-without-matches"))
-        .quiet(quiet)
+        .quiet(matches.get_flag("quiet"))
         .show_progress(matches.get_flag("progress"))
         .shutdown_signal(shutdown_signal)
         .binary_mode(binary_mode);
@@ -808,37 +805,69 @@ fn run_multi_file_mode(
         }
     }
 
-    let processor = MultiFileProcessor::new(config.clone(), options.clone());
+    Ok(options)
+}
 
-    // Determine paths to process
+/// Discover files and emit warnings if none are found.
+///
+/// Returns the discovered files, or Ok(empty) with warnings if nothing matches.
+fn discover_files_with_warnings(
+    processor: &MultiFileProcessor,
+    paths: &[PathBuf],
+    options: &FileProcessingOptions,
+    quiet: bool,
+) -> Result<Vec<PathBuf>> {
     let paths_to_process = if paths.is_empty() {
         vec![PathBuf::from(".")]
     } else {
-        paths
+        paths.to_vec()
     };
 
-    // Discover files
     let files = processor.discover_files(&paths_to_process)?;
 
     info!("Discovered {} files to process", files.len());
 
-    if files.is_empty() {
-        if !quiet {
-            eprintln!("Warning: No files found matching criteria");
-            if !options.include_patterns.is_empty() {
-                eprintln!(
-                    "  Glob patterns specified: {}",
-                    options.include_patterns.join(", ")
-                );
-                eprintln!("  Hint: Check that your glob patterns match existing files");
-            }
-            if !options.exclude_patterns.is_empty() {
-                eprintln!(
-                    "  Exclude patterns: {}",
-                    options.exclude_patterns.join(", ")
-                );
-            }
+    if files.is_empty() && !quiet {
+        eprintln!("Warning: No files found matching criteria");
+        if !options.include_patterns.is_empty() {
+            eprintln!(
+                "  Glob patterns specified: {}",
+                options.include_patterns.join(", ")
+            );
+            eprintln!("  Hint: Check that your glob patterns match existing files");
         }
+        if !options.exclude_patterns.is_empty() {
+            eprintln!(
+                "  Exclude patterns: {}",
+                options.exclude_patterns.join(", ")
+            );
+        }
+    }
+
+    Ok(files)
+}
+
+fn run_multi_file_mode(
+    config: &PipelineConfig,
+    matches: &clap::ArgMatches,
+    paths: Vec<PathBuf>,
+) -> Result<()> {
+    let quiet = matches.get_flag("quiet");
+    let json_output = matches.get_flag("json");
+    let jsonl_output = matches.get_flag("jsonl");
+
+    debug!(
+        "Entering multi-file mode with {} paths",
+        if paths.is_empty() { 1 } else { paths.len() }
+    );
+
+    // Build options and create processor
+    let options = build_file_processing_options(matches)?;
+    let processor = MultiFileProcessor::new(config.clone(), options.clone());
+
+    // Discover files with warnings
+    let files = discover_files_with_warnings(&processor, &paths, &options, quiet)?;
+    if files.is_empty() {
         return Ok(());
     }
 
@@ -933,58 +962,13 @@ fn run_dry_run_preview(
     matches: &clap::ArgMatches,
     paths: Vec<PathBuf>,
 ) -> Result<()> {
-    // Build file processing options (same as run_multi_file_mode but without in_place)
-    let mut options = FileProcessingOptions::new()
-        .respect_gitignore(!matches.get_flag("no-ignore"))
-        .include_hidden(matches.get_flag("hidden"));
+    // Build options (same infrastructure as multi-file mode)
+    let options = build_file_processing_options(matches)?;
+    let processor = MultiFileProcessor::new(config.clone(), options.clone());
 
-    // Add max depth
-    if let Some(depth) = matches.get_one::<String>("max-depth") {
-        options = options.max_depth(Some(depth.parse()?));
-    }
-
-    // Add glob patterns
-    if let Some(globs) = matches.get_many::<String>("glob") {
-        for glob in globs {
-            options = options.include_pattern(glob.clone());
-        }
-    }
-
-    // Add exclude patterns
-    if let Some(excludes) = matches.get_many::<String>("exclude") {
-        for exclude in excludes {
-            options = options.exclude_pattern(exclude.clone());
-        }
-    }
-
-    // Save patterns for warning message before moving options
-    let include_patterns = options.include_patterns.clone();
-    let exclude_patterns = options.exclude_patterns.clone();
-
-    let processor = MultiFileProcessor::new(config.clone(), options);
-
-    // Determine paths to process
-    let paths_to_process = if paths.is_empty() {
-        vec![PathBuf::from(".")]
-    } else {
-        paths
-    };
-
-    // Discover files
-    let files = processor.discover_files(&paths_to_process)?;
-
+    // Discover files with warnings
+    let files = discover_files_with_warnings(&processor, &paths, &options, false)?;
     if files.is_empty() {
-        eprintln!("Warning: No files found matching criteria");
-        if !include_patterns.is_empty() {
-            eprintln!(
-                "  Glob patterns specified: {}",
-                include_patterns.join(", ")
-            );
-            eprintln!("  Hint: Check that your glob patterns match existing files");
-        }
-        if !exclude_patterns.is_empty() {
-            eprintln!("  Exclude patterns: {}", exclude_patterns.join(", "));
-        }
         return Ok(());
     }
 
