@@ -1,12 +1,14 @@
-use anyhow::{Result, anyhow};
+use anyhow::{Error as AnyhowError, Result, anyhow};
 use clap::{Arg, ArgAction, Command, ValueHint, value_parser};
 use clap_complete::{Generator, Shell, generate};
+use log::{debug, info};
 use std::fs::File;
 use std::io::{self, BufReader, IsTerminal};
 use std::path::{Path, PathBuf};
 
 // Import from the library crate
 use rexpipe::compass::CompassAgent;
+use rexpipe::error::{ConfigError, LibraryError, PatternError, RexpipeError, ValidationError};
 use rexpipe::files::{FileProcessingOptions, MultiFileProcessor, MultiFileResult};
 use rexpipe::inspector::{Inspector, InspectorOptions};
 use rexpipe::json_schema;
@@ -37,38 +39,74 @@ mod exit_codes {
     pub const VALIDATION_ERROR: i32 = 6;
 }
 
-/// Categorize error type from error message for exit code selection
-fn categorize_error(error: &str) -> i32 {
-    let error_lower = error.to_lowercase();
+/// Determine if colored output should be used.
+/// Respects the NO_COLOR environment variable (https://no-color.org/)
+/// and the --no-color CLI flag.
+fn should_use_color(matches: &clap::ArgMatches) -> bool {
+    // --no-color flag explicitly disables color
+    if matches.get_flag("no-color") {
+        return false;
+    }
 
-    if error_lower.contains("missing required")
-        || error_lower.contains("must specify")
-        || error_lower.contains("invalid argument")
+    // NO_COLOR env var (any non-empty value disables color)
+    if std::env::var("NO_COLOR").map(|v| !v.is_empty()).unwrap_or(false) {
+        return false;
+    }
+
+    // Otherwise, use color if stdout is a terminal
+    std::io::stdout().is_terminal()
+}
+
+/// Categorize error type using structured error types for exit code selection.
+/// Falls back to string matching for errors that weren't wrapped in our types.
+fn categorize_error(error: &AnyhowError) -> i32 {
+    // Try to downcast to our structured error types first
+    if let Some(rexpipe_err) = error.downcast_ref::<RexpipeError>() {
+        return match rexpipe_err {
+            RexpipeError::Config(_) => exit_codes::CONFIG_ERROR,
+            RexpipeError::Pattern(_) => exit_codes::PATTERN_ERROR,
+            RexpipeError::Io(_) => exit_codes::IO_ERROR,
+            RexpipeError::Library(_) => exit_codes::CONFIG_ERROR, // Library errors are config-related
+            RexpipeError::Validation(_) => exit_codes::VALIDATION_ERROR,
+            RexpipeError::Processing(_) => exit_codes::GENERAL_ERROR,
+        };
+    }
+
+    // Check for specific nested error types
+    if error.downcast_ref::<ConfigError>().is_some() {
+        return exit_codes::CONFIG_ERROR;
+    }
+    if error.downcast_ref::<PatternError>().is_some() {
+        return exit_codes::PATTERN_ERROR;
+    }
+    if error.downcast_ref::<LibraryError>().is_some() {
+        return exit_codes::CONFIG_ERROR;
+    }
+    if error.downcast_ref::<ValidationError>().is_some() {
+        return exit_codes::VALIDATION_ERROR;
+    }
+    if error.downcast_ref::<std::io::Error>().is_some() {
+        return exit_codes::IO_ERROR;
+    }
+
+    // Fallback to string matching for errors from external crates
+    let error_msg = error.to_string().to_lowercase();
+
+    if error_msg.contains("missing required")
+        || error_msg.contains("must specify")
+        || error_msg.contains("invalid argument")
     {
         exit_codes::USAGE_ERROR
-    } else if error_lower.contains("no such file")
-        || error_lower.contains("not found")
-        || error_lower.contains("permission denied")
-        || error_lower.contains("cannot open")
+    } else if error_msg.contains("no such file")
+        || error_msg.contains("not found")
+        || error_msg.contains("permission denied")
     {
         exit_codes::IO_ERROR
-    } else if error_lower.contains("invalid regex")
-        || error_lower.contains("regex parse error")
-        || error_lower.contains("pattern")
-        || error_lower.contains("pcre mode requested")
-    {
+    } else if error_msg.contains("invalid regex") || error_msg.contains("regex parse error") {
         exit_codes::PATTERN_ERROR
-    } else if error_lower.contains("toml")
-        || error_lower.contains("config")
-        || error_lower.contains("parse error")
-        || error_lower.contains("deserialize")
-    {
+    } else if error_msg.contains("toml") || error_msg.contains("parse error") {
         exit_codes::CONFIG_ERROR
-    } else if error_lower.contains("validation")
-        || error_lower.contains("invalid pipeline")
-        || error_lower.contains("requires replacement")
-        || error_lower.contains("requires action")
-    {
+    } else if error_msg.contains("validation") {
         exit_codes::VALIDATION_ERROR
     } else {
         exit_codes::GENERAL_ERROR
@@ -123,9 +161,9 @@ fn build_cli() -> Command {
         // === File Operations ===
         .arg(
             Arg::new("in-place")
-                .short('I')
+                .short('i')
                 .long("in-place")
-                .help("Edit files in-place")
+                .help("Edit files in-place (like sed -i)")
                 .action(ArgAction::SetTrue),
         )
         .arg(
@@ -218,7 +256,7 @@ fn build_cli() -> Command {
         .arg(
             Arg::new("dry-run")
                 .long("dry-run")
-                .help("Validate config, or preview changes with -I (in-place mode)")
+                .help("Preview changes without modifying (works with stdin or -i mode)")
                 .action(ArgAction::SetTrue),
         )
         // === Output Modes ===
@@ -253,6 +291,19 @@ fn build_cli() -> Command {
             Arg::new("json")
                 .long("json")
                 .help("Output results as JSON")
+                .action(ArgAction::SetTrue),
+        )
+        .arg(
+            Arg::new("jsonl")
+                .long("jsonl")
+                .help("Output results as streaming JSON Lines (one JSON object per line)")
+                .action(ArgAction::SetTrue)
+                .conflicts_with("json"),
+        )
+        .arg(
+            Arg::new("no-color")
+                .long("no-color")
+                .help("Disable colored output (also respects NO_COLOR env var)")
                 .action(ArgAction::SetTrue),
         )
         // === Context Lines (for inspection) ===
@@ -311,6 +362,19 @@ fn build_cli() -> Command {
                 .help("Validate configuration only")
                 .action(ArgAction::SetTrue),
         )
+        // === Security ===
+        .arg(
+            Arg::new("no-shell")
+                .long("no-shell")
+                .help("Disable shell command execution in transforms (security)")
+                .action(ArgAction::SetTrue),
+        )
+        .arg(
+            Arg::new("strict")
+                .long("strict")
+                .help("Reject potentially dangerous ReDoS regex patterns")
+                .action(ArgAction::SetTrue),
+        )
         .arg(
             Arg::new("export")
                 .long("export")
@@ -327,7 +391,7 @@ fn build_cli() -> Command {
         // === I/O ===
         .arg(
             Arg::new("input")
-                .short('i')
+                .short('f')
                 .long("input")
                 .value_name("FILE")
                 .help("Input file (default: stdin)")
@@ -362,6 +426,14 @@ fn print_completions<G: Generator>(generator: G, cmd: &mut Command) {
 }
 
 fn main() {
+    // Initialize logger from RUST_LOG environment variable
+    // Example: RUST_LOG=rexpipe=debug rexpipe --config my.toml < input.txt
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn"))
+        .format_timestamp(None)
+        .init();
+
+    debug!("Starting rexpipe");
+
     let matches = build_cli().get_matches();
 
     // Handle completions generation first (before any other processing)
@@ -372,9 +444,8 @@ fn main() {
     }
 
     if let Err(e) = run_application(&matches) {
-        let error_msg = e.to_string();
-        eprintln!("Error: {}", error_msg);
-        let exit_code = categorize_error(&error_msg);
+        eprintln!("Error: {}", e);
+        let exit_code = categorize_error(&e);
         std::process::exit(exit_code);
     }
 }
@@ -424,10 +495,20 @@ fn run_application(matches: &clap::ArgMatches) -> Result<()> {
     let is_multi_file =
         matches.get_flag("recursive") || matches.get_flag("in-place") || !paths.is_empty();
 
-    // Handle dry-run: show preview for in-place mode, otherwise just validate
+    // Handle dry-run: show preview for in-place mode, stdin preview, or just validate
     if matches.get_flag("dry-run") {
         if is_multi_file && matches.get_flag("in-place") {
             return run_dry_run_preview(&config, matches, paths);
+        }
+        if !is_multi_file {
+            // Stdin mode dry-run: show what would change
+            let input: Box<dyn io::BufRead> =
+                if let Some(input_file) = matches.get_one::<String>("input") {
+                    Box::new(BufReader::new(File::open(input_file)?))
+                } else {
+                    Box::new(io::stdin().lock())
+                };
+            return run_stdin_dry_run_preview(&config, input, matches);
         }
         return validate_configuration(&config);
     }
@@ -476,6 +557,10 @@ fn build_pipeline_settings(matches: &clap::ArgMatches) -> PipelineSettings {
         context_before,
         context_after,
         timeout_ms,
+        // --no-shell disables shell transforms
+        allow_shell: !matches.get_flag("no-shell"),
+        // --strict enables ReDoS pattern rejection
+        strict_mode: matches.get_flag("strict"),
     }
 }
 
@@ -501,6 +586,20 @@ fn run_multi_file_mode(
 ) -> Result<()> {
     let quiet = matches.get_flag("quiet");
     let json_output = matches.get_flag("json");
+    let jsonl_output = matches.get_flag("jsonl");
+
+    debug!(
+        "Entering multi-file mode with {} paths",
+        if paths.is_empty() { 1 } else { paths.len() }
+    );
+
+    // Set up graceful shutdown handling
+    let shutdown_signal = rexpipe::ShutdownSignal::new();
+    if let Err(e) = shutdown_signal.install_handlers() {
+        if !quiet {
+            eprintln!("Warning: Could not install signal handlers: {}", e);
+        }
+    }
 
     // Build file processing options
     let mut options = FileProcessingOptions::new()
@@ -513,7 +612,8 @@ fn run_multi_file_mode(
         .files_with_matches(matches.get_flag("files-with-matches"))
         .files_without_matches(matches.get_flag("files-without-matches"))
         .quiet(quiet)
-        .show_progress(matches.get_flag("progress"));
+        .show_progress(matches.get_flag("progress"))
+        .shutdown_signal(shutdown_signal);
 
     // Add max depth
     if let Some(depth) = matches.get_one::<String>("max-depth") {
@@ -546,9 +646,24 @@ fn run_multi_file_mode(
     // Discover files
     let files = processor.discover_files(&paths_to_process)?;
 
+    info!("Discovered {} files to process", files.len());
+
     if files.is_empty() {
         if !quiet {
-            eprintln!("No files found matching criteria");
+            eprintln!("Warning: No files found matching criteria");
+            if !options.include_patterns.is_empty() {
+                eprintln!(
+                    "  Glob patterns specified: {}",
+                    options.include_patterns.join(", ")
+                );
+                eprintln!("  Hint: Check that your glob patterns match existing files");
+            }
+            if !options.exclude_patterns.is_empty() {
+                eprintln!(
+                    "  Exclude patterns: {}",
+                    options.exclude_patterns.join(", ")
+                );
+            }
         }
         return Ok(());
     }
@@ -588,6 +703,23 @@ fn run_multi_file_mode(
         }
         let result = processor.count_matches(&files)?;
         output_count_results(&result, quiet, json_output)?;
+        return Ok(());
+    } else if jsonl_output {
+        // JSONL streaming mode: output each file result as it's processed
+        let result = processor.process_files_streaming(&files, |file_result| {
+            if let Ok(jsonl) = json_schema::output_file_result_jsonl(file_result) {
+                println!("{}", jsonl);
+            }
+        })?;
+
+        // Output summary as final JSONL line
+        if let Ok(summary) = json_schema::output_streaming_summary_jsonl(&result) {
+            println!("{}", summary);
+        }
+
+        if !result.has_matches() {
+            std::process::exit(exit_codes::NO_MATCHES);
+        }
         return Ok(());
     } else {
         #[cfg(feature = "async")]
@@ -651,6 +783,10 @@ fn run_dry_run_preview(
         }
     }
 
+    // Save patterns for warning message before moving options
+    let include_patterns = options.include_patterns.clone();
+    let exclude_patterns = options.exclude_patterns.clone();
+
     let processor = MultiFileProcessor::new(config.clone(), options);
 
     // Determine paths to process
@@ -664,16 +800,82 @@ fn run_dry_run_preview(
     let files = processor.discover_files(&paths_to_process)?;
 
     if files.is_empty() {
-        eprintln!("No files found matching criteria");
+        eprintln!("Warning: No files found matching criteria");
+        if !include_patterns.is_empty() {
+            eprintln!(
+                "  Glob patterns specified: {}",
+                include_patterns.join(", ")
+            );
+            eprintln!("  Hint: Check that your glob patterns match existing files");
+        }
+        if !exclude_patterns.is_empty() {
+            eprintln!("  Exclude patterns: {}", exclude_patterns.join(", "));
+        }
         return Ok(());
     }
 
-    // Determine if we should use color
-    let use_color = std::io::stdout().is_terminal();
+    // Determine if we should use color (respects --no-color and NO_COLOR env)
+    let use_color = should_use_color(matches);
 
     // Generate preview
     let preview = processor.preview_changes(&files, use_color)?;
     print!("{}", preview);
+
+    Ok(())
+}
+
+/// Show a preview of what would change when processing stdin.
+/// Displays a diff-like view showing original lines vs transformed lines.
+fn run_stdin_dry_run_preview(
+    config: &PipelineConfig,
+    input: Box<dyn io::BufRead>,
+    matches: &clap::ArgMatches,
+) -> Result<()> {
+    use std::io::BufRead;
+
+    let use_color = should_use_color(matches);
+    let mut processor = StreamProcessor::new(config.clone())?;
+
+    // ANSI color codes
+    let (red, green, reset) = if use_color {
+        ("\x1b[31m", "\x1b[32m", "\x1b[0m")
+    } else {
+        ("", "", "")
+    };
+
+    println!("Dry-run preview (no changes will be made):");
+    println!("---");
+
+    let mut total_lines = 0u64;
+    let mut changed_lines = 0u64;
+
+    for (line_num, line_result) in input.lines().enumerate() {
+        let original = line_result?;
+        total_lines += 1;
+
+        // Process the line through the pipeline
+        let mut output_buffer = Vec::new();
+        {
+            let single_line = std::io::Cursor::new(format!("{}\n", original));
+            processor.process_stream(single_line, &mut output_buffer)?;
+        }
+
+        let transformed = String::from_utf8_lossy(&output_buffer)
+            .trim_end_matches('\n')
+            .to_string();
+
+        if original != transformed {
+            changed_lines += 1;
+            println!("{}{}: - {}{}", red, line_num + 1, original, reset);
+            println!("{}{}: + {}{}", green, line_num + 1, transformed, reset);
+        }
+    }
+
+    println!("---");
+    println!(
+        "Summary: {} of {} lines would change",
+        changed_lines, total_lines
+    );
 
     Ok(())
 }
@@ -737,7 +939,10 @@ fn load_pipeline_config(
     matches: &clap::ArgMatches,
     settings: PipelineSettings,
 ) -> Result<PipelineConfig> {
+    debug!("Loading pipeline configuration");
+
     if let Some(config_file) = matches.get_one::<String>("config") {
+        info!("Loading config from file: {}", config_file);
         let config_path = Path::new(config_file);
         let mut config = PipelineConfig::from_file(config_file)?;
 
@@ -770,8 +975,38 @@ fn load_pipeline_config(
         if settings.timeout_ms > 0 {
             config.settings.timeout_ms = settings.timeout_ms;
         }
+        // --no-shell flag disables shell transforms
+        if !settings.allow_shell {
+            config.settings.allow_shell = false;
+        }
+
+        // --strict flag enables ReDoS pattern rejection
+        if settings.strict_mode {
+            config.settings.strict_mode = true;
+        }
+
+        // Validate shell transform usage if disabled
+        if !config.settings.allow_shell && config.has_shell_transforms() {
+            let shell_commands = config.get_shell_commands();
+            return Err(anyhow!(
+                "Shell transforms are disabled (--no-shell flag), but config contains shell transforms:\n  {}",
+                shell_commands.join("\n  ")
+            ));
+        }
+
+        // Warn about shell transforms when not disabled
+        if config.has_shell_transforms() {
+            let shell_commands = config.get_shell_commands();
+            eprintln!(
+                "Warning: This pipeline uses shell transforms that will execute external commands:\n  {}\n\
+                Use --no-shell to disable shell command execution.",
+                shell_commands.join("\n  ")
+            );
+        }
+
         Ok(config)
     } else if let Some(pattern) = matches.get_one::<String>("pattern") {
+        debug!("Using inline pattern: {}", pattern);
         let replacement = matches.get_one::<String>("replacement").map(|s| s.as_str());
         Ok(PipelineConfig::from_inline_pattern_with_settings(
             pattern,
@@ -973,13 +1208,17 @@ fn run_inspection_mode(
     input: Box<dyn io::BufRead>,
     matches: &clap::ArgMatches,
 ) -> Result<()> {
+    let use_color = should_use_color(matches);
+
     let options = InspectorOptions::new()
         .interactive(matches.get_flag("interactive"))
         .show_performance(matches.get_flag("performance"))
         .show_line_numbers(true)
         .show_captures(true);
 
-    let mut inspector = Inspector::new(config.clone())?.with_options(options);
+    let mut inspector = Inspector::new(config.clone())?
+        .with_options(options)
+        .with_color(use_color);
     let result = inspector.inspect_stream(input)?;
     inspector.display_results(&result)?;
 

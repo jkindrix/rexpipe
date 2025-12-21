@@ -94,3 +94,6 @@ pub mod processor;
 
 // Re-export error types for convenience
 pub use error::{ConfigError, LibraryError, PatternError, RexpipeError, ValidationError};
+
+// Re-export shutdown signal types for graceful termination
+pub use files::{ShutdownInterrupted, ShutdownSignal};

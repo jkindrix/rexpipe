@@ -3,6 +3,12 @@
 //! Provides directory recursion, in-place editing, parallel processing,
 //! progress indicators, dry-run preview, and VCS-aware file discovery.
 //!
+//! ## Parallel Processing
+//!
+//! When `parallel` is enabled, files are processed using Rayon's parallel iterators.
+//! To avoid overhead on small file sets, parallel processing is only used when the
+//! file count exceeds [`PARALLEL_THRESHOLD`].
+//!
 //! # Example
 //!
 //! ```no_run
@@ -33,11 +39,110 @@ use anyhow::Result;
 use diffy::{PatchFormatter, create_patch};
 use ignore::WalkBuilder;
 use indicatif::{ProgressBar, ProgressStyle};
+use log::{debug, info, trace};
 use rayon::prelude::*;
 use std::fs::{self, File};
 use std::io::{BufReader, IsTerminal};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Arc;
+
+/// Minimum number of files required before parallel processing is used.
+///
+/// For small file counts, the overhead of parallel processing (thread pool,
+/// synchronization) can exceed the benefit. This threshold ensures parallel
+/// processing is only used when it's likely to provide a performance gain.
+pub const PARALLEL_THRESHOLD: usize = 4;
+
+// ============================================================================
+// Graceful Shutdown Support
+// ============================================================================
+
+/// Signal for graceful shutdown coordination.
+///
+/// This type allows coordinating shutdown between the signal handler and
+/// the file processing loops. When a shutdown is requested (via Ctrl+C or
+/// SIGTERM), in-progress files complete normally before the processor exits.
+///
+/// # Example
+///
+/// ```
+/// use rexpipe::files::ShutdownSignal;
+///
+/// let signal = ShutdownSignal::new();
+///
+/// // Check if shutdown was requested
+/// if signal.is_shutdown_requested() {
+///     println!("Shutting down...");
+/// }
+/// ```
+#[derive(Clone)]
+pub struct ShutdownSignal {
+    flag: Arc<AtomicBool>,
+}
+
+impl Default for ShutdownSignal {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ShutdownSignal {
+    /// Create a new shutdown signal.
+    pub fn new() -> Self {
+        Self {
+            flag: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    /// Request a shutdown. Called by signal handlers.
+    pub fn request_shutdown(&self) {
+        self.flag.store(true, Ordering::SeqCst);
+    }
+
+    /// Check if shutdown has been requested.
+    pub fn is_shutdown_requested(&self) -> bool {
+        self.flag.load(Ordering::SeqCst)
+    }
+
+    /// Install signal handlers for Ctrl+C (SIGINT) and SIGTERM.
+    ///
+    /// Returns Ok(()) if handlers were installed successfully, or an error
+    /// if signal handling is not supported on this platform.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rexpipe::files::ShutdownSignal;
+    ///
+    /// let signal = ShutdownSignal::new();
+    /// signal.install_handlers().expect("Failed to install signal handlers");
+    ///
+    /// // Later, check if shutdown was requested
+    /// if signal.is_shutdown_requested() {
+    ///     println!("Received shutdown signal");
+    /// }
+    /// ```
+    pub fn install_handlers(&self) -> Result<(), ctrlc::Error> {
+        let signal = self.clone();
+        ctrlc::set_handler(move || {
+            // Only print message on first signal
+            if !signal.is_shutdown_requested() {
+                eprintln!("\nShutdown requested. Completing in-progress files...");
+            }
+            signal.request_shutdown();
+        })
+    }
+}
+
+/// Result indicating the processor was interrupted by a shutdown signal.
+#[derive(Debug, Clone)]
+pub struct ShutdownInterrupted {
+    /// Number of files that were processed before shutdown
+    pub files_completed: u64,
+    /// Number of files that were not processed due to shutdown
+    pub files_remaining: u64,
+}
 
 /// Result of processing a single file
 #[derive(Debug, Clone)]
@@ -59,6 +164,8 @@ pub struct MultiFileResult {
     pub total_lines: u64,
     pub file_results: Vec<FileResult>,
     pub errors: Vec<String>,
+    /// Set if processing was interrupted by a shutdown signal
+    pub interrupted: Option<ShutdownInterrupted>,
 }
 
 /// Callback type for streaming file results as they're processed
@@ -95,6 +202,8 @@ pub struct FileProcessingOptions {
     pub show_progress: bool,
     /// Enable streaming output mode (emit results as files are processed)
     pub streaming_output: bool,
+    /// Optional shutdown signal for graceful termination
+    pub shutdown_signal: Option<ShutdownSignal>,
 }
 
 impl std::fmt::Debug for FileProcessingOptions {
@@ -114,6 +223,7 @@ impl std::fmt::Debug for FileProcessingOptions {
             .field("quiet", &self.quiet)
             .field("show_progress", &self.show_progress)
             .field("streaming_output", &self.streaming_output)
+            .field("shutdown_signal", &self.shutdown_signal.is_some())
             .finish()
     }
 }
@@ -135,6 +245,7 @@ impl Default for FileProcessingOptions {
             quiet: false,
             show_progress: false,
             streaming_output: false,
+            shutdown_signal: None,
         }
     }
 }
@@ -214,6 +325,29 @@ impl FileProcessingOptions {
         self.streaming_output = streaming;
         self
     }
+
+    /// Set a shutdown signal for graceful termination.
+    ///
+    /// When set, the processor will check this signal between files and stop
+    /// processing new files if shutdown is requested. In-progress files will
+    /// complete normally to avoid leaving files in a partial state.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rexpipe::files::{FileProcessingOptions, ShutdownSignal};
+    ///
+    /// let signal = ShutdownSignal::new();
+    /// signal.install_handlers().expect("Failed to install signal handlers");
+    ///
+    /// let options = FileProcessingOptions::new()
+    ///     .parallel(true)
+    ///     .shutdown_signal(signal);
+    /// ```
+    pub fn shutdown_signal(mut self, signal: ShutdownSignal) -> Self {
+        self.shutdown_signal = Some(signal);
+        self
+    }
 }
 
 /// Create a progress bar for file processing
@@ -253,22 +387,31 @@ impl MultiFileProcessor {
 
     /// Discover files matching the criteria starting from the given paths
     pub fn discover_files(&self, paths: &[PathBuf]) -> Result<Vec<PathBuf>> {
+        debug!("Discovering files from {} starting paths", paths.len());
         let mut files = Vec::new();
 
         for path in paths {
             if path.is_file() {
+                trace!("Adding file: {}", path.display());
                 files.push(path.clone());
             } else if path.is_dir() {
+                debug!("Walking directory: {}", path.display());
                 let discovered = self.walk_directory(path)?;
+                debug!("Found {} files in {}", discovered.len(), path.display());
                 files.extend(discovered);
             }
         }
 
+        info!("File discovery complete: {} files found", files.len());
         Ok(files)
     }
 
     fn walk_directory(&self, dir: &Path) -> Result<Vec<PathBuf>> {
         let mut builder = WalkBuilder::new(dir);
+
+        // Security: Do not follow symlinks (default, but explicit for clarity)
+        // This prevents path traversal attacks via malicious symlinks
+        builder.follow_links(false);
 
         // Configure gitignore handling
         builder.git_ignore(self.options.respect_gitignore);
@@ -322,8 +465,20 @@ impl MultiFileProcessor {
     }
 
     /// Process multiple files
+    ///
+    /// When `options.parallel` is true, files are processed in parallel using Rayon.
+    /// However, to avoid overhead on small file sets, parallel processing is only
+    /// used when the file count exceeds [`PARALLEL_THRESHOLD`].
     pub fn process_files(&self, files: &[PathBuf]) -> Result<MultiFileResult> {
-        if self.options.parallel {
+        // Only use parallel processing if enabled AND file count exceeds threshold
+        let use_parallel = self.options.parallel && files.len() >= PARALLEL_THRESHOLD;
+        debug!(
+            "Processing {} files (parallel: {}, threshold: {})",
+            files.len(),
+            use_parallel,
+            PARALLEL_THRESHOLD
+        );
+        if use_parallel {
             self.process_files_parallel(files)
         } else {
             self.process_files_sequential(files)
@@ -432,7 +587,26 @@ impl MultiFileProcessor {
             self.options.quiet,
         );
 
+        let total_files = files.len() as u64;
+        let mut processed_count = 0u64;
+
         for file in files {
+            // Check for shutdown before starting each file
+            if let Some(ref signal) = self.options.shutdown_signal {
+                if signal.is_shutdown_requested() {
+                    info!(
+                        "Shutdown requested after {} files, {} remaining",
+                        processed_count,
+                        total_files - processed_count
+                    );
+                    result.interrupted = Some(ShutdownInterrupted {
+                        files_completed: processed_count,
+                        files_remaining: total_files - processed_count,
+                    });
+                    break;
+                }
+            }
+
             match self.process_single_file(file) {
                 Ok(file_result) => {
                     result.files_processed += 1;
@@ -460,16 +634,26 @@ impl MultiFileProcessor {
                 }
             }
 
+            processed_count += 1;
+
             if let Some(ref pb) = progress {
                 pb.inc(1);
             }
         }
 
         if let Some(pb) = progress {
-            pb.finish_with_message(format!(
-                "Processed {} files ({} matches)",
-                result.files_processed, result.total_matches
-            ));
+            let msg = if result.interrupted.is_some() {
+                format!(
+                    "Interrupted after {} files ({} matches)",
+                    result.files_processed, result.total_matches
+                )
+            } else {
+                format!(
+                    "Processed {} files ({} matches)",
+                    result.files_processed, result.total_matches
+                )
+            };
+            pb.finish_with_message(msg);
         }
 
         Ok(result)
@@ -479,8 +663,10 @@ impl MultiFileProcessor {
         let files_processed = AtomicU64::new(0);
         let files_matched = AtomicU64::new(0);
         let files_modified = AtomicU64::new(0);
+        let files_skipped = AtomicU64::new(0);
         let total_matches = AtomicU64::new(0);
         let total_lines = AtomicU64::new(0);
+        let shutdown_detected = AtomicBool::new(false);
 
         let progress = create_progress_bar(
             files.len() as u64,
@@ -488,9 +674,24 @@ impl MultiFileProcessor {
             self.options.quiet,
         );
 
-        let file_results: Vec<FileResult> = files
+        let shutdown_signal = &self.options.shutdown_signal;
+
+        let file_results: Vec<Option<FileResult>> = files
             .par_iter()
             .map(|file| {
+                // Check for shutdown before starting this file
+                // Note: Files already in-progress will continue to completion
+                if let Some(signal) = shutdown_signal {
+                    if signal.is_shutdown_requested() {
+                        shutdown_detected.store(true, Ordering::Relaxed);
+                        files_skipped.fetch_add(1, Ordering::Relaxed);
+                        if let Some(ref pb) = progress {
+                            pb.inc(1);
+                        }
+                        return None; // Skip this file
+                    }
+                }
+
                 let result = match self.process_single_file(file) {
                     Ok(file_result) => {
                         files_processed.fetch_add(1, Ordering::Relaxed);
@@ -519,9 +720,12 @@ impl MultiFileProcessor {
                     pb.inc(1);
                 }
 
-                result
+                Some(result)
             })
             .collect();
+
+        // Flatten results, filtering out skipped files
+        let file_results: Vec<FileResult> = file_results.into_iter().flatten().collect();
 
         let errors: Vec<String> = file_results
             .iter()
@@ -532,7 +736,10 @@ impl MultiFileProcessor {
             })
             .collect();
 
-        let result = MultiFileResult {
+        let was_interrupted = shutdown_detected.load(Ordering::Relaxed);
+        let skipped_count = files_skipped.load(Ordering::Relaxed);
+
+        let mut result = MultiFileResult {
             files_processed: files_processed.load(Ordering::Relaxed),
             files_matched: files_matched.load(Ordering::Relaxed),
             files_modified: files_modified.load(Ordering::Relaxed),
@@ -540,19 +747,36 @@ impl MultiFileProcessor {
             total_lines: total_lines.load(Ordering::Relaxed),
             file_results,
             errors,
+            interrupted: None,
         };
 
+        if was_interrupted {
+            result.interrupted = Some(ShutdownInterrupted {
+                files_completed: result.files_processed,
+                files_remaining: skipped_count,
+            });
+        }
+
         if let Some(pb) = progress {
-            pb.finish_with_message(format!(
-                "Processed {} files ({} matches)",
-                result.files_processed, result.total_matches
-            ));
+            let msg = if was_interrupted {
+                format!(
+                    "Interrupted after {} files ({} matches, {} skipped)",
+                    result.files_processed, result.total_matches, skipped_count
+                )
+            } else {
+                format!(
+                    "Processed {} files ({} matches)",
+                    result.files_processed, result.total_matches
+                )
+            };
+            pb.finish_with_message(msg);
         }
 
         Ok(result)
     }
 
     fn process_single_file(&self, path: &Path) -> Result<FileResult> {
+        trace!("Processing file: {}", path.display());
         let mut processor = StreamProcessor::new(self.config.clone())?;
 
         // Read the file
@@ -560,18 +784,42 @@ impl MultiFileProcessor {
         let reader = BufReader::new(file);
 
         if self.options.in_place {
-            // Process to a temporary buffer, then write back
+            // Process to a temporary buffer, then write back atomically
             let mut output = Vec::new();
             let pipeline_result = processor.process_stream(reader, &mut output)?;
 
-            // Create backup if requested
+            // Atomic write: write to temp file, then rename
+            // This ensures we never leave the file in a partial state
+            let parent = path.parent().unwrap_or(Path::new("."));
+            let temp_path = parent.join(format!(
+                ".{}.rexpipe.tmp",
+                path.file_name()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "file".to_string())
+            ));
+
+            // Write to temporary file
+            fs::write(&temp_path, &output)?;
+
+            // Create backup if requested (rename original to backup)
             if let Some(ref suffix) = self.options.backup_suffix {
                 let backup_path = format!("{}{}", path.display(), suffix);
-                fs::copy(path, &backup_path)?;
+                // Remove existing backup if present
+                let _ = fs::remove_file(&backup_path);
+                fs::rename(path, &backup_path)?;
             }
 
-            // Write the processed content back
-            fs::write(path, output)?;
+            // Atomically replace original with temp file
+            fs::rename(&temp_path, path)?;
+
+            if pipeline_result.transformations_applied > 0 {
+                debug!(
+                    "Modified {}: {} matches, {} transformations",
+                    path.display(),
+                    pipeline_result.matches_found,
+                    pipeline_result.transformations_applied
+                );
+            }
 
             Ok(FileResult {
                 path: path.to_path_buf(),
@@ -606,7 +854,9 @@ impl MultiFileProcessor {
             Ok((result.matches_found, result.lines_processed))
         };
 
-        let results: Vec<FileResult> = if self.options.parallel {
+        // Only use parallel processing if enabled AND file count exceeds threshold
+        let use_parallel = self.options.parallel && files.len() >= PARALLEL_THRESHOLD;
+        let results: Vec<FileResult> = if use_parallel {
             files
                 .par_iter()
                 .map(|path| match processor_fn(path) {
@@ -762,7 +1012,7 @@ impl MultiFileProcessor {
 
 impl MultiFileResult {
     pub fn summary(&self) -> String {
-        format!(
+        let mut summary = format!(
             "Files: {} processed, {} matched, {} modified\n\
              Lines: {} total\n\
              Matches: {} total\n\
@@ -773,7 +1023,16 @@ impl MultiFileResult {
             self.total_lines,
             self.total_matches,
             self.errors.len()
-        )
+        );
+
+        if let Some(ref interrupted) = self.interrupted {
+            summary.push_str(&format!(
+                "\nInterrupted: {} files completed, {} files remaining",
+                interrupted.files_completed, interrupted.files_remaining
+            ));
+        }
+
+        summary
     }
 
     pub fn has_matches(&self) -> bool {
@@ -783,6 +1042,14 @@ impl MultiFileResult {
     /// Check if any errors occurred during processing.
     pub fn has_errors(&self) -> bool {
         !self.errors.is_empty()
+    }
+
+    /// Check if processing was interrupted by a shutdown signal.
+    ///
+    /// When true, some files may not have been processed. Check
+    /// `interrupted` field for details on completed vs remaining files.
+    pub fn was_interrupted(&self) -> bool {
+        self.interrupted.is_some()
     }
 }
 
@@ -795,19 +1062,70 @@ pub mod async_processing {
     //! Async file processing using tokio
     //!
     //! This module provides async versions of the file processing functions
-    //! for non-blocking I/O operations.
+    //! for non-blocking I/O operations. Enable with `--features async`.
+    //!
+    //! # Example
+    //!
+    //! ```ignore
+    //! use rexpipe::files::{AsyncMultiFileProcessor, FileProcessingOptions};
+    //! use rexpipe::pipeline::PipelineConfig;
+    //!
+    //! #[tokio::main]
+    //! async fn main() {
+    //!     let config = PipelineConfig::from_inline_pattern(r"\d+", Some("NUM"));
+    //!     let options = FileProcessingOptions::default();
+    //!     let processor = AsyncMultiFileProcessor::new(config, options);
+    //!
+    //!     let files = vec![PathBuf::from("test.txt")];
+    //!     let result = processor.process_files_async(&files).await.unwrap();
+    //!     println!("Processed {} files", result.files_processed);
+    //! }
+    //! ```
 
     use super::*;
     use tokio::fs as async_fs;
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader as AsyncBufReader};
 
-    /// Async multi-file processor for non-blocking batch operations
+    /// Async multi-file processor for non-blocking batch operations.
+    ///
+    /// This processor uses tokio for async I/O operations, allowing efficient
+    /// processing of many files without blocking. Ideal for I/O-bound workloads
+    /// where files may be on network storage or when processing many small files.
+    ///
+    /// Unlike the synchronous [`MultiFileProcessor`], this version processes
+    /// files one at a time asynchronously, yielding to the runtime between files.
+    ///
+    /// # Features
+    ///
+    /// - Async file reading and writing
+    /// - In-place editing with atomic writes
+    /// - Match counting without modification
+    /// - File filtering by match presence
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use rexpipe::files::{AsyncMultiFileProcessor, FileProcessingOptions};
+    /// use rexpipe::pipeline::PipelineConfig;
+    ///
+    /// let config = PipelineConfig::from_inline_pattern(r"\d+", Some("NUM"));
+    /// let processor = AsyncMultiFileProcessor::new(config, FileProcessingOptions::default());
+    ///
+    /// // Use within an async context
+    /// let result = processor.process_files_async(&files).await?;
+    /// ```
     pub struct AsyncMultiFileProcessor {
         config: PipelineConfig,
         options: FileProcessingOptions,
     }
 
     impl AsyncMultiFileProcessor {
+        /// Create a new async processor with the given configuration and options.
+        ///
+        /// # Arguments
+        ///
+        /// * `config` - Pipeline configuration defining patterns and transformations
+        /// * `options` - File processing options (in-place editing, backups, etc.)
         pub fn new(config: PipelineConfig, options: FileProcessingOptions) -> Self {
             Self { config, options }
         }
@@ -941,6 +1259,34 @@ pub mod async_processing {
 
             Ok(result)
         }
+
+        /// Asynchronously list files with matches
+        pub async fn files_with_matches_async(
+            &self,
+            files: &[PathBuf],
+        ) -> Result<Vec<PathBuf>, String> {
+            let result = self.count_matches_async(files).await?;
+            Ok(result
+                .file_results
+                .into_iter()
+                .filter(|r| r.matches_found > 0)
+                .map(|r| r.path)
+                .collect())
+        }
+
+        /// Asynchronously list files without matches
+        pub async fn files_without_matches_async(
+            &self,
+            files: &[PathBuf],
+        ) -> Result<Vec<PathBuf>, String> {
+            let result = self.count_matches_async(files).await?;
+            Ok(result
+                .file_results
+                .into_iter()
+                .filter(|r| r.matches_found == 0)
+                .map(|r| r.path)
+                .collect())
+        }
     }
 
     /// Asynchronously process a single file
@@ -963,18 +1309,34 @@ pub mod async_processing {
             .map_err(|e| format!("Failed to process stream: {}", e))?;
 
         if options.in_place {
-            // Create backup if requested
+            // Atomic write: write to temp file, then rename
+            let parent = path.parent().unwrap_or(Path::new("."));
+            let temp_path = parent.join(format!(
+                ".{}.rexpipe.tmp",
+                path.file_name()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "file".to_string())
+            ));
+
+            // Write to temporary file
+            async_fs::write(&temp_path, &output)
+                .await
+                .map_err(|e| format!("Failed to write temp file: {}", e))?;
+
+            // Create backup if requested (rename original to backup)
             if let Some(ref suffix) = options.backup_suffix {
                 let backup_path = format!("{}{}", path.display(), suffix);
-                async_fs::copy(path, &backup_path)
+                // Remove existing backup if present
+                let _ = async_fs::remove_file(&backup_path).await;
+                async_fs::rename(path, &backup_path)
                     .await
                     .map_err(|e| format!("Failed to create backup: {}", e))?;
             }
 
-            // Write the processed content back
-            async_fs::write(path, &output)
+            // Atomically replace original with temp file
+            async_fs::rename(&temp_path, path)
                 .await
-                .map_err(|e| format!("Failed to write file: {}", e))?;
+                .map_err(|e| format!("Failed to rename temp file: {}", e))?;
 
             Ok(FileResult {
                 path: path.to_path_buf(),
