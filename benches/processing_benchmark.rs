@@ -368,6 +368,264 @@ fn generate_test_data(lines: usize) -> String {
     data
 }
 
+// =====================================================
+// Multi-File Processing Benchmarks
+// =====================================================
+
+fn benchmark_multifile_processing(c: &mut Criterion) {
+    use rexpipe::files::{FileProcessingOptions, MultiFileProcessor};
+    use std::path::PathBuf;
+    use tempfile::TempDir;
+
+    let mut group = c.benchmark_group("multifile_processing");
+    group.sample_size(20); // Fewer samples for file I/O tests
+
+    // Create temporary test files
+    let temp_dir = TempDir::new().unwrap();
+    let file_count = 50;
+    let lines_per_file = 100;
+
+    let mut paths: Vec<PathBuf> = Vec::new();
+    for i in 0..file_count {
+        let file_path = temp_dir.path().join(format!("file{:03}.log", i));
+        std::fs::write(&file_path, generate_test_data(lines_per_file)).unwrap();
+        paths.push(file_path);
+    }
+
+    let config = PipelineConfig::from_inline_pattern(r"\d+", Some("[NUM]"));
+    let options_seq = FileProcessingOptions::default();
+    let options_par = FileProcessingOptions {
+        parallel: true,
+        ..Default::default()
+    };
+
+    // Sequential processing
+    group.bench_function(format!("sequential_{}_files", file_count), |b| {
+        let processor = MultiFileProcessor::new(config.clone(), options_seq.clone());
+        b.iter(|| {
+            processor.process_files(&paths).unwrap();
+        })
+    });
+
+    // Parallel processing
+    group.bench_function(format!("parallel_{}_files", file_count), |b| {
+        let processor = MultiFileProcessor::new(config.clone(), options_par.clone());
+        b.iter(|| {
+            processor.process_files(&paths).unwrap();
+        })
+    });
+
+    group.finish();
+}
+
+fn benchmark_large_files(c: &mut Criterion) {
+    let mut group = c.benchmark_group("large_file_processing");
+    group.sample_size(20);
+
+    // Generate very large test data
+    let xlarge_data = generate_test_data(100_000); // ~10 MB of data
+
+    let simple_config = PipelineConfig::from_inline_pattern(r"\d+", Some("X"));
+    let complex_config = create_complex_pipeline();
+
+    group.bench_function("simple_pattern_xlarge", |b| {
+        b.iter(|| {
+            let mut processor = StreamProcessor::new(simple_config.clone()).unwrap();
+            let reader = Cursor::new(&xlarge_data);
+            let mut output = Vec::new();
+            processor.process_stream(reader, &mut output).unwrap();
+        })
+    });
+
+    group.bench_function("complex_pipeline_xlarge", |b| {
+        b.iter(|| {
+            let mut processor = StreamProcessor::new(complex_config.clone()).unwrap();
+            let reader = Cursor::new(&xlarge_data);
+            let mut output = Vec::new();
+            processor.process_stream(reader, &mut output).unwrap();
+        })
+    });
+
+    group.finish();
+}
+
+fn benchmark_long_lines(c: &mut Criterion) {
+    let mut group = c.benchmark_group("long_line_processing");
+
+    // Generate data with very long lines (common in JSON/XML processing)
+    fn generate_long_line_data(line_length: usize, line_count: usize) -> String {
+        let base = "word123 ";
+        let repeat_count = line_length / base.len();
+        let long_line = base.repeat(repeat_count);
+        (0..line_count).map(|_| long_line.clone()).collect::<Vec<_>>().join("\n")
+    }
+
+    let short_lines = generate_long_line_data(100, 1000);   // 100 chars x 1000 lines
+    let long_lines = generate_long_line_data(10_000, 100);  // 10KB lines x 100
+
+    let config = PipelineConfig::from_inline_pattern(r"\d+", Some("[X]"));
+
+    group.bench_function("short_lines_1000x100", |b| {
+        b.iter(|| {
+            let mut processor = StreamProcessor::new(config.clone()).unwrap();
+            let reader = Cursor::new(&short_lines);
+            let mut output = Vec::new();
+            processor.process_stream(reader, &mut output).unwrap();
+        })
+    });
+
+    group.bench_function("long_lines_100x10KB", |b| {
+        b.iter(|| {
+            let mut processor = StreamProcessor::new(config.clone()).unwrap();
+            let reader = Cursor::new(&long_lines);
+            let mut output = Vec::new();
+            processor.process_stream(reader, &mut output).unwrap();
+        })
+    });
+
+    group.finish();
+}
+
+fn benchmark_many_matches(c: &mut Criterion) {
+    let mut group = c.benchmark_group("many_matches");
+
+    // Data with many matches per line (worst case for replacement)
+    fn generate_dense_match_data(matches_per_line: usize, lines: usize) -> String {
+        let line = (0..matches_per_line)
+            .map(|i| format!("num{}", i))
+            .collect::<Vec<_>>()
+            .join(" ");
+        (0..lines).map(|_| line.clone()).collect::<Vec<_>>().join("\n")
+    }
+
+    let sparse_data = generate_dense_match_data(2, 500);    // 2 matches per line
+    let dense_data = generate_dense_match_data(50, 100);    // 50 matches per line
+
+    let config = PipelineConfig::from_inline_pattern(r"num\d+", Some("[REPLACED]"));
+
+    group.bench_function("sparse_matches_2_per_line", |b| {
+        b.iter(|| {
+            let mut processor = StreamProcessor::new(config.clone()).unwrap();
+            let reader = Cursor::new(&sparse_data);
+            let mut output = Vec::new();
+            processor.process_stream(reader, &mut output).unwrap();
+        })
+    });
+
+    group.bench_function("dense_matches_50_per_line", |b| {
+        b.iter(|| {
+            let mut processor = StreamProcessor::new(config.clone()).unwrap();
+            let reader = Cursor::new(&dense_data);
+            let mut output = Vec::new();
+            processor.process_stream(reader, &mut output).unwrap();
+        })
+    });
+
+    group.finish();
+}
+
+fn benchmark_pattern_complexity(c: &mut Criterion) {
+    let mut group = c.benchmark_group("pattern_complexity");
+    let test_data = generate_test_data(1000);
+
+    // Simple literal pattern
+    let simple_config = PipelineConfig::from_inline_pattern("ERROR", Some("ERR"));
+
+    // Alternation pattern
+    let alternation_config = PipelineConfig::from_inline_pattern(
+        r"ERROR|WARN|INFO|DEBUG",
+        Some("[LEVEL]")
+    );
+
+    // Complex pattern with groups and lookarounds (anchors)
+    let complex_config = PipelineConfig::from_inline_pattern(
+        r"(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})",
+        Some("${1}/${2}/${3} ${4}:${5}:${6}")
+    );
+
+    group.bench_function("simple_literal", |b| {
+        b.iter(|| {
+            let mut processor = StreamProcessor::new(simple_config.clone()).unwrap();
+            let reader = Cursor::new(&test_data);
+            let mut output = Vec::new();
+            processor.process_stream(reader, &mut output).unwrap();
+        })
+    });
+
+    group.bench_function("alternation", |b| {
+        b.iter(|| {
+            let mut processor = StreamProcessor::new(alternation_config.clone()).unwrap();
+            let reader = Cursor::new(&test_data);
+            let mut output = Vec::new();
+            processor.process_stream(reader, &mut output).unwrap();
+        })
+    });
+
+    group.bench_function("complex_groups", |b| {
+        b.iter(|| {
+            let mut processor = StreamProcessor::new(complex_config.clone()).unwrap();
+            let reader = Cursor::new(&test_data);
+            let mut output = Vec::new();
+            processor.process_stream(reader, &mut output).unwrap();
+        })
+    });
+
+    group.finish();
+}
+
+fn benchmark_discovery_and_filtering(c: &mut Criterion) {
+    use rexpipe::files::{FileProcessingOptions, MultiFileProcessor};
+    use tempfile::TempDir;
+
+    let mut group = c.benchmark_group("file_discovery");
+    group.sample_size(20);
+
+    // Create a directory structure with many files
+    let temp_dir = TempDir::new().unwrap();
+
+    // Create nested directories with files
+    for i in 0..10 {
+        let subdir = temp_dir.path().join(format!("subdir{}", i));
+        std::fs::create_dir(&subdir).unwrap();
+        for j in 0..50 {
+            let file_path = subdir.join(format!("file{}.txt", j));
+            std::fs::write(&file_path, generate_test_data(10)).unwrap();
+            // Also create some log files
+            if j % 5 == 0 {
+                let log_path = subdir.join(format!("file{}.log", j));
+                std::fs::write(&log_path, generate_test_data(10)).unwrap();
+            }
+        }
+    }
+
+    let config = PipelineConfig::from_inline_pattern(r"\d+", Some("[X]"));
+
+    // Discovery without filters
+    let options_nofilter = FileProcessingOptions::default();
+
+    // Discovery with exclude filter
+    let options_exclude = FileProcessingOptions {
+        exclude_patterns: vec!["*.log".to_string()],
+        ..Default::default()
+    };
+
+    group.bench_function("discover_unfiltered", |b| {
+        let processor = MultiFileProcessor::new(config.clone(), options_nofilter.clone());
+        b.iter(|| {
+            processor.discover_files(&[temp_dir.path().to_path_buf()]).unwrap();
+        })
+    });
+
+    group.bench_function("discover_with_exclude", |b| {
+        let processor = MultiFileProcessor::new(config.clone(), options_exclude.clone());
+        b.iter(|| {
+            processor.discover_files(&[temp_dir.path().to_path_buf()]).unwrap();
+        })
+    });
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     benchmark_processing,
@@ -375,6 +633,12 @@ criterion_group!(
     benchmark_filter_operations,
     benchmark_fixed_vs_regex,
     benchmark_transform_operations,
-    benchmark_serialization
+    benchmark_serialization,
+    benchmark_multifile_processing,
+    benchmark_large_files,
+    benchmark_long_lines,
+    benchmark_many_matches,
+    benchmark_pattern_complexity,
+    benchmark_discovery_and_filtering
 );
 criterion_main!(benches);

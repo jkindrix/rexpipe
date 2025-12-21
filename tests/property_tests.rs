@@ -349,3 +349,529 @@ proptest! {
         }
     }
 }
+
+// =============================================================================
+// Transform Action Properties
+// =============================================================================
+
+use rexpipe::pipeline::TransformAction;
+
+proptest! {
+    /// Property: Uppercase transform should produce uppercase output for matched text
+    #[test]
+    fn prop_transform_uppercase_produces_uppercase(
+        word in "[a-z]{3,10}"
+    ) {
+        let input = format!("before {} after", word);
+
+        let step = PipelineStep {
+            step_type: StepType::Substitute,
+            pattern: word.clone(),
+            replacement: None,
+            action: None,
+            transform: Some(TransformAction::Uppercase),
+            flags: None,
+            description: None,
+            enabled: Some(true),
+        };
+
+        let config = PipelineConfig {
+            name: Some("Uppercase Test".to_string()),
+            description: None,
+            version: None,
+            patterns_include: Vec::new(),
+            settings: PipelineSettings::default(),
+            step: vec![step],
+        };
+
+        if let Ok(mut processor) = StreamProcessor::new(config) {
+            let reader = Cursor::new(&input);
+            let mut output = Vec::new();
+            let _ = processor.process_stream(reader, &mut output);
+
+            let output_str = String::from_utf8_lossy(&output);
+            // The word should now be uppercase in the output
+            prop_assert!(
+                output_str.contains(&word.to_uppercase()),
+                "Expected '{}' in output, got '{}'",
+                word.to_uppercase(),
+                output_str
+            );
+        }
+    }
+
+    /// Property: Lowercase transform should produce lowercase output for matched text
+    #[test]
+    fn prop_transform_lowercase_produces_lowercase(
+        word in "[A-Z]{3,10}"
+    ) {
+        let input = format!("before {} after", word);
+
+        let step = PipelineStep {
+            step_type: StepType::Substitute,
+            pattern: word.clone(),
+            replacement: None,
+            action: None,
+            transform: Some(TransformAction::Lowercase),
+            flags: None,
+            description: None,
+            enabled: Some(true),
+        };
+
+        let config = PipelineConfig {
+            name: Some("Lowercase Test".to_string()),
+            description: None,
+            version: None,
+            patterns_include: Vec::new(),
+            settings: PipelineSettings::default(),
+            step: vec![step],
+        };
+
+        if let Ok(mut processor) = StreamProcessor::new(config) {
+            let reader = Cursor::new(&input);
+            let mut output = Vec::new();
+            let _ = processor.process_stream(reader, &mut output);
+
+            let output_str = String::from_utf8_lossy(&output);
+            // The word should now be lowercase in the output
+            prop_assert!(
+                output_str.contains(&word.to_lowercase()),
+                "Expected '{}' in output, got '{}'",
+                word.to_lowercase(),
+                output_str
+            );
+        }
+    }
+}
+
+// =============================================================================
+// Multi-step Pipeline Properties
+// =============================================================================
+
+proptest! {
+    /// Property: Multi-step pipelines should apply all enabled steps
+    #[test]
+    fn prop_multi_step_pipeline_applies_all_steps(
+        word in "[a-z]{3,8}"
+    ) {
+        let input = format!("test {} end", word);
+
+        // Step 1: Replace word with STEP1
+        let step1 = PipelineStep {
+            step_type: StepType::Substitute,
+            pattern: word.clone(),
+            replacement: Some("STEP1".to_string()),
+            action: None,
+            transform: None,
+            flags: None,
+            description: None,
+            enabled: Some(true),
+        };
+
+        // Step 2: Replace STEP1 with STEP2
+        let step2 = PipelineStep {
+            step_type: StepType::Substitute,
+            pattern: "STEP1".to_string(),
+            replacement: Some("STEP2".to_string()),
+            action: None,
+            transform: None,
+            flags: None,
+            description: None,
+            enabled: Some(true),
+        };
+
+        let config = PipelineConfig {
+            name: Some("Multi-step Test".to_string()),
+            description: None,
+            version: None,
+            patterns_include: Vec::new(),
+            settings: PipelineSettings::default(),
+            step: vec![step1, step2],
+        };
+
+        if let Ok(mut processor) = StreamProcessor::new(config) {
+            let reader = Cursor::new(&input);
+            let mut output = Vec::new();
+            let _ = processor.process_stream(reader, &mut output);
+
+            let output_str = String::from_utf8_lossy(&output);
+            // Should have STEP2 (both steps applied)
+            prop_assert!(
+                output_str.contains("STEP2"),
+                "Expected 'STEP2' in output, got '{}'",
+                output_str
+            );
+            // Should not have the original word
+            prop_assert!(
+                !output_str.contains(&word),
+                "Original word '{}' should not appear in output",
+                word
+            );
+        }
+    }
+
+    /// Property: Disabled steps should not affect output
+    #[test]
+    fn prop_disabled_steps_not_applied(
+        word in "[a-z]{3,8}"
+    ) {
+        let input = format!("test {} end", word);
+
+        // Disabled step - should not apply
+        let disabled_step = PipelineStep {
+            step_type: StepType::Substitute,
+            pattern: word.clone(),
+            replacement: Some("DISABLED".to_string()),
+            action: None,
+            transform: None,
+            flags: None,
+            description: None,
+            enabled: Some(false),  // DISABLED
+        };
+
+        let config = PipelineConfig {
+            name: Some("Disabled Step Test".to_string()),
+            description: None,
+            version: None,
+            patterns_include: Vec::new(),
+            settings: PipelineSettings::default(),
+            step: vec![disabled_step],
+        };
+
+        if let Ok(mut processor) = StreamProcessor::new(config) {
+            let reader = Cursor::new(&input);
+            let mut output = Vec::new();
+            let _ = processor.process_stream(reader, &mut output);
+
+            let output_str = String::from_utf8_lossy(&output);
+            // Should NOT contain DISABLED since step was disabled
+            prop_assert!(
+                !output_str.contains("DISABLED"),
+                "Disabled step should not apply"
+            );
+            // Should still contain original word
+            prop_assert!(
+                output_str.contains(&word),
+                "Original word should remain"
+            );
+        }
+    }
+}
+
+// =============================================================================
+// Capture Group Properties
+// =============================================================================
+
+proptest! {
+    /// Property: Capture groups should be substituted correctly in replacement
+    #[test]
+    fn prop_capture_groups_substituted(
+        prefix in "[a-m]{2,5}",
+        suffix in "[n-z]{2,5}"
+    ) {
+        // Use disjoint character sets to ensure prefix != suffix
+        let input = format!("{}_{}", prefix, suffix);
+
+        // Pattern with capture groups, swap prefix and suffix
+        let step = PipelineStep {
+            step_type: StepType::Substitute,
+            pattern: format!(r"({})_({})", prefix, suffix),
+            replacement: Some("${2}_${1}".to_string()),
+            action: None,
+            transform: None,
+            flags: None,
+            description: None,
+            enabled: Some(true),
+        };
+
+        let config = PipelineConfig {
+            name: Some("Capture Group Test".to_string()),
+            description: None,
+            version: None,
+            patterns_include: Vec::new(),
+            settings: PipelineSettings::default(),
+            step: vec![step],
+        };
+
+        if let Ok(mut processor) = StreamProcessor::new(config) {
+            let reader = Cursor::new(&input);
+            let mut output = Vec::new();
+            let _ = processor.process_stream(reader, &mut output);
+
+            let output_str = String::from_utf8_lossy(&output);
+            let expected = format!("{}_{}", suffix, prefix);
+            prop_assert!(
+                output_str.contains(&expected),
+                "Expected '{}' in output, got '{}'",
+                expected,
+                output_str
+            );
+        }
+    }
+
+    /// Property: Multiple matches on same line should all be replaced
+    #[test]
+    fn prop_multiple_matches_all_replaced(
+        word in "[a-z]{3,6}",
+        count in 2usize..5
+    ) {
+        // Create input with multiple instances of the word
+        let input = (0..count).map(|_| word.clone()).collect::<Vec<_>>().join(" ");
+
+        let config = PipelineConfig::from_inline_pattern(&word, Some("X"));
+
+        if let Ok(mut processor) = StreamProcessor::new(config) {
+            let reader = Cursor::new(&input);
+            let mut output = Vec::new();
+            let result = processor.process_stream(reader, &mut output);
+
+            if let Ok(result) = result {
+                // Should find all instances
+                prop_assert!(
+                    result.matches_found >= count as u64,
+                    "Expected at least {} matches, got {}",
+                    count,
+                    result.matches_found
+                );
+            }
+        }
+    }
+}
+
+// =============================================================================
+// Delete Line Filter Properties
+// =============================================================================
+
+proptest! {
+    /// Property: DropLine filter should remove matching lines
+    #[test]
+    fn prop_drop_line_removes_matches(
+        lines in proptest::collection::vec("[a-z]{5,15}", 5..15)
+    ) {
+        let input = lines.join("\n");
+
+        // Drop lines starting with 'a'
+        let step = PipelineStep {
+            step_type: StepType::Filter,
+            pattern: "^a".to_string(),
+            replacement: None,
+            action: Some(FilterAction::DropLine),
+            transform: None,
+            flags: None,
+            description: None,
+            enabled: Some(true),
+        };
+
+        let config = PipelineConfig {
+            name: Some("Delete Filter Test".to_string()),
+            description: None,
+            version: None,
+            patterns_include: Vec::new(),
+            settings: PipelineSettings::default(),
+            step: vec![step],
+        };
+
+        if let Ok(mut processor) = StreamProcessor::new(config) {
+            let reader = Cursor::new(&input);
+            let mut output = Vec::new();
+            let _ = processor.process_stream(reader, &mut output);
+
+            let output_str = String::from_utf8_lossy(&output);
+            // No output lines should start with 'a'
+            for line in output_str.lines() {
+                if !line.is_empty() {
+                    prop_assert!(
+                        !line.starts_with('a'),
+                        "Line '{}' should have been deleted",
+                        line
+                    );
+                }
+            }
+        }
+    }
+}
+
+// =============================================================================
+// Long Line Properties
+// =============================================================================
+
+proptest! {
+    /// Property: Very long lines should be handled without panic
+    #[test]
+    fn prop_long_lines_handled(
+        repeat_count in 100usize..1000
+    ) {
+        let word = "abcdefghij";
+        let input = word.repeat(repeat_count);
+
+        let config = PipelineConfig::from_inline_pattern("abc", Some("XYZ"));
+
+        if let Ok(mut processor) = StreamProcessor::new(config) {
+            let reader = Cursor::new(&input);
+            let mut output = Vec::new();
+            let result = processor.process_stream(reader, &mut output);
+
+            // Should not panic and should process
+            prop_assert!(result.is_ok());
+
+            let output_str = String::from_utf8_lossy(&output);
+            // Should contain replacements
+            prop_assert!(
+                output_str.contains("XYZ"),
+                "Should have made replacements"
+            );
+            // Should not contain original
+            prop_assert!(
+                !output_str.contains("abc"),
+                "Should have replaced all instances"
+            );
+        }
+    }
+}
+
+// =============================================================================
+// Edge Case Properties
+// =============================================================================
+
+proptest! {
+    /// Property: Empty input should produce empty output (or just newlines)
+    #[test]
+    fn prop_empty_input_empty_output(_dummy in 0..1u8) {
+        let input = "";
+        let config = PipelineConfig::from_inline_pattern(r"\w+", Some("[WORD]"));
+
+        if let Ok(mut processor) = StreamProcessor::new(config) {
+            let reader = Cursor::new(input);
+            let mut output = Vec::new();
+            let result = processor.process_stream(reader, &mut output);
+
+            prop_assert!(result.is_ok());
+            prop_assert!(
+                output.is_empty() || output == b"\n",
+                "Empty input should produce empty or minimal output"
+            );
+        }
+    }
+
+    /// Property: Single character input should be handled correctly
+    #[test]
+    fn prop_single_char_input(c in "[a-zA-Z0-9]") {
+        let config = PipelineConfig::from_inline_pattern(r".", Some("X"));
+
+        if let Ok(mut processor) = StreamProcessor::new(config) {
+            let reader = Cursor::new(&c);
+            let mut output = Vec::new();
+            let result = processor.process_stream(reader, &mut output);
+
+            prop_assert!(result.is_ok());
+            let output_str = String::from_utf8_lossy(&output);
+            // Single char should be replaced with X
+            prop_assert!(
+                output_str.contains("X"),
+                "Single char should be replaced"
+            );
+        }
+    }
+
+    /// Property: Whitespace-only input should be handled correctly
+    #[test]
+    fn prop_whitespace_input(spaces in 1usize..20) {
+        let input = " ".repeat(spaces);
+        let config = PipelineConfig::from_inline_pattern(r"\s+", Some("_"));
+
+        if let Ok(mut processor) = StreamProcessor::new(config) {
+            let reader = Cursor::new(&input);
+            let mut output = Vec::new();
+            let result = processor.process_stream(reader, &mut output);
+
+            prop_assert!(result.is_ok());
+            let output_str = String::from_utf8_lossy(&output);
+            prop_assert!(
+                output_str.contains("_"),
+                "Whitespace should be replaced with underscore"
+            );
+        }
+    }
+
+    /// Property: Lines with only newlines should not crash
+    #[test]
+    fn prop_empty_lines_handled(count in 1usize..10) {
+        let input = "\n".repeat(count);
+        let config = PipelineConfig::from_inline_pattern(r"^$", Some("EMPTY"));
+
+        if let Ok(mut processor) = StreamProcessor::new(config) {
+            let reader = Cursor::new(&input);
+            let mut output = Vec::new();
+            let result = processor.process_stream(reader, &mut output);
+
+            // Should not panic
+            prop_assert!(result.is_ok());
+        }
+    }
+
+    /// Property: Mixed content with numbers and letters should be handled
+    #[test]
+    fn prop_alphanumeric_content(
+        letters in "[a-zA-Z]{2,8}",
+        numbers in "[0-9]{2,8}"
+    ) {
+        let input = format!("{}{}", letters, numbers);
+        let config = PipelineConfig::from_inline_pattern(r"\d+", Some("[NUM]"));
+
+        if let Ok(mut processor) = StreamProcessor::new(config) {
+            let reader = Cursor::new(&input);
+            let mut output = Vec::new();
+            let result = processor.process_stream(reader, &mut output);
+
+            prop_assert!(result.is_ok());
+            let output_str = String::from_utf8_lossy(&output);
+            prop_assert!(
+                output_str.contains("[NUM]"),
+                "Numbers should be replaced"
+            );
+            prop_assert!(
+                output_str.contains(&letters),
+                "Letters should remain"
+            );
+        }
+    }
+}
+
+// =============================================================================
+// Settings Properties
+// =============================================================================
+
+proptest! {
+    /// Property: Fixed strings mode should escape regex metacharacters properly
+    #[test]
+    fn prop_fixed_strings_escapes_metacharacters(
+        text in "[a-z]{2,5}"
+    ) {
+        // Pattern with regex metacharacters that should be treated literally
+        let pattern = format!("{}.*", text);
+        let input = format!("test {} here", pattern);
+
+        let settings = PipelineSettings {
+            fixed_strings: true,
+            ..Default::default()
+        };
+        let config = PipelineConfig::from_inline_pattern_with_settings(
+            &pattern,
+            Some("[MATCH]"),
+            settings
+        );
+
+        if let Ok(mut processor) = StreamProcessor::new(config) {
+            let reader = Cursor::new(&input);
+            let mut output = Vec::new();
+            let result = processor.process_stream(reader, &mut output);
+
+            prop_assert!(result.is_ok());
+            let output_str = String::from_utf8_lossy(&output);
+            prop_assert!(
+                output_str.contains("[MATCH]"),
+                "Literal pattern should match"
+            );
+        }
+    }
+}

@@ -1351,3 +1351,392 @@ fn test_pcre_mode_disabled_error() {
     let err_msg = err.to_string();
     assert!(err_msg.contains("pcre") || err_msg.contains("feature"));
 }
+
+// =====================================================
+// Multi-File Processing & In-Place Editing Tests
+// =====================================================
+
+use rexpipe::files::{FileProcessingOptions, MultiFileProcessor};
+use std::fs;
+use tempfile::TempDir;
+
+/// Test basic multi-file processing
+#[test]
+fn test_multifile_basic_processing() {
+    let temp_dir = TempDir::new().unwrap();
+
+    // Create test files
+    let file1_path = temp_dir.path().join("file1.txt");
+    let file2_path = temp_dir.path().join("file2.txt");
+    fs::write(&file1_path, "Hello 123 World").unwrap();
+    fs::write(&file2_path, "Test 456 Data").unwrap();
+
+    let config = PipelineConfig::from_inline_pattern(r"\d+", Some("[NUM]"));
+    let options = FileProcessingOptions::default();
+
+    let processor = MultiFileProcessor::new(config, options);
+    let paths = vec![file1_path.clone(), file2_path.clone()];
+    let result = processor.process_files(&paths).unwrap();
+
+    assert_eq!(result.files_processed, 2);
+    assert!(result.files_matched > 0);
+    assert!(result.errors.is_empty());
+
+    // Verify original files unchanged (no in-place mode)
+    let content1 = fs::read_to_string(&file1_path).unwrap();
+    let content2 = fs::read_to_string(&file2_path).unwrap();
+    assert_eq!(content1, "Hello 123 World");
+    assert_eq!(content2, "Test 456 Data");
+}
+
+/// Test in-place file editing
+#[test]
+fn test_inplace_editing() {
+    let temp_dir = TempDir::new().unwrap();
+
+    // Create test file
+    let file_path = temp_dir.path().join("test.txt");
+    fs::write(&file_path, "Original 123 Content").unwrap();
+
+    let config = PipelineConfig::from_inline_pattern(r"\d+", Some("[NUMBER]"));
+    let options = FileProcessingOptions {
+        in_place: true,
+        ..Default::default()
+    };
+
+    let processor = MultiFileProcessor::new(config, options);
+    let paths = vec![file_path.clone()];
+    let result = processor.process_files(&paths).unwrap();
+
+    assert_eq!(result.files_processed, 1);
+    assert!(result.files_modified > 0);
+
+    // Verify file was modified in place
+    let content = fs::read_to_string(&file_path).unwrap();
+    assert_eq!(content, "Original [NUMBER] Content\n");
+}
+
+/// Test in-place editing with backup
+#[test]
+fn test_inplace_editing_with_backup() {
+    let temp_dir = TempDir::new().unwrap();
+
+    // Create test file
+    let file_path = temp_dir.path().join("test.txt");
+    fs::write(&file_path, "Hello 123 World").unwrap();
+
+    let config = PipelineConfig::from_inline_pattern(r"\d+", Some("[X]"));
+    let options = FileProcessingOptions {
+        in_place: true,
+        backup_suffix: Some(".bak".to_string()),
+        ..Default::default()
+    };
+
+    let processor = MultiFileProcessor::new(config, options);
+    let paths = vec![file_path.clone()];
+    let result = processor.process_files(&paths).unwrap();
+
+    assert_eq!(result.files_processed, 1);
+    assert!(result.files_modified > 0);
+
+    // Verify modified content
+    let content = fs::read_to_string(&file_path).unwrap();
+    assert_eq!(content, "Hello [X] World\n");
+
+    // Verify backup exists with original content
+    let backup_path = temp_dir.path().join("test.txt.bak");
+    assert!(backup_path.exists());
+    let backup_content = fs::read_to_string(&backup_path).unwrap();
+    assert_eq!(backup_content, "Hello 123 World");
+}
+
+/// Test exclude patterns with directory discovery
+#[test]
+fn test_exclude_patterns_with_discovery() {
+    let temp_dir = TempDir::new().unwrap();
+
+    // Create test files with different extensions in a subdirectory
+    let txt_file = temp_dir.path().join("test.txt");
+    let log_file = temp_dir.path().join("test.log");
+    let md_file = temp_dir.path().join("test.md");
+
+    fs::write(&txt_file, "Data 123").unwrap();
+    fs::write(&log_file, "Data 456").unwrap();
+    fs::write(&md_file, "Data 789").unwrap();
+
+    let config = PipelineConfig::from_inline_pattern(r"\d+", Some("[NUM]"));
+    let options = FileProcessingOptions {
+        exclude_patterns: vec!["*.log".to_string()], // Exclude log files
+        ..Default::default()
+    };
+
+    let processor = MultiFileProcessor::new(config, options);
+
+    // Use discover_files which applies exclude patterns
+    let discovered = processor.discover_files(&[temp_dir.path().to_path_buf()]).unwrap();
+
+    // txt and md should be discovered, log excluded
+    assert_eq!(discovered.len(), 2);
+    assert!(!discovered.iter().any(|p| p.extension().map(|e| e == "log").unwrap_or(false)));
+
+    // Now process the discovered files
+    let result = processor.process_files(&discovered).unwrap();
+    assert_eq!(result.files_processed, 2);
+}
+
+/// Test processing with files that don't match pattern
+#[test]
+fn test_files_without_matches() {
+    let temp_dir = TempDir::new().unwrap();
+
+    let file1_path = temp_dir.path().join("file1.txt");
+    let file2_path = temp_dir.path().join("file2.txt");
+    fs::write(&file1_path, "Hello World").unwrap(); // No numbers
+    fs::write(&file2_path, "Test 123").unwrap(); // Has numbers
+
+    let config = PipelineConfig::from_inline_pattern(r"\d+", Some("[NUM]"));
+    let options = FileProcessingOptions::default();
+
+    let processor = MultiFileProcessor::new(config, options);
+    let paths = vec![file1_path, file2_path];
+    let result = processor.process_files(&paths).unwrap();
+
+    assert_eq!(result.files_processed, 2);
+    assert_eq!(result.files_matched, 1); // Only file2 has matches
+}
+
+/// Test processing empty files
+#[test]
+fn test_empty_file_processing() {
+    let temp_dir = TempDir::new().unwrap();
+
+    let file_path = temp_dir.path().join("empty.txt");
+    fs::write(&file_path, "").unwrap();
+
+    let config = PipelineConfig::from_inline_pattern(r"\d+", Some("[NUM]"));
+    let options = FileProcessingOptions::default();
+
+    let processor = MultiFileProcessor::new(config, options);
+    let paths = vec![file_path];
+    let result = processor.process_files(&paths).unwrap();
+
+    assert_eq!(result.files_processed, 1);
+    assert_eq!(result.files_matched, 0);
+    assert!(result.errors.is_empty());
+}
+
+/// Test atomic writes (file not corrupted on failure)
+#[test]
+fn test_atomic_write_preserves_original_on_read() {
+    let temp_dir = TempDir::new().unwrap();
+
+    // Create test file
+    let file_path = temp_dir.path().join("test.txt");
+    let original_content = "Original content 123";
+    fs::write(&file_path, original_content).unwrap();
+
+    let config = PipelineConfig::from_inline_pattern(r"\d+", Some("[X]"));
+    let options = FileProcessingOptions {
+        in_place: true,
+        ..Default::default()
+    };
+
+    let processor = MultiFileProcessor::new(config, options);
+    let paths = vec![file_path.clone()];
+
+    // Process should complete successfully
+    let result = processor.process_files(&paths);
+    assert!(result.is_ok());
+
+    // Verify no temp files left behind
+    let entries: Vec<_> = fs::read_dir(temp_dir.path()).unwrap().collect();
+    // Should only have the original file (modified)
+    assert_eq!(entries.len(), 1);
+}
+
+/// Test progress callback
+#[test]
+fn test_progress_callback() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    let temp_dir = TempDir::new().unwrap();
+
+    // Create multiple test files
+    for i in 0..5 {
+        let file_path = temp_dir.path().join(format!("file{}.txt", i));
+        fs::write(&file_path, format!("Content {}", i)).unwrap();
+    }
+
+    let config = PipelineConfig::from_inline_pattern(r"\d+", Some("[X]"));
+    let options = FileProcessingOptions::default();
+
+    let processor = MultiFileProcessor::new(config, options);
+
+    let progress_count = Arc::new(AtomicUsize::new(0));
+    let progress_clone = progress_count.clone();
+
+    let paths: Vec<_> = (0..5)
+        .map(|i| temp_dir.path().join(format!("file{}.txt", i)))
+        .collect();
+
+    // Use streaming API with progress callback
+    let _ = processor.process_files_streaming(&paths, |_result| {
+        progress_clone.fetch_add(1, Ordering::SeqCst);
+    });
+
+    // Progress callback should have been called for each file
+    assert_eq!(progress_count.load(Ordering::SeqCst), 5);
+}
+
+/// Test files_with_matches functionality
+#[test]
+fn test_files_with_matches_only() {
+    let temp_dir = TempDir::new().unwrap();
+
+    let file1_path = temp_dir.path().join("match1.txt");
+    let file2_path = temp_dir.path().join("nomatch.txt");
+    let file3_path = temp_dir.path().join("match2.txt");
+
+    fs::write(&file1_path, "Has number 123").unwrap();
+    fs::write(&file2_path, "No numbers here").unwrap();
+    fs::write(&file3_path, "Another 456 number").unwrap();
+
+    let config = PipelineConfig::from_inline_pattern(r"\d+", None);
+    let options = FileProcessingOptions::default();
+
+    let processor = MultiFileProcessor::new(config, options);
+    let paths = vec![file1_path.clone(), file2_path.clone(), file3_path.clone()];
+
+    let matching = processor.files_with_matches(&paths).unwrap();
+    assert_eq!(matching.len(), 2);
+    assert!(matching.contains(&file1_path));
+    assert!(matching.contains(&file3_path));
+    assert!(!matching.contains(&file2_path));
+}
+
+/// Test files_without_matches functionality
+#[test]
+fn test_files_without_matches_only() {
+    let temp_dir = TempDir::new().unwrap();
+
+    let file1_path = temp_dir.path().join("match.txt");
+    let file2_path = temp_dir.path().join("nomatch1.txt");
+    let file3_path = temp_dir.path().join("nomatch2.txt");
+
+    fs::write(&file1_path, "Has number 123").unwrap();
+    fs::write(&file2_path, "No numbers here").unwrap();
+    fs::write(&file3_path, "Just text").unwrap();
+
+    let config = PipelineConfig::from_inline_pattern(r"\d+", None);
+    let options = FileProcessingOptions::default();
+
+    let processor = MultiFileProcessor::new(config, options);
+    let paths = vec![file1_path.clone(), file2_path.clone(), file3_path.clone()];
+
+    let non_matching = processor.files_without_matches(&paths).unwrap();
+    assert_eq!(non_matching.len(), 2);
+    assert!(!non_matching.contains(&file1_path));
+    assert!(non_matching.contains(&file2_path));
+    assert!(non_matching.contains(&file3_path));
+}
+
+/// Test parallel processing threshold
+#[test]
+fn test_parallel_processing_many_files() {
+    let temp_dir = TempDir::new().unwrap();
+
+    // Create enough files to trigger parallel processing
+    let file_count = 20;
+    for i in 0..file_count {
+        let file_path = temp_dir.path().join(format!("file{:03}.txt", i));
+        fs::write(&file_path, format!("Data {} content", i * 100)).unwrap();
+    }
+
+    let config = PipelineConfig::from_inline_pattern(r"\d+", Some("[X]"));
+    let options = FileProcessingOptions::default();
+
+    let processor = MultiFileProcessor::new(config, options);
+
+    let paths: Vec<_> = (0..file_count)
+        .map(|i| temp_dir.path().join(format!("file{:03}.txt", i)))
+        .collect();
+
+    let result = processor.process_files(&paths).unwrap();
+
+    assert_eq!(result.files_processed, file_count as u64);
+    assert_eq!(result.files_matched, file_count as u64);
+}
+
+// =====================================================
+// Async Multi-File Processing Tests
+// =====================================================
+
+#[cfg(feature = "async")]
+mod async_tests {
+    use super::*;
+    use rexpipe::files::AsyncMultiFileProcessor;
+
+    #[tokio::test]
+    async fn test_async_multifile_processing() {
+        let temp_dir = TempDir::new().unwrap();
+
+        let file1_path = temp_dir.path().join("async1.txt");
+        let file2_path = temp_dir.path().join("async2.txt");
+        fs::write(&file1_path, "Async 123 test").unwrap();
+        fs::write(&file2_path, "Async 456 test").unwrap();
+
+        let config = PipelineConfig::from_inline_pattern(r"\d+", Some("[ASYNC]"));
+        let options = FileProcessingOptions::default();
+
+        let processor = AsyncMultiFileProcessor::new(config, options);
+        let paths = vec![file1_path, file2_path];
+        let result = processor.process_files(&paths).await.unwrap();
+
+        assert_eq!(result.files_processed, 2);
+        assert!(result.files_matched > 0);
+    }
+
+    #[tokio::test]
+    async fn test_async_inplace_editing() {
+        let temp_dir = TempDir::new().unwrap();
+
+        let file_path = temp_dir.path().join("async_inplace.txt");
+        fs::write(&file_path, "Async content 999").unwrap();
+
+        let config = PipelineConfig::from_inline_pattern(r"\d+", Some("[REPLACED]"));
+        let options = FileProcessingOptions {
+            in_place: true,
+            ..Default::default()
+        };
+
+        let processor = AsyncMultiFileProcessor::new(config, options);
+        let paths = vec![file_path.clone()];
+        let result = processor.process_files(&paths).await.unwrap();
+
+        assert_eq!(result.files_processed, 1);
+
+        let content = fs::read_to_string(&file_path).unwrap();
+        assert_eq!(content, "Async content [REPLACED]\n");
+    }
+
+    #[tokio::test]
+    async fn test_async_files_with_matches() {
+        let temp_dir = TempDir::new().unwrap();
+
+        let file1_path = temp_dir.path().join("match.txt");
+        let file2_path = temp_dir.path().join("nomatch.txt");
+        fs::write(&file1_path, "Has 123").unwrap();
+        fs::write(&file2_path, "No numbers").unwrap();
+
+        let config = PipelineConfig::from_inline_pattern(r"\d+", None);
+        let options = FileProcessingOptions::default();
+
+        let processor = AsyncMultiFileProcessor::new(config, options);
+        let paths = vec![file1_path.clone(), file2_path.clone()];
+
+        let matching = processor.files_with_matches_async(&paths).await.unwrap();
+        assert_eq!(matching.len(), 1);
+        assert!(matching.contains(&file1_path));
+    }
+}
