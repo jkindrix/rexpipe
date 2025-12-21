@@ -82,7 +82,16 @@
 //! - [`plugin`]: Extensible plugin system for custom transformations
 //! - [`server`]: Streaming pipeline server for network-based processing
 //! - [`stream`]: URI-based streaming source and sink abstractions
+//! - [`audit`]: Cryptographic audit trails and provenance tracking
+//! - [`bidirectional`]: Reversible pipeline transformations
+//! - [`checkpoint`]: Incremental processing with checkpoint/resume
+//! - [`crossfile`]: Cross-file semantic relationship processing
+//! - [`learn`]: Pattern learning and inference from examples
+//! - [`testing`]: First-class pipeline testing support
+//! - [`data`]: Structured data processing (JSON, CSV, YAML, XML, TOML)
 //! - [`syntax`] (requires `tree-sitter` feature): Syntax-aware pattern matching
+
+// Core modules
 pub mod error;
 pub mod files;
 pub mod inspector;
@@ -93,8 +102,25 @@ pub mod plugin;
 pub mod processor;
 pub mod server;
 pub mod stream;
+
+// Advanced feature modules
+pub mod audit;
+pub mod bidirectional;
+pub mod checkpoint;
+pub mod crossfile;
+pub mod data;
+pub mod learn;
+pub mod natural;
+pub mod testing;
+
 #[cfg(feature = "tree-sitter")]
 pub mod syntax;
+
+#[cfg(feature = "python")]
+pub mod python;
+
+#[cfg(feature = "tui")]
+pub mod tui;
 
 // Re-export error types for convenience
 pub use error::{ConfigError, LibraryError, PatternError, RexpipeError, ValidationError};
@@ -104,3 +130,27 @@ pub use files::{BinaryMode, ShutdownInterrupted, ShutdownSignal, is_binary_file}
 
 // Re-export stream types for convenience
 pub use stream::{StreamUri, StreamSource, StreamSink, create_source, create_sink};
+
+// Re-export audit types for compliance workflows
+pub use audit::{AuditConfig, AuditTrail, AuditManifest, HashAlgorithm};
+
+// Re-export bidirectional types for reversible pipelines
+pub use bidirectional::{BidirectionalConfig, Direction, MappingStore};
+
+// Re-export checkpoint types for incremental processing
+pub use checkpoint::{Checkpoint, CheckpointConfig, GitDiff};
+
+// Re-export cross-file types for semantic relationships
+pub use crossfile::{CrossFileConfig, CrossFileRule, CrossFileManager};
+
+// Re-export learning types for pattern inference
+pub use learn::{PatternLearner, LearnedPattern, LearnConfig};
+
+// Re-export testing types for pipeline validation
+pub use testing::{TestRunner, TestCase, TestConfig, TestSummary};
+
+// Re-export data types for structured data processing
+pub use data::{DataFormat, DataValue, DataError, DataReader, DataWriter};
+
+// Re-export natural language types for no-code pipeline building
+pub use natural::{NaturalLanguageParser, NaturalLanguageError, PipelineBuilder, BuiltinPatterns};

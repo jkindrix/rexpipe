@@ -2482,6 +2482,7 @@ mod tests {
                 enabled: Some(true),
                 ..Default::default()
             }],
+            ..Default::default()
         };
 
         let mut processor = StreamProcessor::new(config).unwrap();
@@ -2535,6 +2536,7 @@ mod tests {
                 enabled: Some(true),
                 ..Default::default()
             }],
+            ..Default::default()
         };
 
         let mut processor = StreamProcessor::new(config).unwrap();
@@ -2576,6 +2578,7 @@ mod tests {
                 enabled: Some(true),
                 ..Default::default()
             }],
+            ..Default::default()
         };
 
         let mut processor = StreamProcessor::new(config).unwrap();
@@ -2832,6 +2835,7 @@ mod tests {
                 block_context: None,
                 ..Default::default()
             }],
+            ..Default::default()
         };
 
         let mut processor = StreamProcessor::new(config).unwrap();
@@ -2875,6 +2879,7 @@ mod tests {
                 block_context: None,
                 ..Default::default()
             }],
+            ..Default::default()
         };
 
         let mut processor = StreamProcessor::new(config).unwrap();
@@ -2919,6 +2924,7 @@ mod tests {
                 block_context: None,
                 ..Default::default()
             }],
+            ..Default::default()
         };
 
         let mut processor = StreamProcessor::new(config).unwrap();

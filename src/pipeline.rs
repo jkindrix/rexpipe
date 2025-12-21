@@ -3,7 +3,13 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+use crate::audit::AuditConfig;
+use crate::bidirectional::BidirectionalConfig;
+use crate::checkpoint::CheckpointConfig;
+use crate::crossfile::CrossFileConfig;
+use crate::testing::TestCase;
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PipelineConfig {
     pub name: Option<String>,
     pub description: Option<String>,
@@ -13,7 +19,30 @@ pub struct PipelineConfig {
     pub patterns_include: Vec<String>,
     #[serde(default)]
     pub settings: PipelineSettings,
+    #[serde(default)]
     pub step: Vec<PipelineStep>,
+
+    // === Advanced feature configurations ===
+
+    /// Audit trail configuration for compliance and provenance tracking
+    #[serde(default)]
+    pub audit: AuditConfig,
+
+    /// Bidirectional (reversible) pipeline configuration
+    #[serde(default)]
+    pub bidirectional: BidirectionalConfig,
+
+    /// Checkpoint configuration for incremental processing
+    #[serde(default)]
+    pub checkpoint: CheckpointConfig,
+
+    /// Cross-file relationship processing configuration
+    #[serde(default)]
+    pub cross_file: CrossFileConfig,
+
+    /// Inline test cases for pipeline validation
+    #[serde(default, rename = "test")]
+    pub tests: Vec<TestCase>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -173,7 +202,7 @@ pub struct PipelineStep {
     pub exclude_scopes: Option<Vec<String>>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum StepType {
     #[default]
@@ -186,7 +215,7 @@ pub enum StepType {
     Block,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FilterAction {
     KeepLine,
@@ -196,7 +225,7 @@ pub enum FilterAction {
 }
 
 /// Actions for Transform step type
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TransformAction {
     /// Convert matched text to uppercase
@@ -487,6 +516,11 @@ impl PipelineConfig {
             patterns_include: Vec::new(),
             settings,
             step: vec![step],
+            audit: AuditConfig::default(),
+            bidirectional: BidirectionalConfig::default(),
+            checkpoint: CheckpointConfig::default(),
+            cross_file: CrossFileConfig::default(),
+            tests: Vec::new(),
         }
     }
 
@@ -1039,11 +1073,8 @@ mod tests {
     fn test_pipeline_validation() {
         let mut config = PipelineConfig {
             name: Some("Test".to_string()),
-            description: None,
-            version: None,
-            patterns_include: Vec::new(),
-            settings: PipelineSettings::default(),
             step: vec![],
+            ..Default::default()
         };
 
         // Empty pipeline should be rejected
@@ -1103,34 +1134,23 @@ mod tests {
     fn test_contradictory_filter_detection() {
         let config = PipelineConfig {
             name: Some("Test".to_string()),
-            description: None,
-            version: None,
-            patterns_include: Vec::new(),
-            settings: PipelineSettings::default(),
             step: vec![
                 PipelineStep {
                     step_type: StepType::Filter,
                     pattern: "ERROR".to_string(),
-                    replacement: None,
                     action: Some(FilterAction::KeepLine),
-                    transform: None,
-                    flags: None,
-                    description: None,
                     enabled: Some(true),
                     ..Default::default()
                 },
                 PipelineStep {
                     step_type: StepType::Filter,
                     pattern: "ERROR".to_string(),
-                    replacement: None,
                     action: Some(FilterAction::DropLine),
-                    transform: None,
-                    flags: None,
-                    description: None,
                     enabled: Some(true),
                     ..Default::default()
                 },
             ],
+            ..Default::default()
         };
 
         let result = config.validate();
@@ -1144,34 +1164,23 @@ mod tests {
         // keep_line followed by drop_match is NOT contradictory
         let config = PipelineConfig {
             name: Some("Test".to_string()),
-            description: None,
-            version: None,
-            patterns_include: Vec::new(),
-            settings: PipelineSettings::default(),
             step: vec![
                 PipelineStep {
                     step_type: StepType::Filter,
                     pattern: "ERROR".to_string(),
-                    replacement: None,
                     action: Some(FilterAction::KeepLine),
-                    transform: None,
-                    flags: None,
-                    description: None,
                     enabled: Some(true),
                     ..Default::default()
                 },
                 PipelineStep {
                     step_type: StepType::Filter,
                     pattern: "ERROR".to_string(),
-                    replacement: None,
                     action: Some(FilterAction::KeepLine),
-                    transform: None,
-                    flags: None,
-                    description: None,
                     enabled: Some(true),
                     ..Default::default()
                 },
             ],
+            ..Default::default()
         };
 
         // Same action twice is redundant but not contradictory
@@ -1198,6 +1207,7 @@ mod tests {
                 enabled: Some(true),
                 ..Default::default()
             }],
+            ..Default::default()
         };
 
         let result = config.validate();
@@ -1225,6 +1235,7 @@ mod tests {
                 enabled: Some(true),
                 ..Default::default()
             }],
+            ..Default::default()
         };
 
         assert!(config.validate().is_ok());
@@ -1249,6 +1260,7 @@ mod tests {
                 enabled: Some(true),
                 ..Default::default()
             }],
+            ..Default::default()
         };
 
         let result = config.validate();
@@ -1289,6 +1301,7 @@ mod tests {
                     ..Default::default()
                 },
             ],
+            ..Default::default()
         };
 
         // Should not detect contradiction since second step is disabled
@@ -1305,6 +1318,7 @@ mod tests {
             patterns_include: Vec::new(),
             settings: PipelineSettings::default(),
             step: vec![],
+            ..Default::default()
         };
 
         let result = config.validate_comprehensive();
@@ -1347,6 +1361,7 @@ mod tests {
                     ..Default::default()
                 },
             ],
+            ..Default::default()
         };
 
         let result = config.validate_comprehensive();

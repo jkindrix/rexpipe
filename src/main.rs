@@ -7,6 +7,7 @@ use std::io::{self, BufReader, IsTerminal};
 use std::path::{Path, PathBuf};
 
 // Import from the library crate
+use rexpipe::data::{DataFormat, DataValue};
 use rexpipe::error::{ConfigError, LibraryError, PatternError, RexpipeError, ValidationError};
 use rexpipe::files::{FileProcessingOptions, MultiFileProcessor, MultiFileResult};
 use rexpipe::inspector::{Inspector, InspectorOptions};
@@ -380,15 +381,15 @@ fn build_cli() -> Command {
         .arg(
             Arg::new("stream")
                 .long("stream")
-                .help("Run in continuous streaming mode (requires --input)")
+                .help("Run in continuous streaming mode (requires --source)")
                 .action(ArgAction::SetTrue),
         )
         .arg(
             Arg::new("input-uri")
-                .long("input")
+                .long("source")
                 .value_name("URI")
-                .help("Input source URI (stdin://, file:///path, tcp://host:port, udp://host:port)")
-                .long_help("Specify input source using URI format:\n\
+                .help("Streaming input source URI (stdin://, file:///path, tcp://host:port, udp://host:port)")
+                .long_help("Specify input source using URI format for streaming mode:\n\
                      - stdin://           Read from standard input\n\
                      - file:///path       Read from a file\n\
                      - tcp://host:port    Accept TCP connections\n\
@@ -396,10 +397,10 @@ fn build_cli() -> Command {
         )
         .arg(
             Arg::new("output-uri")
-                .long("output")
+                .long("sink")
                 .value_name("URI")
-                .help("Output sink URI (stdout://, file:///path, tcp://host:port, udp://host:port)")
-                .long_help("Specify output sink using URI format:\n\
+                .help("Streaming output sink URI (stdout://, file:///path, tcp://host:port, udp://host:port)")
+                .long_help("Specify output sink using URI format for streaming mode:\n\
                      - stdout://          Write to standard output\n\
                      - stderr://          Write to standard error\n\
                      - file:///path       Write to a file\n\
@@ -514,6 +515,193 @@ fn build_cli() -> Command {
                      phone numbers, etc. Outputs suggested patterns with match counts."
                 )
                 .action(ArgAction::SetTrue),
+        )
+        // === Data Processing ===
+        .arg(
+            Arg::new("convert")
+                .long("convert")
+                .help("Convert between data formats (json, csv, yaml, xml, toml)")
+                .long_help(
+                    "Convert data from one format to another. Use --input-format and --output-format \
+                     to specify formats explicitly, or let rexpipe detect the input format.\n\n\
+                     Supported formats: json, jsonl, csv, tsv, yaml, xml, toml\n\n\
+                     Examples:\n  \
+                     rexpipe --convert --output-format yaml < data.json\n  \
+                     rexpipe --convert --input-format csv --output-format json < data.csv"
+                )
+                .action(ArgAction::SetTrue),
+        )
+        .arg(
+            Arg::new("data-query")
+                .long("query")
+                .short('Q')
+                .value_name("EXPR")
+                .help("Query data with jq-like expressions (e.g., '.users[0].name')")
+                .long_help(
+                    "Query structured data using path expressions similar to jq.\n\n\
+                     Path syntax:\n  \
+                     .key       - Access object key\n  \
+                     [0]        - Access array index\n  \
+                     .[*]       - Access all array elements\n  \
+                     .key1.key2 - Chain accessors\n\n\
+                     Examples:\n  \
+                     rexpipe -Q '.name' < user.json\n  \
+                     rexpipe -Q '.users[0].email' < data.json\n  \
+                     rexpipe -Q '.[*].id' < items.json"
+                ),
+        )
+        .arg(
+            Arg::new("input-format")
+                .long("input-format")
+                .value_name("FORMAT")
+                .help("Explicit input data format")
+                .value_parser(["text", "json", "jsonl", "csv", "tsv", "yaml", "xml", "toml"]),
+        )
+        .arg(
+            Arg::new("output-format")
+                .long("output-format")
+                .value_name("FORMAT")
+                .help("Output data format for conversion")
+                .value_parser(["text", "json", "jsonl", "csv", "tsv", "yaml", "xml", "toml"]),
+        )
+        .arg(
+            Arg::new("pretty")
+                .long("pretty")
+                .help("Pretty print output (for JSON, XML, etc.)")
+                .action(ArgAction::SetTrue),
+        )
+        // === Natural Language Mode ===
+        .arg(
+            Arg::new("natural")
+                .long("natural")
+                .short('N')
+                .value_name("DESCRIPTION")
+                .help("Describe transformation in natural language")
+                .long_help(
+                    "Build a pipeline from a natural language description.\n\n\
+                     Examples:\n  \
+                     --natural \"replace emails with [EMAIL]\"\n  \
+                     --natural \"remove blank lines and mask phone numbers\"\n  \
+                     --natural \"keep only lines with errors\"\n  \
+                     --natural \"extract all URLs\"\n  \
+                     --natural \"convert to uppercase\"\n\n\
+                     Supported patterns: email, phone, ip, url, date, time, number, etc.\n\
+                     Use --show-patterns to see all available patterns."
+                ),
+        )
+        .arg(
+            Arg::new("show-patterns")
+                .long("show-patterns")
+                .help("List available built-in patterns for natural language mode")
+                .action(ArgAction::SetTrue),
+        )
+        .arg(
+            Arg::new("builder")
+                .long("builder")
+                .help("Start interactive pipeline builder mode")
+                .action(ArgAction::SetTrue),
+        )
+        // === Audit Trail ===
+        .arg(
+            Arg::new("audit")
+                .long("audit")
+                .help("Enable audit trail for compliance (GDPR, HIPAA, PCI-DSS)")
+                .long_help(
+                    "Generate cryptographic audit records for all transformations. \
+                     Creates immutable provenance records with SHA-256 hashes of input/output."
+                )
+                .action(ArgAction::SetTrue),
+        )
+        .arg(
+            Arg::new("audit-dir")
+                .long("audit-dir")
+                .value_name("DIR")
+                .help("Directory for audit output files")
+                .value_hint(ValueHint::DirPath),
+        )
+        // === Bidirectional Pipelines ===
+        .arg(
+            Arg::new("reverse")
+                .long("reverse")
+                .help("Run pipeline in reverse mode (requires bidirectional config or mapping file)")
+                .action(ArgAction::SetTrue),
+        )
+        .arg(
+            Arg::new("mapping-file")
+                .long("mapping-file")
+                .value_name("FILE")
+                .help("File to store/load bidirectional transformation mappings")
+                .long_help(
+                    "Store transformation mappings for bidirectional pipelines. \
+                     In forward mode, mappings are recorded. In reverse mode with --reverse, \
+                     mappings are used to restore original values."
+                )
+                .value_hint(ValueHint::FilePath),
+        )
+        // === Checkpoint/Incremental Processing ===
+        .arg(
+            Arg::new("checkpoint")
+                .long("checkpoint")
+                .value_name("FILE")
+                .help("Enable incremental processing with checkpoint file")
+                .long_help(
+                    "Resume processing from saved position. Tracks file offsets and content hashes \
+                     to only process new or changed content. Useful for growing log files."
+                )
+                .value_hint(ValueHint::FilePath),
+        )
+        .arg(
+            Arg::new("git-diff")
+                .long("git-diff")
+                .value_name("REF")
+                .help("Only process lines changed since git ref (e.g., HEAD~1, main)")
+                .num_args(0..=1)
+                .default_missing_value("HEAD"),
+        )
+        // === Pipeline Testing ===
+        .arg(
+            Arg::new("test")
+                .long("test")
+                .help("Run tests defined in pipeline configuration")
+                .long_help(
+                    "Execute test cases defined in the [tests] section of the pipeline config. \
+                     Validates that the pipeline produces expected outputs for given inputs."
+                )
+                .action(ArgAction::SetTrue),
+        )
+        .arg(
+            Arg::new("test-format")
+                .long("test-format")
+                .value_name("FORMAT")
+                .help("Test output format: text, tap, or junit")
+                .value_parser(["text", "tap", "junit"])
+                .default_value("text"),
+        )
+        // === Pattern Learning ===
+        .arg(
+            Arg::new("learn")
+                .long("learn")
+                .help("Learn patterns from input examples")
+                .long_help(
+                    "Infer regex patterns from positive and negative examples. \
+                     Use with --positive and --negative to provide examples. \
+                     Outputs suggested patterns with confidence scores."
+                )
+                .action(ArgAction::SetTrue),
+        )
+        .arg(
+            Arg::new("positive")
+                .long("positive")
+                .value_name("EXAMPLE")
+                .help("Positive example for pattern learning (should match)")
+                .action(ArgAction::Append),
+        )
+        .arg(
+            Arg::new("negative")
+                .long("negative")
+                .value_name("EXAMPLE")
+                .help("Negative example for pattern learning (should not match)")
+                .action(ArgAction::Append),
         )
         // === Misc ===
         .arg(
@@ -677,6 +865,36 @@ fn run_application(matches: &clap::ArgMatches) -> Result<()> {
         return run_pattern_discovery(matches);
     }
 
+    // Handle pattern learning mode
+    if matches.get_flag("learn") {
+        return run_pattern_learning(matches);
+    }
+
+    // Handle show-patterns mode (for natural language)
+    if matches.get_flag("show-patterns") {
+        return run_list_patterns();
+    }
+
+    // Handle natural language mode
+    if matches.get_one::<String>("natural").is_some() {
+        return run_natural_language_mode(matches);
+    }
+
+    // Handle interactive builder mode
+    if matches.get_flag("builder") {
+        return run_interactive_mode(matches);
+    }
+
+    // Handle data conversion mode
+    if matches.get_flag("convert") {
+        return run_data_conversion(matches);
+    }
+
+    // Handle data query mode
+    if matches.get_one::<String>("data-query").is_some() {
+        return run_data_query(matches);
+    }
+
     // Handle server mode
     if matches.get_flag("server") {
         return run_server_mode(matches);
@@ -696,6 +914,11 @@ fn run_application(matches: &clap::ArgMatches) -> Result<()> {
     // Handle export mode
     if let Some(format) = matches.get_one::<String>("export") {
         return export_configuration(&config, format);
+    }
+
+    // Handle pipeline test mode
+    if matches.get_flag("test") {
+        return run_pipeline_tests(&config, matches);
     }
 
     // Validate configuration if requested (unless we have files to preview)
@@ -1805,6 +2028,647 @@ fn load_pipeline_config_from_path(path: &str) -> Result<PipelineConfig> {
     Ok(config)
 }
 
+/// Run pattern learning mode to infer regex patterns from examples.
+fn run_pattern_learning(matches: &clap::ArgMatches) -> Result<()> {
+    use rexpipe::learn::PatternLearner;
+
+    let mut learner = PatternLearner::new();
+
+    // Add positive examples
+    if let Some(positives) = matches.get_many::<String>("positive") {
+        for example in positives {
+            learner.add_positive(example);
+        }
+    }
+
+    // Add negative examples
+    if let Some(negatives) = matches.get_many::<String>("negative") {
+        for example in negatives {
+            learner.add_negative(example);
+        }
+    }
+
+    // If no examples provided via flags, try to read from stdin
+    if learner.example_count() == 0 {
+        eprintln!("Reading examples from stdin (prefix with + for positive, - for negative):");
+        eprintln!("Example: +user@example.com");
+        eprintln!("Example: -not-an-email");
+        eprintln!("Press Ctrl+D when done.");
+
+        let stdin = io::stdin();
+        for line in stdin.lines() {
+            let line = line?;
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            if let Some(example) = line.strip_prefix('+') {
+                learner.add_positive(example.trim());
+            } else if let Some(example) = line.strip_prefix('-') {
+                learner.add_negative(example.trim());
+            } else {
+                // Default to positive
+                learner.add_positive(line);
+            }
+        }
+    }
+
+    if learner.example_count() == 0 {
+        return Err(anyhow!("No examples provided. Use --positive and --negative flags or provide examples via stdin."));
+    }
+
+    // Learn patterns
+    match learner.learn() {
+        Ok(patterns) => {
+            if patterns.is_empty() {
+                println!("No patterns could be learned from the provided examples.");
+            } else {
+                println!("Learned patterns:\n");
+                for (i, pattern) in patterns.iter().enumerate() {
+                    println!("{}. Pattern: {}", i + 1, pattern.pattern);
+                    println!("   Confidence: {}%", pattern.confidence);
+                    if !pattern.description.is_empty() {
+                        println!("   Description: {}", pattern.description);
+                    }
+                    println!();
+                }
+
+                // Generate pipeline config suggestion
+                if let Some(best) = patterns.first() {
+                    println!("Suggested pipeline configuration:");
+                    println!("[[step]]");
+                    println!("type = \"substitute\"");
+                    println!("pattern = \"{}\"", best.pattern.replace('\\', "\\\\").replace('"', "\\\""));
+                    println!("replacement = \"[REDACTED]\"");
+                }
+            }
+        }
+        Err(e) => {
+            return Err(anyhow!("Pattern learning failed: {}", e));
+        }
+    }
+
+    Ok(())
+}
+
+/// Run pipeline tests defined in configuration.
+fn run_pipeline_tests(config: &PipelineConfig, matches: &clap::ArgMatches) -> Result<()> {
+    use rexpipe::testing::{TestConfig, TestRunner};
+    use std::io::Cursor;
+
+    if config.tests.is_empty() {
+        return Err(anyhow!("No tests defined in pipeline configuration. Add [[tests]] sections to define test cases."));
+    }
+
+    // Create test runner
+    let test_config = TestConfig::new();
+    let mut runner = TestRunner::new(test_config);
+    runner.add_tests(config.tests.clone());
+
+    // Create processor function that uses the pipeline
+    let pipeline_config = config.clone();
+    let processor = move |input: &str| -> std::result::Result<(String, u64, u64), String> {
+        let mut processor = match StreamProcessor::new(pipeline_config.clone()) {
+            Ok(p) => p,
+            Err(e) => return Err(format!("Failed to create processor: {}", e)),
+        };
+
+        let reader = Cursor::new(input);
+        let mut output = Vec::new();
+
+        match processor.process_stream(reader, &mut output) {
+            Ok(result) => {
+                let output_str = String::from_utf8_lossy(&output).to_string();
+                Ok((output_str, result.matches_found, result.transformations_applied))
+            }
+            Err(e) => Err(format!("Processing error: {}", e)),
+        }
+    };
+
+    let summary = runner.run_all(processor);
+
+    // Get output format
+    let format = matches.get_one::<String>("test-format").map(|s| s.as_str()).unwrap_or("text");
+
+    match format {
+        "tap" => {
+            println!("{}", rexpipe::testing::format_tap_output(&summary));
+        }
+        "junit" => {
+            println!("{}", rexpipe::testing::format_junit_xml(&summary, "rexpipe"));
+        }
+        _ => {
+            // Default text format
+            println!("{}", rexpipe::testing::format_test_report(&summary));
+        }
+    }
+
+    // Exit with appropriate code
+    if summary.failed > 0 {
+        std::process::exit(1);
+    }
+
+    Ok(())
+}
+
+/// Run data format conversion mode.
+fn run_data_conversion(matches: &clap::ArgMatches) -> Result<()> {
+    use std::io::Read;
+
+    // Read input
+    let mut input_content = String::new();
+    if let Some(input_file) = matches.get_one::<String>("input") {
+        File::open(input_file)?.read_to_string(&mut input_content)?;
+    } else {
+        io::stdin().read_to_string(&mut input_content)?;
+    }
+
+    // Determine input format
+    let input_format = if let Some(fmt) = matches.get_one::<String>("input-format") {
+        parse_data_format(fmt)?
+    } else {
+        DataFormat::detect(&input_content)
+    };
+
+    // Determine output format
+    let output_format = if let Some(fmt) = matches.get_one::<String>("output-format") {
+        parse_data_format(fmt)?
+    } else {
+        return Err(anyhow!(
+            "Output format is required for conversion. Use --output-format (json, csv, yaml, xml, toml)"
+        ));
+    };
+
+    // Parse input
+    let data = DataValue::parse(&input_content, input_format)
+        .map_err(|e| anyhow!("Failed to parse input as {:?}: {}", input_format, e))?;
+
+    // Convert to output format
+    let pretty = matches.get_flag("pretty");
+    let output = data.to_format_with_options(output_format, pretty)
+        .map_err(|e| anyhow!("Failed to convert to {:?}: {}", output_format, e))?;
+
+    // Write output
+    if let Some(output_file) = matches.get_one::<String>("output") {
+        std::fs::write(output_file, &output)?;
+    } else {
+        print!("{}", output);
+    }
+
+    Ok(())
+}
+
+/// Run data query mode with jq-like expressions.
+fn run_data_query(matches: &clap::ArgMatches) -> Result<()> {
+    use std::io::Read;
+
+    let query = matches
+        .get_one::<String>("data-query")
+        .ok_or_else(|| anyhow!("Query expression is required"))?;
+
+    // Read input
+    let mut input_content = String::new();
+    if let Some(input_file) = matches.get_one::<String>("input") {
+        File::open(input_file)?.read_to_string(&mut input_content)?;
+    } else {
+        io::stdin().read_to_string(&mut input_content)?;
+    }
+
+    // Determine input format
+    let input_format = if let Some(fmt) = matches.get_one::<String>("input-format") {
+        parse_data_format(fmt)?
+    } else {
+        DataFormat::detect(&input_content)
+    };
+
+    // Parse input
+    let data = DataValue::parse(&input_content, input_format)
+        .map_err(|e| anyhow!("Failed to parse input as {:?}: {}", input_format, e))?;
+
+    // Execute query
+    let result = data
+        .query(query)
+        .map_err(|e| anyhow!("Query failed: {}", e))?;
+
+    // Determine output format
+    let output_format = if let Some(fmt) = matches.get_one::<String>("output-format") {
+        parse_data_format(fmt)?
+    } else {
+        // Default to JSON for query results
+        DataFormat::Json
+    };
+
+    // Format and output results
+    let pretty = matches.get_flag("pretty");
+    let output = result.to_format_with_options(output_format, pretty)
+        .map_err(|e| anyhow!("Failed to format result: {}", e))?;
+    println!("{}", output.trim_end());
+
+    Ok(())
+}
+
+/// Parse a data format string into a DataFormat enum.
+fn parse_data_format(s: &str) -> Result<DataFormat> {
+    match s.to_lowercase().as_str() {
+        "text" => Ok(DataFormat::Text),
+        "json" => Ok(DataFormat::Json),
+        "jsonl" | "jsonlines" | "ndjson" => Ok(DataFormat::JsonLines),
+        "csv" => Ok(DataFormat::Csv),
+        "tsv" => Ok(DataFormat::Tsv),
+        "yaml" | "yml" => Ok(DataFormat::Yaml),
+        "xml" => Ok(DataFormat::Xml),
+        "toml" => Ok(DataFormat::Toml),
+        _ => Err(anyhow!(
+            "Unknown data format: {}. Supported: text, json, jsonl, csv, tsv, yaml, xml, toml",
+            s
+        )),
+    }
+}
+
+/// List all available built-in patterns for natural language mode.
+fn run_list_patterns() -> Result<()> {
+    use rexpipe::natural::BuiltinPatterns;
+
+    let patterns = BuiltinPatterns::new();
+    let mut names: Vec<_> = patterns.names().collect();
+    names.sort();
+    names.dedup();
+
+    println!("Available patterns for natural language mode:");
+    println!();
+
+    // Group patterns by category
+    let categories = [
+        ("Numbers", vec!["number", "numbers", "digit", "digits", "integer", "decimal", "float", "percentage"]),
+        ("Communication", vec!["email", "emails", "phone", "phone number", "url", "urls", "link", "links"]),
+        ("Network", vec!["ip", "ip address", "ipv4", "mac", "mac address"]),
+        ("Dates & Times", vec!["date", "dates", "time", "times", "timestamp", "iso date", "iso timestamp"]),
+        ("Financial", vec!["currency", "money", "price", "credit card", "ssn", "social security"]),
+        ("Text", vec!["word", "words", "whitespace", "blank line", "blank lines", "empty line", "empty lines",
+                      "leading whitespace", "trailing whitespace", "extra whitespace", "multiple spaces"]),
+        ("Code", vec!["comment", "comments", "string", "strings", "function", "hex", "uuid"]),
+        ("Logs", vec!["error", "errors", "warning", "warnings", "debug", "info"]),
+        ("HTML/XML", vec!["html tag", "html tags", "xml tag", "xml tags"]),
+    ];
+
+    for (category, pattern_names) in categories {
+        println!("{}:", category);
+        for name in pattern_names {
+            if let Some(regex) = patterns.get(name) {
+                println!("  {:20} -> {}", name, regex);
+            }
+        }
+        println!();
+    }
+
+    println!("Usage examples:");
+    println!("  rexpipe --natural \"replace emails with [EMAIL]\" input.txt");
+    println!("  rexpipe --natural \"remove blank lines\" input.txt");
+    println!("  rexpipe --natural \"mask all phone numbers\" input.txt");
+    println!("  rexpipe --natural \"keep only lines with errors\" input.txt");
+    println!("  rexpipe --natural \"extract all URLs\" input.txt");
+
+    Ok(())
+}
+
+/// Run natural language mode to build and execute a pipeline.
+fn run_natural_language_mode(matches: &clap::ArgMatches) -> Result<()> {
+    use rexpipe::natural::NaturalLanguageParser;
+    use rexpipe::processor::StreamProcessor;
+    use std::io::BufReader;
+
+    let description = matches
+        .get_one::<String>("natural")
+        .ok_or_else(|| anyhow!("Natural language description is required"))?;
+
+    // Parse the natural language description
+    let parser = NaturalLanguageParser::new();
+    let (result, suggestions) = parser.parse_with_suggestions(description);
+
+    let config = match result {
+        Ok(config) => config,
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            for suggestion in suggestions {
+                eprintln!("  {}", suggestion);
+            }
+            return Err(anyhow!("Failed to parse natural language description"));
+        }
+    };
+
+    // Show what we understood
+    eprintln!("Parsed {} step(s) from description:", config.step.len());
+    for (i, step) in config.step.iter().enumerate() {
+        eprintln!("  {}. {:?}: pattern=\"{}\"", i + 1, step.step_type, step.pattern);
+        if let Some(ref replacement) = step.replacement {
+            eprintln!("      replacement=\"{}\"", replacement);
+        }
+        if let Some(ref action) = step.action {
+            eprintln!("      action={:?}", action);
+        }
+    }
+    eprintln!();
+
+    // Create processor
+    let mut processor = StreamProcessor::new(config)
+        .map_err(|e| anyhow!("Failed to create processor: {}", e))?;
+
+    // Process input
+    if let Some(input_file) = matches.get_one::<String>("input") {
+        let file = File::open(input_file)?;
+        let mut reader = BufReader::new(file);
+        if let Some(output_file) = matches.get_one::<String>("output") {
+            let mut output = File::create(output_file)?;
+            processor.process_stream(&mut reader, &mut output)
+                .map_err(|e| anyhow!("Processing error: {}", e))?;
+        } else {
+            processor.process_stream(&mut reader, &mut io::stdout())
+                .map_err(|e| anyhow!("Processing error: {}", e))?;
+        }
+    } else {
+        let stdin = io::stdin();
+        let mut reader = stdin.lock();
+        if let Some(output_file) = matches.get_one::<String>("output") {
+            let mut output = File::create(output_file)?;
+            processor.process_stream(&mut reader, &mut output)
+                .map_err(|e| anyhow!("Processing error: {}", e))?;
+        } else {
+            processor.process_stream(&mut reader, &mut io::stdout())
+                .map_err(|e| anyhow!("Processing error: {}", e))?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Run interactive pipeline builder mode.
+fn run_interactive_mode(matches: &clap::ArgMatches) -> Result<()> {
+    use rexpipe::natural::{NaturalLanguageParser, PipelineBuilder, InteractiveCommand, CommandType};
+    use rexpipe::processor::StreamProcessor;
+    use std::io::{BufReader, Write as IoWrite};
+
+    println!("rexpipe Interactive Pipeline Builder");
+    println!("=====================================");
+    println!();
+    println!("Build a pipeline by describing transformations in natural language.");
+    println!("Type a description to add a step, or use commands:");
+    println!("  :list     - Show current pipeline");
+    println!("  :remove N - Remove step N");
+    println!("  :clear    - Clear all steps");
+    println!("  :test     - Test with sample input");
+    println!("  :run      - Run on input file");
+    println!("  :export   - Export to TOML");
+    println!("  :patterns - Show available patterns");
+    println!("  :help     - Show this help");
+    println!("  :quit     - Exit");
+    println!();
+
+    let parser = NaturalLanguageParser::new();
+    let mut builder = PipelineBuilder::new();
+    let mut history: Vec<rexpipe::pipeline::PipelineStep> = Vec::new();
+
+    loop {
+        // Print prompt
+        eprint!("> ");
+        io::stderr().flush()?;
+
+        // Read input
+        let mut line = String::new();
+        if io::stdin().read_line(&mut line)? == 0 {
+            break;
+        }
+
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+
+        // Parse command
+        let cmd = match InteractiveCommand::parse(line) {
+            Some(cmd) => cmd,
+            None => continue,
+        };
+
+        match cmd.command {
+            CommandType::Add => {
+                let description = if cmd.args.is_empty() {
+                    line.to_string()
+                } else {
+                    cmd.args.join(" ")
+                };
+
+                match parser.parse(&description) {
+                    Ok(config) => {
+                        for step in config.step {
+                            println!("Added: {:?} pattern=\"{}\"", step.step_type, step.pattern);
+                            history.push(step.clone());
+                            builder.add_step(step);
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Could not understand: {}", e);
+                        if let Some(suggestion) = parser.suggest_pattern(&description) {
+                            eprintln!("Did you mean '{}'?", suggestion);
+                        }
+                    }
+                }
+            }
+
+            CommandType::List => {
+                if builder.step_count() == 0 {
+                    println!("Pipeline is empty.");
+                } else {
+                    println!("Current pipeline ({} steps):", builder.step_count());
+                    for (i, step) in history.iter().enumerate() {
+                        println!("  {}. {:?}: pattern=\"{}\"", i + 1, step.step_type, step.pattern);
+                    }
+                }
+            }
+
+            CommandType::Remove => {
+                if let Some(idx_str) = cmd.args.first() {
+                    if let Ok(idx) = idx_str.parse::<usize>() {
+                        if idx > 0 && idx <= history.len() {
+                            history.remove(idx - 1);
+                            builder = PipelineBuilder::new();
+                            for step in &history {
+                                builder.add_step(step.clone());
+                            }
+                            println!("Removed step {}.", idx);
+                        } else {
+                            eprintln!("Invalid step number.");
+                        }
+                    }
+                } else {
+                    eprintln!("Usage: :remove N");
+                }
+            }
+
+            CommandType::Clear => {
+                builder = PipelineBuilder::new();
+                history.clear();
+                println!("Pipeline cleared.");
+            }
+
+            CommandType::Test => {
+                if builder.step_count() == 0 {
+                    eprintln!("Pipeline is empty. Add some steps first.");
+                    continue;
+                }
+
+                println!("Enter test input (Ctrl+D or empty line to finish):");
+                let mut test_input = String::new();
+                loop {
+                    let mut line = String::new();
+                    if io::stdin().read_line(&mut line)? == 0 || line.trim().is_empty() {
+                        break;
+                    }
+                    test_input.push_str(&line);
+                }
+
+                if test_input.is_empty() {
+                    continue;
+                }
+
+                // Build a fresh config from history
+                let mut test_builder = PipelineBuilder::new();
+                for step in &history {
+                    test_builder.add_step(step.clone());
+                }
+                let config = test_builder.build();
+
+                match StreamProcessor::new(config) {
+                    Ok(mut processor) => {
+                        let mut output = Vec::new();
+                        let mut cursor = std::io::Cursor::new(test_input.as_bytes());
+                        match processor.process_stream(&mut cursor, &mut output) {
+                            Ok(_) => {
+                                println!("\nOutput:");
+                                println!("{}", String::from_utf8_lossy(&output));
+                            }
+                            Err(e) => eprintln!("Error: {}", e),
+                        }
+                    }
+                    Err(e) => eprintln!("Error creating processor: {}", e),
+                }
+            }
+
+            CommandType::Export => {
+                if builder.step_count() == 0 {
+                    eprintln!("Pipeline is empty.");
+                    continue;
+                }
+
+                // Build a fresh config from history
+                let mut export_builder = PipelineBuilder::new();
+                for step in &history {
+                    export_builder.add_step(step.clone());
+                }
+                let config = export_builder.build();
+
+                match toml::to_string_pretty(&config) {
+                    Ok(toml_str) => {
+                        println!("\n# Pipeline configuration");
+                        println!("{}", toml_str);
+                    }
+                    Err(e) => eprintln!("Error exporting: {}", e),
+                }
+            }
+
+            CommandType::Run => {
+                if builder.step_count() == 0 {
+                    eprintln!("Pipeline is empty. Add some steps first.");
+                    continue;
+                }
+
+                // Get input file
+                let input_file: String = if let Some(file) = cmd.args.first() {
+                    file.clone()
+                } else if let Some(file) = matches.get_one::<String>("input") {
+                    file.clone()
+                } else {
+                    eprintln!("Usage: :run <file>");
+                    continue;
+                };
+
+                // Build config from history
+                let mut run_builder = PipelineBuilder::new();
+                for step in &history {
+                    run_builder.add_step(step.clone());
+                }
+                let config = run_builder.build();
+
+                match StreamProcessor::new(config) {
+                    Ok(mut processor) => {
+                        match File::open(&input_file) {
+                            Ok(file) => {
+                                let mut reader = BufReader::new(file);
+                                match processor.process_stream(&mut reader, &mut io::stdout()) {
+                                    Ok(_) => {}
+                                    Err(e) => eprintln!("Error: {}", e),
+                                }
+                            }
+                            Err(e) => eprintln!("Error opening file: {}", e),
+                        }
+                    }
+                    Err(e) => eprintln!("Error creating processor: {}", e),
+                }
+            }
+
+            CommandType::Undo => {
+                if history.is_empty() {
+                    eprintln!("Nothing to undo.");
+                } else {
+                    history.pop();
+                    builder = PipelineBuilder::new();
+                    for step in &history {
+                        builder.add_step(step.clone());
+                    }
+                    println!("Undone last step.");
+                }
+            }
+
+            CommandType::Patterns => {
+                let patterns = parser.available_patterns();
+                println!("Available patterns:");
+                for chunk in patterns.chunks(5) {
+                    println!("  {}", chunk.join(", "));
+                }
+            }
+
+            CommandType::Help => {
+                println!("Commands:");
+                println!("  <description>  - Add step from natural language");
+                println!("  :add <desc>    - Add step explicitly");
+                println!("  :list          - Show current pipeline");
+                println!("  :remove N      - Remove step N");
+                println!("  :clear         - Clear all steps");
+                println!("  :test          - Test with sample input");
+                println!("  :run [file]    - Run on input file");
+                println!("  :export        - Export pipeline to TOML");
+                println!("  :undo          - Undo last action");
+                println!("  :patterns      - Show available patterns");
+                println!("  :help          - Show this help");
+                println!("  :quit          - Exit");
+                println!();
+                println!("Example descriptions:");
+                println!("  replace emails with [EMAIL]");
+                println!("  remove blank lines");
+                println!("  keep only lines with errors");
+                println!("  mask all phone numbers");
+                println!("  convert to uppercase");
+            }
+
+            CommandType::Quit => {
+                println!("Goodbye!");
+                break;
+            }
+        }
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1818,5 +2682,16 @@ mod tests {
         let config = PipelineConfig::from_inline_pattern(r"\d+", Some("NUMBER"));
         assert_eq!(config.step.len(), 1);
         assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_parse_data_format() {
+        assert!(matches!(parse_data_format("json").unwrap(), DataFormat::Json));
+        assert!(matches!(parse_data_format("CSV").unwrap(), DataFormat::Csv));
+        assert!(matches!(parse_data_format("yaml").unwrap(), DataFormat::Yaml));
+        assert!(matches!(parse_data_format("yml").unwrap(), DataFormat::Yaml));
+        assert!(matches!(parse_data_format("xml").unwrap(), DataFormat::Xml));
+        assert!(matches!(parse_data_format("toml").unwrap(), DataFormat::Toml));
+        assert!(parse_data_format("unknown").is_err());
     }
 }

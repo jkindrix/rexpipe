@@ -378,7 +378,7 @@ impl StreamSource for UdpSource {
         let (len, _addr) = self.socket.recv_from(&mut self.buffer)?;
         let data = String::from_utf8_lossy(&self.buffer[..len]).to_string();
         // Trim trailing newline if present
-        let trimmed = data.trim_end_matches(|c| c == '\n' || c == '\r');
+        let trimmed = data.trim_end_matches(['\n', '\r']);
         Ok(Some(trimmed.to_string()))
     }
 }
