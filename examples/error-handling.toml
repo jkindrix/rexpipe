@@ -1,0 +1,55 @@
+# Error Handling and Validation Pipeline
+# Demonstrates input validation and graceful error handling.
+#
+# Usage:
+#   # Validate that all lines contain valid email addresses
+#   rexpipe -c examples/error-handling.toml < emails.txt
+#
+#   # Show what would happen (dry-run mode)
+#   rexpipe -c examples/error-handling.toml --dry-run < emails.txt
+#
+# This pipeline validates input data using the 'validate' step type.
+# Lines that fail validation are reported as errors but processing continues.
+
+name = "Error Handling Example"
+description = "Validate input data with graceful error reporting"
+version = "1.0.0"
+
+[settings]
+# Strict mode: reject patterns with potential ReDoS vulnerabilities
+strict_mode = true
+# Timeout for regex matching per line (prevents hangs on pathological input)
+timeout_ms = 1000
+
+# Step 1: Validate that each line contains a valid-looking email address
+# Lines that don't match will be reported as validation errors
+[[step]]
+type = "validate"
+description = "Ensure line contains valid email format"
+pattern = '[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'
+
+# Step 2: Extract just the email addresses (if validation passed)
+# The 'g' flag extracts all emails on the line
+[[step]]
+type = "extract"
+description = "Extract email addresses"
+pattern = '[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'
+flags = ["global"]
+
+# Example input (save as emails.txt):
+# ----------------------------------------
+# Contact us at support@example.com
+# Invalid: not-an-email
+# Multiple: john@test.org and jane@test.org
+# Also invalid line
+# Valid: admin@company.co.uk
+# ----------------------------------------
+#
+# Expected output:
+# - Line 2 and 4 will cause validation errors (no email)
+# - Lines 1, 3, 5 will output the extracted emails
+#
+# Error handling modes:
+# - Default: Errors are logged, processing continues
+# - With --quiet: Errors are suppressed
+# - With --json: Errors included in structured JSON output

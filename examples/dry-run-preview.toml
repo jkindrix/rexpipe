@@ -1,0 +1,76 @@
+# Dry-Run Preview Pipeline
+# Demonstrates how to safely preview changes before applying them.
+#
+# The --dry-run flag shows what changes would be made without modifying files.
+# This is essential for validating transformations before batch processing.
+#
+# Usage examples:
+#
+#   # Preview changes to a single file (no modifications made)
+#   rexpipe -c examples/dry-run-preview.toml --dry-run < input.txt
+#
+#   # Preview in-place changes to multiple files
+#   rexpipe -c examples/dry-run-preview.toml --dry-run -i src/*.rs
+#
+#   # Preview with context lines to see surrounding text
+#   rexpipe -c examples/dry-run-preview.toml --dry-run -C 2 < input.txt
+#
+#   # Preview with colored diff output
+#   rexpipe -c examples/dry-run-preview.toml --dry-run --color < input.txt
+#
+# When satisfied with the preview, remove --dry-run to apply changes.
+
+name = "Dry-Run Preview Example"
+description = "Preview changes safely before applying"
+version = "1.0.0"
+
+[settings]
+# Preserve original line endings when editing files
+preserve_line_endings = true
+
+# Step 1: Normalize whitespace in indentation
+# Replace tabs with 4 spaces
+[[step]]
+type = "substitute"
+description = "Convert tabs to 4 spaces"
+pattern = '\t'
+replacement = "    "
+flags = ["global"]
+
+# Step 2: Remove trailing whitespace
+[[step]]
+type = "substitute"
+description = "Remove trailing whitespace"
+pattern = '[ \t]+$'
+replacement = ""
+
+# Step 3: Standardize TODO comments
+[[step]]
+type = "substitute"
+description = "Standardize TODO format"
+pattern = '(?i)\b(todo|fixme|hack|xxx)\b:?\s*'
+replacement = "TODO: "
+flags = ["global"]
+
+# Dry-run output format:
+# ----------------------------------------
+# For each file, shows:
+#   - Original line (marked with -)
+#   - Modified line (marked with +)
+#   - Only lines that would change are shown
+#
+# Example output:
+#   src/main.rs:
+#   -		let x = 1;    # original has tabs
+#   +    let x = 1;    # converted to spaces
+#
+# Exit codes:
+#   0 - Changes would be made
+#   1 - No changes needed
+# ----------------------------------------
+#
+# Best practices:
+# 1. Always use --dry-run first when processing important files
+# 2. Review the diff output carefully
+# 3. Use --backup when applying changes to create .bak files
+# 4. Combine with -i for in-place editing after preview
