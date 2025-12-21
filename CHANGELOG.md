@@ -24,10 +24,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `fpe_decrypt` transform for reversible encryption
   - Preserves data format (encrypted digits remain digits)
   - Configurable radix (character set) for encryption
+  - Support for external key files via `key_file` and `tweak_file` parameters
 - **Deterministic Masking**: `mask_deterministic` transform for consistent masking
   - Same input+seed always produces same output
   - Preserve prefix/suffix characters (e.g., first 4 and last 4)
+  - Support for external seed files via `seed_file` parameter
   - Useful for joining masked datasets or consistent test data
+- **Syntax-Aware Processing** (requires `--features tree-sitter`):
+  - Structure-aware pattern matching using tree-sitter parsing
+  - Basic scopes: `code`, `strings`, `comments`, `functions`
+  - Fine-grained scopes: `function_calls`, `imports`, `types`, `identifiers`, `macros`, `control_flow`
+  - **Tests scope**: Language-aware test detection (`scope = "tests"` or `exclude_scopes = ["tests"]`)
+    - Rust: `#[test]` attributes, `mod tests` blocks
+    - Python: `test_` prefix functions, `Test` prefix classes
+    - JavaScript/TypeScript: `describe()`, `it()`, `test()` blocks
+    - Go: `Test`, `Benchmark`, `Example` prefix functions
+  - 7 languages: Rust, Python, JavaScript, TypeScript, Go, JSON, YAML
+  - Multi-language steps: `languages = ["rust", "python", "typescript"]`
+  - Exclude scopes: `exclude_scopes = ["comments", "strings", "tests"]`
+  - Refactor code without changing strings or comments
+  - Example: `scope = "code"` with `language = "rust"` to only match in code
+- **Streaming Pipeline Server**: `--server` mode for network-based processing
+  - TCP server that accepts pipeline configurations and text to process
+  - Line-based JSON protocol for easy integration
+  - Support for default pipeline configuration
+  - Async mode available with `--features async`
+- **Continuous Streaming Mode**: `--stream` with URI-based sources and sinks
+  - Input sources: `stdin://`, `file:///path`, `tcp://host:port`, `udp://host:port`
+  - Output sinks: `stdout://`, `stderr://`, `file:///path`, `tcp://host:port`, `udp://host:port`
+  - Example: `rexpipe --config pipeline.toml --input tcp://0.0.0.0:5140 --output file:///var/log/processed.log`
+- **Apache Kafka Integration** (requires `--features kafka`):
+  - Consume messages from Kafka topics as input source
+  - Produce processed messages to Kafka topics as output sink
+  - URI format: `kafka://broker:port/topic?group_id=consumer-group`
+  - Built on rdkafka/librdkafka for production-grade reliability
+  - Example: `rexpipe --stream --input kafka://localhost:9092/raw-logs --output kafka://localhost:9092/processed-logs`
 - Crate-level documentation with usage examples and doc-tests
 - Working doctests for `ResolvedLibrary::contains` and `ResolvedLibrary::pattern_names`
 

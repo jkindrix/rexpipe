@@ -15,6 +15,12 @@ rexpipe transforms regex text processing from a fragmented, debugging-intensive,
 - **Streaming Architecture**: Constant memory usage regardless of file size
 - **TOML Configuration**: Version-controllable, shareable pipeline definitions
 - **Performance Focus**: 3-5x faster than equivalent multi-tool pipelines
+- **Block Processing**: Cross-line state machine for multi-line patterns (stack traces, log blocks)
+- **Pattern Discovery**: Analyze input to detect common patterns and generate configurations
+- **Git Integration**: Clean/smudge filters for automatic file transformation
+- **Syntax-Aware**: Tree-sitter integration for scope-limited matching (code, strings, comments)
+- **Data Protection**: FPE encryption and deterministic masking for sensitive data
+- **Server Mode**: TCP server for network-based processing with simple JSON protocol
 
 ## Installation
 
@@ -193,6 +199,7 @@ rexpipe ships with two pattern libraries in `examples/patterns/`:
 - **extract**: Extract only the matched portions
 - **validate**: Ensure lines match required patterns
 - **transform**: Apply text transformations to matched content
+- **block**: Cross-line state machine for multi-line pattern processing
 
 ### Transform Actions
 
@@ -206,6 +213,14 @@ The transform step type supports the following actions:
 - **reverse**: Reverse the matched text
 - **remove_whitespace**: Remove all whitespace from matched text
 - **title_case**: Capitalize first letter of each word
+- **base64_encode**: Encode matched text as Base64
+- **base64_decode**: Decode Base64 matched text
+- **url_encode**: URL-encode matched text
+- **url_decode**: URL-decode matched text
+- **normalize_whitespace**: Replace runs of whitespace with single space
+- **fpe_encrypt**: Format-preserving encryption (requires `fpe` feature)
+- **fpe_decrypt**: Format-preserving decryption (requires `fpe` feature)
+- **mask_deterministic**: Consistent one-way masking with seed
 
 ## Filter Actions
 
@@ -902,6 +917,472 @@ cargo build --release --features async
 ```
 
 This enables the `AsyncMultiFileProcessor` for concurrent file operations using tokio.
+
+## Block Step Type
+
+The `block` step type enables cross-line pattern matching using a state machine approach. This is useful for extracting or processing multi-line patterns like stack traces, log entries, or delimited records.
+
+### Block Step Configuration
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `pattern` | string | Yes | - | Trigger pattern that starts a block |
+| `until` | string | No | - | Pattern that ends a block |
+| `block_action` | string/table | Yes | - | Action to apply to lines in the block |
+| `block_context` | integer | No | 0 | Number of context lines after trigger |
+
+### Block Actions
+
+- **keep_block**: Keep only lines within matching blocks
+- **drop_block**: Drop lines within matching blocks
+- **mark_block**: Prepend a marker to lines within blocks
+- **substitute_in_block**: Apply a substitution only within blocks
+- **collect_block**: Collect and output block contents together
+
+### Example: Extract Stack Traces
+
+```toml
+[[step]]
+type = "block"
+pattern = "^Exception:"
+until = "^\\s*at\\s+.*\\)$"
+block_action = "keep_block"
+description = "Extract Java stack traces"
+```
+
+### Example: Mark Log Sections
+
+```toml
+[[step]]
+type = "block"
+pattern = "^=== START TRANSACTION ==="
+until = "^=== END TRANSACTION ==="
+block_action = { mark_block = { marker = ">>> " } }
+description = "Mark transaction log entries"
+```
+
+## Pattern Discovery Mode
+
+Pattern discovery analyzes input to detect common patterns and suggests pipeline configurations.
+
+```bash
+# Analyze input for patterns
+cat data.txt | rexpipe --discover
+
+# Example output:
+# Pattern Discovery Results:
+# ========================
+# email (12 matches): [a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}
+# ipv4 (5 matches): \b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b
+# uuid (3 matches): [0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}
+#
+# Suggested pipeline:
+# [[step]]
+# type = "substitute"
+# pattern = "[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}"
+# replacement = "[REDACTED_EMAIL]"
+```
+
+Detected pattern types include: email, IPv4, IPv6, UUID, dates, URLs, phone numbers, credit cards, SSN, API keys, and more.
+
+## Git Filter Integration
+
+rexpipe can be configured as a git clean/smudge filter for automatic file transformation on commit/checkout.
+
+### Setup
+
+```bash
+# Generate git filter configuration
+rexpipe --git-filter-setup my-filter
+
+# This outputs:
+# Add to .git/config:
+#   [filter "my-filter"]
+#     clean = rexpipe --config .rexpipe/my-filter.toml
+#     smudge = rexpipe --config .rexpipe/my-filter.toml --reverse
+#
+# Add to .gitattributes:
+#   *.log filter=my-filter
+```
+
+### Use Cases
+
+- **Sanitize logs before commit**: Remove sensitive data automatically
+- **Format normalization**: Consistent line endings, whitespace
+- **Environment substitution**: Replace placeholders with environment-specific values
+
+## Format-Preserving Encryption (FPE)
+
+FPE allows reversible encryption that preserves the format of the original data. Requires the `fpe` feature.
+
+```bash
+cargo build --release --features fpe
+```
+
+### FPE Configuration Options
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `key` | string | Hex-encoded AES key (inline) |
+| `key_file` | string | Path to file containing the key |
+| `tweak` | string | Optional tweak value (inline) |
+| `tweak_file` | string | Path to file containing the tweak |
+| `radix` | string | Character set for encryption (default: `"0123456789"`) |
+
+**Note:** Use either `key` or `key_file`, not both. Same for `tweak`/`tweak_file`.
+
+### FPE Encrypt
+
+```toml
+# Using inline key
+[[step]]
+type = "transform"
+pattern = '\b(\d{4})-(\d{4})-(\d{4})-(\d{4})\b'
+transform = { fpe_encrypt = {
+    key = "0123456789ABCDEF0123456789ABCDEF",  # Hex-encoded AES key
+    tweak = "",                                 # Optional tweak
+    radix = "0123456789"                        # Character set
+}}
+description = "Encrypt credit card numbers (digits remain digits)"
+
+# Using external key file (recommended for production)
+[[step]]
+type = "transform"
+pattern = '\b(\d{4})-(\d{4})-(\d{4})-(\d{4})\b'
+transform = { fpe_encrypt = {
+    key_file = "/etc/rexpipe/fpe.key",         # Path to key file
+    tweak_file = "/etc/rexpipe/fpe.tweak",     # Optional tweak file
+    radix = "0123456789"
+}}
+description = "Encrypt credit card numbers using external key"
+```
+
+### FPE Decrypt
+
+```toml
+[[step]]
+type = "transform"
+pattern = '\b(\d{4})-(\d{4})-(\d{4})-(\d{4})\b'
+transform = { fpe_decrypt = {
+    key_file = "/etc/rexpipe/fpe.key",
+    radix = "0123456789"
+}}
+description = "Decrypt credit card numbers"
+```
+
+## Deterministic Masking
+
+Deterministic masking produces consistent output for the same input, allowing masked data to be joined across datasets.
+
+```toml
+# Using inline seed
+[[step]]
+type = "transform"
+pattern = '\d{3}-\d{2}-\d{4}'
+transform = { mask_deterministic = {
+    seed = "my-secret-seed",
+    preserve_prefix = 0,
+    preserve_suffix = 4,
+    mask_char = "X"
+}}
+description = "Mask SSN, keeping last 4 digits"
+# Input:  123-45-6789
+# Output: XXX-XX-6789
+
+# Using external seed file (recommended for production)
+[[step]]
+type = "transform"
+pattern = '\d{3}-\d{2}-\d{4}'
+transform = { mask_deterministic = {
+    seed_file = "/etc/rexpipe/masking.seed",
+    preserve_suffix = 4,
+    mask_char = "X"
+}}
+description = "Mask SSN using external seed file"
+```
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `seed` | string | - | Seed for deterministic hashing (inline) |
+| `seed_file` | string | - | Path to file containing the seed |
+| `preserve_prefix` | integer | 0 | Keep first N characters unchanged |
+| `preserve_suffix` | integer | 0 | Keep last N characters unchanged |
+| `mask_char` | char | '*' | Character to use for masking |
+
+**Note:** Use either `seed` or `seed_file`, not both. One must be specified.
+
+## Syntax-Aware Processing (Optional)
+
+Syntax-aware processing uses tree-sitter to parse code and apply patterns only within specific scopes (code, strings, comments, functions). Requires the `tree-sitter` feature.
+
+```bash
+cargo build --release --features tree-sitter
+```
+
+### Configuration
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `language` | string | Single language for parsing: rust, python, javascript, typescript, go, json, yaml |
+| `languages` | array | Multiple languages: `["rust", "python", "typescript"]` |
+| `scope` | string | Where to apply patterns (see Supported Scopes below) |
+| `exclude_scopes` | array | Scopes to exclude: `["comments", "strings"]` |
+
+### Example: Rename Function in Code Only
+
+```toml
+[[step]]
+type = "substitute"
+pattern = "old_function"
+replacement = "new_function"
+language = "rust"
+scope = "code"
+description = "Rename function in code, not in strings or comments"
+```
+
+### Example: Multi-Language Refactoring
+
+```toml
+[[step]]
+type = "substitute"
+pattern = "deprecated_api"
+replacement = "new_api"
+languages = ["rust", "python", "typescript"]
+scope = "function_calls"
+description = "Update API calls across multiple languages"
+```
+
+### Example: Exclude Specific Scopes
+
+```toml
+[[step]]
+type = "substitute"
+pattern = "TODO"
+replacement = "FIXME"
+language = "rust"
+exclude_scopes = ["strings", "comments"]
+description = "Replace TODO with FIXME, but only in code"
+```
+
+Given this Rust code:
+```rust
+fn old_function() {
+    // Call old_function here
+    let s = "old_function";
+    old_function();
+}
+```
+
+Result:
+```rust
+fn new_function() {           // <- renamed
+    // Call old_function here  // <- unchanged (comment)
+    let s = "old_function";    // <- unchanged (string)
+    new_function();            // <- renamed
+}
+```
+
+### Supported Scopes
+
+| Scope | Description |
+|-------|-------------|
+| `all` | Match anywhere (default) |
+| `code` | Match only in code (exclude strings and comments) |
+| `strings` | Match only in string literals |
+| `comments` | Match only in comments |
+| `functions` | Match only in function/method definitions |
+| `function_calls` | Match only in function/method calls |
+| `imports` | Match only in import/use statements |
+| `types` | Match only in type annotations |
+| `identifiers` | Match only in identifiers |
+| `macros` | Match only in macro invocations |
+| `control_flow` | Match only in control flow (if, for, while, match) |
+| `tests` | Match only in test code (see below) |
+
+### Tests Scope
+
+The `tests` scope identifies test-related code in a language-aware manner:
+
+| Language | Detection Method |
+|----------|------------------|
+| **Rust** | Functions with `#[test]`, `#[tokio::test]` attributes; `mod tests` blocks |
+| **Python** | Functions starting with `test_`; classes starting with `Test` |
+| **JavaScript/TypeScript** | `describe()`, `it()`, `test()`, `beforeEach()`, etc. |
+| **Go** | Functions starting with `Test`, `Benchmark`, or `Example` |
+
+```toml
+# Exclude test code from refactoring
+[[step]]
+type = "substitute"
+pattern = "old_api"
+replacement = "new_api"
+language = "rust"
+exclude_scopes = ["tests", "comments", "strings"]
+description = "Update API calls in production code only"
+```
+
+## Pipeline Server Mode
+
+rexpipe can run as a TCP server for network-based text processing.
+
+### Starting the Server
+
+```bash
+# Start server with default address
+rexpipe --server
+
+# Start on custom address
+rexpipe --server --bind 0.0.0.0:9000
+
+# Start with default pipeline configuration
+rexpipe --server --config my-pipeline.toml
+
+# Start with async mode (requires async feature)
+rexpipe --server --async
+```
+
+### Protocol
+
+The server uses a simple line-based protocol:
+
+```text
+# Client sends:
+{"step":[{"type":"substitute","pattern":"\\d+","replacement":"NUM"}]}
+---
+There are 42 apples.
+And 17 oranges.
+---
+
+# Server responds:
+There are NUM apples.
+And NUM oranges.
+---
+```
+
+### Protocol Steps
+
+1. Send JSON pipeline configuration on a single line (or skip to use default)
+2. Send `---` delimiter
+3. Send text to process (line by line)
+4. Send `---` delimiter or close connection
+5. Server responds with processed text followed by `---`
+
+### Example Client (bash)
+
+```bash
+# Using netcat
+{
+  echo '{"step":[{"type":"substitute","pattern":"\\d+","replacement":"NUM"}]}'
+  echo '---'
+  echo 'Test 123 data'
+  echo '---'
+} | nc localhost 8080
+```
+
+## Continuous Streaming Mode
+
+Continuous streaming mode enables long-running pipelines with URI-based sources and sinks for processing logs, network streams, or real-time data.
+
+### Starting Streaming Mode
+
+```bash
+# Process syslog via UDP
+rexpipe --config sanitize.toml --stream \
+    --input udp://0.0.0.0:514 \
+    --output file:///var/log/sanitized.log
+
+# TCP log aggregation
+rexpipe --config normalize.toml --stream \
+    --input tcp://0.0.0.0:5140 \
+    --output tcp://logserver.local:5140
+
+# File-to-file processing (continuous, handles new lines as they're appended)
+rexpipe --config transform.toml --stream \
+    --input file:///var/log/app.log \
+    --output stdout://
+```
+
+### Supported URIs
+
+| URI Scheme | Input | Output | Description |
+|------------|-------|--------|-------------|
+| `stdin://` | ✓ | - | Standard input |
+| `stdout://` | - | ✓ | Standard output |
+| `stderr://` | - | ✓ | Standard error |
+| `file:///path` | ✓ | ✓ | Local file (absolute path) |
+| `tcp://host:port` | ✓ | ✓ | TCP connection (client for input, server binds for output) |
+| `udp://host:port` | ✓ | ✓ | UDP socket |
+| `kafka://host:port/topic` | ✓ | ✓ | Apache Kafka (requires `kafka` feature) |
+
+### CLI Options for Streaming
+
+| Option | Description |
+|--------|-------------|
+| `--stream` | Enable continuous streaming mode |
+| `--input <URI>` | Input source URI (default: `stdin://`) |
+| `--output <URI>` | Output sink URI (default: `stdout://`) |
+
+### Use Cases
+
+**Log sanitization daemon:**
+```bash
+# Sanitize sensitive data from incoming syslog messages
+rexpipe --config pii-redact.toml --stream \
+    --input udp://0.0.0.0:514 \
+    --output file:///var/log/sanitized-syslog.log
+```
+
+**Real-time log transformation:**
+```bash
+# Normalize log format before forwarding to aggregator
+rexpipe --config log-normalize.toml --stream \
+    --input tcp://0.0.0.0:5000 \
+    --output tcp://elasticsearch.local:9200
+```
+
+**Development log filtering:**
+```bash
+# Filter and highlight development logs in real-time
+tail -F app.log | rexpipe --config dev-filter.toml --stream
+```
+
+### Kafka Integration (Optional)
+
+Kafka support enables consuming from and producing to Apache Kafka topics. Requires the `kafka` feature:
+
+```bash
+cargo build --release --features kafka
+```
+
+**Kafka URI Format:**
+```
+kafka://broker:port/topic
+kafka://broker:port/topic?group_id=my-consumer-group
+```
+
+**Examples:**
+
+```bash
+# Consume from Kafka, sanitize, write to file
+rexpipe --config sanitize.toml --stream \
+    --input kafka://localhost:9092/raw-logs?group_id=sanitizer \
+    --output file:///var/log/sanitized.log
+
+# Read from file, produce to Kafka
+rexpipe --config transform.toml --stream \
+    --input file:///var/log/app.log \
+    --output kafka://kafka.local:9092/processed-logs
+
+# Kafka to Kafka transformation pipeline
+rexpipe --config normalize.toml --stream \
+    --input kafka://broker:9092/input-topic?group_id=processor \
+    --output kafka://broker:9092/output-topic
+```
+
+**Configuration options for consumers:**
+- `group_id` - Consumer group ID (query parameter, defaults to "rexpipe-consumer")
+
+**Note:** The `kafka` feature requires librdkafka. The build uses cmake to compile it from source.
 
 ## Acknowledgments
 
