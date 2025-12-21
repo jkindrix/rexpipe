@@ -5,6 +5,55 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0] - 2024-12-21
+
+### Changed
+
+**AI-Native Text Processor Transformation**
+
+This release transforms rexpipe from a general-purpose text processor into a focused,
+AI-native tool optimized for use by AI agents and automated pipelines.
+
+#### AI-Native Behavior Changes
+- **JSON output as default for pipes**: When stdout is not a terminal (piped output),
+  JSON is now the default format. Use `--text` to force plain text output.
+- **Safer in-place editing**: In non-interactive mode (piped/scripted), in-place
+  editing (`-i`) now requires explicit `--apply` flag. Without it, a dry-run preview
+  is shown instead. This prevents accidental file modifications by AI agents.
+- **Structured error output**: `--error-format json` provides machine-parseable
+  errors with categories, exit codes, and suggestions.
+
+#### New Features
+- `--explain`: Describe what a pipeline will do without processing data
+  - Lists each step, patterns, and transformations
+  - JSON output with `--json` flag for AI consumption
+- `--verify`: Output verification summary after processing
+  - Confirms lines processed, matches found, transformations applied
+  - JSON output with `--json` flag for programmatic verification
+- `--apply`: Explicitly confirm in-place modifications
+  - Required for `-i` in non-interactive mode
+  - Prevents accidental file changes
+- `--text`: Force plain text output when piping (override JSON default)
+
+### Removed
+
+**Focus on Core Primitives** - Removed ~2,500 lines of non-essential code:
+
+- **Natural Language Interface** (`natural.rs`): AI agents don't need natural
+  language interfaces - they can use the CLI directly
+- **TUI Dashboard** (`tui.rs`): AI agents don't need interactive dashboards
+- **Python Bindings** (`python.rs`): Premature optimization - can add later if needed
+- **Apache Kafka Integration**: Broken functionality that distracted from core value
+  - Removed Kafka source/sink from stream module
+  - Removed `kafka` feature flag and rdkafka dependency
+- **TUI Feature**: Removed ratatui and crossterm dependencies
+
+### Technical Notes
+- All 256 tests continue to pass
+- Zero clippy warnings
+- Schema version 1.0 included in all JSON responses for forward compatibility
+- Existing core functionality (streaming, pipelines, patterns, inspection) unchanged
+
 ## [Unreleased]
 
 ### Added
@@ -155,7 +204,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Inspection Mode**: Interactive debugging with match visualization
 - **Performance Metrics**: Processing statistics and throughput reporting
 
-[Unreleased]: https://github.com/jkindrix/rexpipe/compare/v1.1.0...HEAD
+[2.0.0]: https://github.com/jkindrix/rexpipe/compare/v1.1.0...v2.0.0
+[Unreleased]: https://github.com/jkindrix/rexpipe/compare/v2.0.0...HEAD
 [1.1.0]: https://github.com/jkindrix/rexpipe/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/jkindrix/rexpipe/compare/v0.1.0...v1.0.0
 [0.1.0]: https://github.com/jkindrix/rexpipe/releases/tag/v0.1.0

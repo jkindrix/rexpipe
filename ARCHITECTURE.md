@@ -1,6 +1,32 @@
 # rexpipe Architecture
 
-This document describes the high-level architecture and design decisions of rexpipe, a unified regex pipeline processor for text transformation.
+This document describes the high-level architecture and design decisions of rexpipe, an AI-native regex pipeline processor for text transformation.
+
+## Design Philosophy: AI-Native First
+
+rexpipe v2.0 was redesigned with AI agents as the primary user persona. This informs several architectural decisions:
+
+| Human Tool Design | AI-Native Tool Design |
+|-------------------|----------------------|
+| Terse syntax, muscle memory | Explicit, predictable semantics |
+| Text output for reading | JSON output for parsing |
+| Silent failures OK | Structured errors with suggestions |
+| Trust the user | Safe-by-default operations |
+| One-off commands | Composable, verifiable pipelines |
+
+### AI-Native Features
+
+1. **JSON by Default for Pipes**: When stdout is not a TTY, output is JSON. The `should_use_json()` function in `main.rs` implements this logic.
+
+2. **Structured Errors**: `--error-format json` outputs errors with category, exit code, and suggestion fields for programmatic handling.
+
+3. **Safe In-Place Editing**: In non-interactive mode, `--apply` is required for destructive operations. This prevents accidental file modifications by automated agents.
+
+4. **Explain Mode**: `--explain` describes what a pipeline will do without executing it, allowing agents to validate configuration before running.
+
+5. **Verify Mode**: `--verify` outputs a verification summary after processing, confirming what was done.
+
+6. **Schema Versioning**: All JSON output includes `schema_version: "1.0"` for forward compatibility.
 
 ## Overview
 

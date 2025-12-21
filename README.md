@@ -1,26 +1,44 @@
 # rexpipe
 
-A unified regex pipeline processor for text transformation.
+**The text processor AI agents trust.**
 
-## Overview
+An AI-native regex pipeline processor optimized for use by AI agents and automated text processing pipelines.
 
-rexpipe transforms regex text processing from a fragmented, debugging-intensive, resource-heavy activity into a unified, transparent, and efficient workflow.
+## Why rexpipe?
 
-## Key Features
+AI agents have fundamentally different needs than humans using `sed`, `awk`, and `grep`:
 
-- **Unified Processing**: Single process handles multiple regex operations
-- **Pattern Libraries**: Reusable regex patterns with `${pattern.name}` syntax
-- **Multi-File Processing**: Recursive search, in-place editing, grep-like output modes
-- **Interactive Debugging**: Real-time pattern inspection and match visualization
+| Human Needs | AI Agent Needs |
+|-------------|----------------|
+| Muscle memory, terse syntax | Predictable semantics |
+| Silent failures are OK | Rich, structured errors |
+| Text output to read | Machine-readable JSON |
+| Trust the user | Safe by default |
+| One-off commands | Composable pipelines |
+
+**rexpipe is built for AI agents first.**
+
+## AI-Native Features
+
+- **JSON by default for pipes** - When stdout is not a TTY, output is JSON
+- **Structured errors** - `--error-format json` for machine-parseable errors
+- **Safe in-place editing** - Requires `--apply` in non-interactive mode
+- **Explain before execute** - `--explain` describes what pipeline will do
+- **Verify after execute** - `--verify` confirms what was done
+- **Schema versioning** - All JSON includes `schema_version` for stability
+
+## Core Features
+
 - **Streaming Architecture**: Constant memory usage regardless of file size
+- **Pattern Libraries**: Reusable regex patterns with `${pattern.name}` syntax
+- **Multi-File Processing**: Recursive search, in-place editing, grep-like modes
+- **Atomic Operations**: Safe mutations with automatic backup
+- **Dry-Run Preview**: See changes before applying
 - **TOML Configuration**: Version-controllable, shareable pipeline definitions
-- **Performance Focus**: 3-5x faster than equivalent multi-tool pipelines
-- **Block Processing**: Cross-line state machine for multi-line patterns (stack traces, log blocks)
-- **Pattern Discovery**: Analyze input to detect common patterns and generate configurations
-- **Git Integration**: Clean/smudge filters for automatic file transformation
-- **Syntax-Aware**: Tree-sitter integration for scope-limited matching (code, strings, comments)
-- **Data Protection**: FPE encryption and deterministic masking for sensitive data
-- **Server Mode**: TCP server for network-based processing with simple JSON protocol
+- **Audit Trails**: Cryptographic provenance tracking for compliance
+- **Block Processing**: Cross-line state machine for multi-line patterns
+- **Syntax-Aware**: Tree-sitter integration for scope-limited matching (optional)
+- **Data Protection**: FPE encryption and deterministic masking (optional)
 
 ## Installation
 
@@ -54,7 +72,24 @@ The MSRV is enforced in `Cargo.toml` via `rust-version = "1.85"` and tested in C
 
 ```bash
 echo "Test 123 and 456" | rexpipe --pattern '\d+' --replacement 'NUMBER'
-# Output: Test NUMBER and NUMBER
+# Output (JSON when piped): {"metadata":{"schema_version":"1.0",...},"data":{...}}
+# Use --text for plain text: Test NUMBER and NUMBER
+```
+
+### AI-Native Workflow
+
+```bash
+# 1. Explain what pipeline will do (before running)
+rexpipe -c pipeline.toml --explain
+
+# 2. Process with verification
+echo "data 123" | rexpipe -p '\d+' -r 'X' --verify
+
+# 3. Safe in-place editing (requires --apply)
+rexpipe -p 'old' -r 'new' -i --apply *.txt
+
+# 4. Get structured errors for parsing
+rexpipe -p '[invalid' --error-format json 2>&1
 ```
 
 ### Configuration-Based Processing
@@ -66,8 +101,8 @@ rexpipe --config examples/log-cleanup.toml < access.log > cleaned.log
 # Inspect patterns before processing
 rexpipe --config examples/log-cleanup.toml --inspect < sample.log
 
-# Interactive debugging
-rexpipe --config examples/log-cleanup.toml --inspect --interactive < sample.log
+# Preview in-place changes (dry-run)
+rexpipe --config cleanup.toml -i --dry-run src/
 ```
 
 ## Configuration Format
@@ -493,7 +528,14 @@ OPTIONS:
     -l, --files-with-matches      Only list files containing matches
     -L, --files-without-matches   Only list files not containing matches
     -q, --quiet                   Quiet mode - only set exit code
-        --json                    Output results as JSON
+        --json                    Force JSON output (default when piped)
+        --text                    Force plain text output (override JSON default)
+        --error-format <FMT>      Error output format: text (default) or json
+
+    # AI-Native Features
+        --explain                 Describe what pipeline will do (no processing)
+        --verify                  Output verification summary after processing
+        --apply                   Confirm in-place edits (required when scripted)
 
     # Context Lines
     -B, --before-context <NUM>    Show NUM lines before each match
@@ -1312,7 +1354,6 @@ rexpipe --config transform.toml --stream \
 | `file:///path` | ✓ | ✓ | Local file (absolute path) |
 | `tcp://host:port` | ✓ | ✓ | TCP connection (client for input, server binds for output) |
 | `udp://host:port` | ✓ | ✓ | UDP socket |
-| `kafka://host:port/topic` | ✓ | ✓ | Apache Kafka (requires `kafka` feature) |
 
 ### CLI Options for Streaming
 
@@ -1345,44 +1386,6 @@ rexpipe --config log-normalize.toml --stream \
 # Filter and highlight development logs in real-time
 tail -F app.log | rexpipe --config dev-filter.toml --stream
 ```
-
-### Kafka Integration (Optional)
-
-Kafka support enables consuming from and producing to Apache Kafka topics. Requires the `kafka` feature:
-
-```bash
-cargo build --release --features kafka
-```
-
-**Kafka URI Format:**
-```
-kafka://broker:port/topic
-kafka://broker:port/topic?group_id=my-consumer-group
-```
-
-**Examples:**
-
-```bash
-# Consume from Kafka, sanitize, write to file
-rexpipe --config sanitize.toml --stream \
-    --input kafka://localhost:9092/raw-logs?group_id=sanitizer \
-    --output file:///var/log/sanitized.log
-
-# Read from file, produce to Kafka
-rexpipe --config transform.toml --stream \
-    --input file:///var/log/app.log \
-    --output kafka://kafka.local:9092/processed-logs
-
-# Kafka to Kafka transformation pipeline
-rexpipe --config normalize.toml --stream \
-    --input kafka://broker:9092/input-topic?group_id=processor \
-    --output kafka://broker:9092/output-topic
-```
-
-**Configuration options for consumers:**
-- `group_id` - Consumer group ID (query parameter, defaults to "rexpipe-consumer")
-
-**Note:** The `kafka` feature requires librdkafka. The build uses cmake to compile it from source.
 
 ## Acknowledgments
 
