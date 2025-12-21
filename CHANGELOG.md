@@ -8,6 +8,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Audit Trail & Provenance Tracking** (`audit.rs`): Compliance-first data pipeline support
+  - Cryptographic verification with SHA-256 fingerprints of input/output data
+  - Immutable provenance manifests in JSON format for transformation history
+  - Optional digital signatures for audit records
+  - Human-readable compliance reports for GDPR, HIPAA, PCI-DSS requirements
+  - CLI: `--audit` flag enables audit trail, `--audit-dir` sets output directory
+- **Bidirectional Pipelines** (`bidirectional.rs`): Reversible text transformations
+  - Store transformation mappings for bidirectional recovery
+  - Run pipelines in forward or reverse mode
+  - Reversibility analysis for pipeline steps
+  - CLI: `--reverse` runs in reverse mode, `--mapping-file` for mapping storage
+- **Checkpoint/Incremental Processing** (`checkpoint.rs`): Resume interrupted processing
+  - Save and restore processing state across runs
+  - Track file positions and content hashes
+  - Git integration: `--git-diff REF` processes only changed lines since a commit
+  - CLI: `--checkpoint FILE` enables incremental processing
+- **Cross-File Relationships** (`crossfile.rs`): Semantic relationship processing
+  - Define cross-file rules with trigger patterns and related file detection
+  - File grouping with glob patterns
+  - Violation actions: warn, error, fix
+  - Ensure consistency across related files (e.g., header and source files)
+- **Pattern Learning** (`learn.rs`): Infer regex patterns from examples
+  - Example-based learning from positive and negative examples
+  - Pattern generalization with confidence scoring
+  - Template matching for common patterns (email, URL, SSN, etc.)
+  - CLI: `--learn` with `--positive` and `--negative` example flags
+- **Pipeline Testing Framework** (`testing.rs`): First-class test support
+  - Define test cases in pipeline configuration with `[[tests]]` sections
+  - Test expected output, match counts, and transformation counts
+  - Multiple output formats: text, TAP, JUnit XML
+  - CLI: `--test` runs tests, `--test-format` selects output format
 - **Block Step Type**: Cross-line state machine processing for multi-line patterns
   - Define block boundaries with trigger (`pattern`) and `until` patterns
   - Block actions: `keep_block`, `drop_block`, `mark_block`, `substitute_in_block`, `collect_block`
