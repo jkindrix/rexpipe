@@ -18,6 +18,8 @@ rexpipe transforms regex text processing from a fragmented, debugging-intensive,
 
 ## Installation
 
+**Requirements:** Rust 1.85+ (Rust 2024 edition)
+
 ```bash
 cargo install rexpipe
 ```
@@ -29,6 +31,16 @@ git clone https://github.com/example/rexpipe
 cd rexpipe
 cargo build --release
 ```
+
+### Minimum Supported Rust Version (MSRV)
+
+rexpipe requires **Rust 1.85.0** or later. This version was chosen because:
+
+- **Rust 2024 Edition**: Access to the latest language features and improved pattern matching ergonomics
+- **Stable async features**: Full async/await support with recent improvements
+- **Enhanced error handling**: Better `?` operator behavior and error display
+
+The MSRV is enforced in `Cargo.toml` via `rust-version = "1.85"` and tested in CI.
 
 ## Quick Start
 
@@ -208,6 +220,233 @@ The transform step type supports the following actions:
 - **drop_line**: Drop entire line if pattern matches
 - **keep_match**: Keep only if pattern matches
 - **drop_match**: Drop only if pattern matches
+
+## TOML Configuration Reference
+
+This section provides a complete reference for all configuration fields.
+
+### Pipeline Configuration
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `name` | string | No | `null` | Pipeline name for display |
+| `description` | string | No | `null` | Pipeline description |
+| `version` | string | No | `null` | Pipeline version (semver recommended) |
+| `patterns_include` | array | No | `[]` | Pattern library files to include |
+| `settings` | table | No | defaults | Global pipeline settings |
+| `step` | array | **Yes** | - | Array of processing steps |
+
+**Example:**
+```toml
+name = "My Pipeline"
+description = "Processes log files"
+version = "1.0.0"
+patterns_include = ["patterns/common.toml"]
+
+[settings]
+timeout_ms = 5000
+
+[[step]]
+# ... step definitions
+```
+
+### Settings Table
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `pcre_mode` | bool | `false` | Use PCRE-compatible regex (lookahead/lookbehind) |
+| `fixed_strings` | bool | `false` | Treat patterns as literal strings |
+| `context_before` | int | `0` | Lines of context before matches |
+| `context_after` | int | `0` | Lines of context after matches |
+| `timeout_ms` | int | `0` | Shell command timeout in milliseconds (0 = no timeout) |
+| `allow_shell` | bool | `true` | Allow shell transform execution |
+| `strict_mode` | bool | `false` | Reject potentially dangerous ReDoS patterns |
+
+**Example:**
+```toml
+[settings]
+pcre_mode = true
+timeout_ms = 5000
+strict_mode = true
+```
+
+### Step Definition
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `type` | string | No | `"substitute"` | Step type (see Step Types) |
+| `pattern` | string | **Yes** | - | Regex pattern or `${ref}` reference |
+| `replacement` | string | Conditional | `null` | Replacement text (required for substitute, prepend, append) |
+| `action` | string | Conditional | `null` | Filter action (required for filter type) |
+| `transform` | string/table | Conditional | `null` | Transform action (required for transform type) |
+| `flags` | array | No | `[]` | Regex flags |
+| `description` | string | No | `null` | Step description |
+| `enabled` | bool | No | `true` | Whether step is active |
+
+### Step Types
+
+| Type | Description | Required Fields |
+|------|-------------|-----------------|
+| `substitute` | Replace matched text | `pattern`, `replacement` |
+| `filter` | Keep or drop lines | `pattern`, `action` |
+| `extract` | Extract matched portions | `pattern` |
+| `validate` | Ensure lines match pattern | `pattern` |
+| `transform` | Apply text transformation | `pattern`, `transform` |
+
+### Filter Actions
+
+| Action | Description |
+|--------|-------------|
+| `keep_line` | Keep entire line if pattern matches anywhere |
+| `drop_line` | Drop entire line if pattern matches anywhere |
+| `keep_match` | Keep only the matched portion of text |
+| `drop_match` | Remove matched portions, keep rest |
+
+### Transform Actions
+
+**Simple transforms** (string value):
+
+| Transform | Description |
+|-----------|-------------|
+| `uppercase` | Convert matched text to UPPERCASE |
+| `lowercase` | Convert matched text to lowercase |
+| `title_case` | Capitalize First Letter Of Each Word |
+| `trim` | Remove leading/trailing whitespace |
+| `remove_whitespace` | Remove all whitespace |
+| `normalize_whitespace` | Replace runs of whitespace with single space |
+| `reverse` | Reverse character order |
+| `base64_encode` | Base64 encode matched text |
+| `base64_decode` | Base64 decode matched text |
+| `url_encode` | URL-encode special characters |
+| `url_decode` | URL-decode escaped characters |
+| `char_count` | Replace with character count |
+| `word_count` | Replace with word count |
+| `sort_chars` | Sort characters alphabetically |
+| `deduplicate` | Remove duplicate lines |
+| `prepend` | Add `replacement` text before match |
+| `append` | Add `replacement` text after match |
+
+**Shell transform** (table value):
+```toml
+transform.shell.command = "base64"
+```
+
+**Plugin transform** (table value):
+```toml
+transform.plugin.name = "my_plugin"
+transform.plugin.args = ["arg1", "arg2"]
+```
+
+### Regex Flags
+
+| Flag | Description |
+|------|-------------|
+| `global` | Replace all matches (not just first) |
+| `case_insensitive` | Case-insensitive matching |
+| `multiline` | `^` and `$` match line boundaries |
+| `dot_all` | `.` matches newlines |
+| `unicode` | Enable Unicode character classes |
+| `extended` | Allow whitespace and comments in pattern |
+
+### Replacement Syntax
+
+Replacement strings support capture group references:
+
+| Syntax | Description |
+|--------|-------------|
+| `${1}` | First capture group |
+| `${2}` | Second capture group |
+| `${name}` | Named capture group |
+| `$0` or `${0}` | Entire match |
+
+**Example:**
+```toml
+[[step]]
+type = "substitute"
+pattern = '(\w+)@(\w+\.com)'
+replacement = '${2}/${1}'  # email@domain.com → domain.com/email
+```
+
+### Pattern Library Format
+
+Pattern libraries use the same TOML format with a `patterns` table:
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | string | No | Library name |
+| `description` | string | No | Library description |
+| `version` | string | No | Library version |
+| `patterns_include` | array | No | Other libraries to include |
+| `patterns` | table | **Yes** | Pattern definitions |
+
+**Pattern definitions** can be flat or nested:
+```toml
+[patterns]
+# Flat pattern
+email = '[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'
+
+# Nested patterns (accessed as ${category.name})
+[patterns.net]
+ipv4 = '\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}'
+mac = '([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}'
+```
+
+### Complete Example
+
+```toml
+name = "Production Log Processor"
+description = "Sanitizes and normalizes production logs"
+version = "2.0.0"
+patterns_include = ["patterns/common.toml"]
+
+[settings]
+pcre_mode = false
+timeout_ms = 10000
+strict_mode = true
+
+# Step 1: Normalize timestamps
+[[step]]
+type = "substitute"
+description = "Standardize ISO8601 timestamps"
+pattern = '(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})'
+replacement = '${1}/${2}/${3} ${4}:${5}:${6}'
+flags = ["global"]
+enabled = true
+
+# Step 2: Remove debug noise
+[[step]]
+type = "filter"
+description = "Drop debug messages"
+pattern = '\[DEBUG\]'
+action = "drop_line"
+enabled = true
+
+# Step 3: Uppercase error levels
+[[step]]
+type = "transform"
+description = "Uppercase log levels"
+pattern = '\[(error|warn|info)\]'
+transform = "uppercase"
+flags = ["global", "case_insensitive"]
+enabled = true
+
+# Step 4: Redact sensitive data
+[[step]]
+type = "substitute"
+description = "Mask credit card numbers"
+pattern = '\b\d{4}[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{4}\b'
+replacement = '****-****-****-XXXX'
+flags = ["global"]
+enabled = true
+
+# Step 5: Add timestamp prefix via shell
+[[step]]
+type = "transform"
+description = "Add processing timestamp"
+pattern = '^'
+transform.shell.command = "date '+[%Y-%m-%d %H:%M:%S] '"
+enabled = false  # Disabled by default
+```
 
 ## Command Line Options
 
@@ -479,6 +718,114 @@ rexpipe -p 'old_value' -r 'new_value' -I --dry-run src/
 # Preview shows unified diff of all changes that would be made
 # without actually modifying any files
 ```
+
+### Debugging with Structured Logging
+
+rexpipe uses the `RUST_LOG` environment variable for structured logging. This is helpful for debugging pipeline execution, understanding file discovery, and diagnosing issues.
+
+```bash
+# Enable debug-level logging for rexpipe
+RUST_LOG=rexpipe=debug rexpipe -c pipeline.toml < input.txt
+
+# Enable trace-level logging (most verbose, includes per-line processing)
+RUST_LOG=rexpipe=trace rexpipe -c pipeline.toml < input.txt
+
+# Enable debug for specific modules
+RUST_LOG=rexpipe::files=debug,rexpipe::processor=trace rexpipe -c pipeline.toml src/
+
+# Combine with quiet mode to see only logs, not output
+RUST_LOG=rexpipe=debug rexpipe -c pipeline.toml -q < input.txt
+```
+
+**Log levels:**
+- `error`: Critical failures only
+- `warn`: Warnings and errors (default)
+- `info`: High-level operations (file discovery counts, processing summaries)
+- `debug`: Detailed operations (configuration loading, file-by-file processing)
+- `trace`: Per-line processing details (most verbose)
+
+Logs are written to stderr, so they don't interfere with pipeline output on stdout.
+
+## Edge Cases and Behavior
+
+This section documents how rexpipe handles various edge cases.
+
+### Empty Files
+
+- Empty files (0 bytes) are processed without error
+- Processing returns with 0 matches found
+- In-place editing on empty files creates an empty output
+- Empty lines within files are processed normally (filters can match `^$`)
+
+### Large Files and Long Lines
+
+- **Streaming architecture**: Files are processed line-by-line, so memory usage remains constant regardless of file size
+- **Very long lines**: Lines of any length are supported, limited only by available memory
+- **Recommendation**: For files with extremely long lines (>10MB per line), consider preprocessing to add line breaks
+
+### Timeout Behavior
+
+- **Shell transforms** have a configurable timeout (default: varies by setting)
+- **Timeout setting**: Use `settings.timeout_ms` in TOML configs to control shell command timeout
+- **On timeout**: Shell transform returns the original matched text unchanged
+- **Progress feedback**: Long-running operations show progress when `--progress` is used
+
+### Binary Files
+
+- rexpipe is designed for text processing
+- Binary files may produce unexpected results
+- Use `--glob` patterns to exclude binary files (e.g., `-e '*.exe' -e '*.bin'`)
+
+### Unicode and Encoding
+
+- Input is expected to be valid UTF-8
+- Invalid UTF-8 sequences are replaced with the Unicode replacement character (U+FFFD)
+- Unicode patterns are fully supported in both standard and PCRE modes
+- Named character classes (e.g., `\pL` for letters) work in standard mode
+
+### In-Place Editing Safety
+
+- **Atomic writes**: Files are written to a temporary file first, then renamed
+- **No partial writes**: If the process is interrupted, original files remain intact
+- **Backup option**: Use `--backup <suffix>` to keep original files
+- **Dry-run preview**: Use `--dry-run` with `-I` to see what would change before committing
+
+### Circular Library Includes
+
+- rexpipe detects circular library includes (A includes B, B includes A)
+- Deep nesting is limited (default max depth: 32)
+- Clear error messages indicate the include chain when circular references are detected
+
+### Zero Matches
+
+- Exit code 1 is returned when no matches are found (grep-like behavior)
+- Use `-q` (quiet) to suppress output and only check exit code
+- When processing multiple files, the exit code reflects whether any file had matches
+
+### Parallel Processing Thresholds
+
+- Parallel processing (`-j`) is only used when file count exceeds a threshold
+- This avoids overhead for small file sets where sequential is faster
+
+### Symlinks and Path Traversal
+
+- **Symlinks are not followed**: For security, rexpipe does not follow symbolic links during directory traversal
+- **No path traversal attacks**: Malicious symlinks pointing outside the intended directory tree are ignored
+- **Symlink files**: Symlinks to files are listed but not dereferenced (the symlink itself is matched, not the target)
+- **In-place editing**: If a path passed directly is a symlink, rexpipe operates on the symlink's target (standard behavior for `File::open`)
+
+This design prevents:
+- Infinite loops from circular symlinks
+- Accidental modification of files outside the working tree
+- Directory escape attacks via crafted symlinks
+
+### Graceful Shutdown
+
+- rexpipe handles Ctrl+C (SIGINT) and SIGTERM signals gracefully
+- When interrupted, in-progress files complete normally to avoid leaving files in a partial state
+- Files that haven't started processing are skipped
+- Progress bar shows "Interrupted" status with counts of completed and remaining files
+- In-place edits use atomic writes, so even interrupted operations won't corrupt files
 
 ## Testing
 
