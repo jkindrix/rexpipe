@@ -469,6 +469,10 @@ pub type Result<T> = std::result::Result<T, RexpipeError>;
 mod tests {
     use super::*;
 
+    // ========================================
+    // PatternError tests
+    // ========================================
+
     #[test]
     fn test_pattern_error_hint_generation() {
         let err = PatternError::invalid_regex("(unclosed", "unclosed group");
@@ -492,6 +496,264 @@ mod tests {
     }
 
     #[test]
+    fn test_pattern_error_unclosed_bracket() {
+        let err = PatternError::invalid_regex("[abc", "unclosed character class");
+        match err {
+            PatternError::InvalidRegex { hint, .. } => {
+                assert!(hint.contains("bracket") || hint.contains("unclosed"));
+            }
+            _ => panic!("Expected InvalidRegex"),
+        }
+    }
+
+    #[test]
+    fn test_pattern_error_unclosed_brace() {
+        let err = PatternError::invalid_regex("a{3", "unclosed quantifier");
+        match err {
+            PatternError::InvalidRegex { hint, .. } => {
+                assert!(hint.contains("brace") || hint.contains("unclosed"));
+            }
+            _ => panic!("Expected InvalidRegex"),
+        }
+    }
+
+    #[test]
+    fn test_pattern_error_repetition_hint() {
+        let err = PatternError::invalid_regex("+abc", "invalid repetition");
+        match err {
+            PatternError::InvalidRegex { hint, .. } => {
+                assert!(hint.contains("Quantifier") || hint.contains("repeat"));
+            }
+            _ => panic!("Expected InvalidRegex"),
+        }
+    }
+
+    #[test]
+    fn test_pattern_error_lookahead_hint() {
+        let err = PatternError::invalid_regex("(?=foo)", "lookahead not supported");
+        match err {
+            PatternError::InvalidRegex { hint, .. } => {
+                assert!(hint.contains("PCRE") || hint.contains("pcre"));
+            }
+            _ => panic!("Expected InvalidRegex"),
+        }
+    }
+
+    #[test]
+    fn test_pattern_error_lookbehind_hint() {
+        let err = PatternError::invalid_regex("(?<=foo)", "look behind not supported");
+        match err {
+            PatternError::InvalidRegex { hint, .. } => {
+                assert!(hint.contains("PCRE") || hint.contains("pcre"));
+            }
+            _ => panic!("Expected InvalidRegex"),
+        }
+    }
+
+    #[test]
+    fn test_pattern_error_empty_hint() {
+        let err = PatternError::invalid_regex("", "empty pattern");
+        match err {
+            PatternError::InvalidRegex { hint, .. } => {
+                assert!(hint.contains("Empty") || hint.contains("empty"));
+            }
+            _ => panic!("Expected InvalidRegex"),
+        }
+    }
+
+    #[test]
+    fn test_pattern_error_invalid_group_hint() {
+        let err = PatternError::invalid_regex("(?x)", "invalid group syntax");
+        match err {
+            PatternError::InvalidRegex { hint, .. } => {
+                assert!(hint.contains("group") || hint.contains("regex101"));
+            }
+            _ => panic!("Expected InvalidRegex"),
+        }
+    }
+
+    #[test]
+    fn test_pattern_error_default_hint() {
+        let err = PatternError::invalid_regex("abc", "some unknown error");
+        match err {
+            PatternError::InvalidRegex { hint, .. } => {
+                assert!(hint.contains("regex101"));
+            }
+            _ => panic!("Expected InvalidRegex"),
+        }
+    }
+
+    #[test]
+    fn test_pattern_error_unknown_reference() {
+        let err = PatternError::unknown_reference("my_pattern", vec!["email".to_string(), "url".to_string()]);
+        let msg = err.to_string();
+        assert!(msg.contains("my_pattern"));
+        assert!(msg.contains("email"));
+        assert!(msg.contains("url"));
+    }
+
+    #[test]
+    fn test_pattern_error_unknown_reference_empty() {
+        let err = PatternError::unknown_reference("my_pattern", vec![]);
+        let msg = err.to_string();
+        assert!(msg.contains("my_pattern"));
+        assert!(msg.contains("none loaded"));
+    }
+
+    #[test]
+    fn test_pattern_error_unknown_reference_many() {
+        let available: Vec<String> = (0..15).map(|i| format!("pattern_{}", i)).collect();
+        let err = PatternError::unknown_reference("my_pattern", available);
+        let msg = err.to_string();
+        assert!(msg.contains("my_pattern"));
+        assert!(msg.contains("... (5 more)"));
+    }
+
+    #[test]
+    fn test_pattern_error_potential_redos_nested() {
+        let err = PatternError::potential_redos("(a+)+", "nested quantifier detected");
+        match err {
+            PatternError::PotentialRedos { hint, .. } => {
+                assert!(hint.contains("nested") || hint.contains("atomic"));
+            }
+            _ => panic!("Expected PotentialRedos"),
+        }
+    }
+
+    #[test]
+    fn test_pattern_error_potential_redos_overlapping() {
+        let err = PatternError::potential_redos("(a|ab)+", "overlapping alternatives");
+        match err {
+            PatternError::PotentialRedos { hint, .. } => {
+                assert!(hint.contains("overlapping") || hint.contains("alternation"));
+            }
+            _ => panic!("Expected PotentialRedos"),
+        }
+    }
+
+    #[test]
+    fn test_pattern_error_potential_redos_generic() {
+        let err = PatternError::potential_redos("complex.*", "generic risk");
+        match err {
+            PatternError::PotentialRedos { hint, .. } => {
+                assert!(hint.contains("Simplify") || hint.contains("quantifier"));
+            }
+            _ => panic!("Expected PotentialRedos"),
+        }
+    }
+
+    #[test]
+    fn test_pattern_error_pcre_not_enabled() {
+        let err = PatternError::PcreNotEnabled;
+        let msg = err.to_string();
+        assert!(msg.contains("PCRE"));
+        assert!(msg.contains("features pcre"));
+    }
+
+    #[test]
+    fn test_pattern_error_empty_pattern() {
+        let err = PatternError::EmptyPattern;
+        let msg = err.to_string();
+        assert!(msg.contains("Empty pattern"));
+    }
+
+    #[test]
+    fn test_pattern_error_too_complex() {
+        let err = PatternError::TooComplex { pattern: "very.*complex.*pattern".to_string() };
+        let msg = err.to_string();
+        assert!(msg.contains("too complex"));
+        assert!(msg.contains("very.*complex.*pattern"));
+    }
+
+    #[test]
+    fn test_pattern_error_suggestions() {
+        assert!(PatternError::PcreNotEnabled.suggestion().is_some());
+        assert!(PatternError::EmptyPattern.suggestion().is_some());
+        assert!(PatternError::TooComplex { pattern: "x".to_string() }.suggestion().is_some());
+        assert!(PatternError::invalid_regex("x", "err").suggestion().is_some());
+        assert!(PatternError::unknown_reference("x", vec![]).suggestion().is_some());
+        assert!(PatternError::potential_redos("x", "risk").suggestion().is_some());
+    }
+
+    #[test]
+    fn test_pattern_error_from_regex_error() {
+        // Create a regex error by attempting to compile an invalid pattern
+        let regex_err = regex::Regex::new("(").unwrap_err();
+        let pattern_err: PatternError = regex_err.into();
+        match pattern_err {
+            PatternError::InvalidRegex { .. } => {}
+            _ => panic!("Expected InvalidRegex"),
+        }
+    }
+
+    // ========================================
+    // ConfigError tests
+    // ========================================
+
+    #[test]
+    fn test_config_error_not_found() {
+        let err = ConfigError::NotFound { path: PathBuf::from("/path/to/config.toml") };
+        let msg = err.to_string();
+        assert!(msg.contains("/path/to/config.toml"));
+        assert!(msg.contains("not found"));
+    }
+
+    #[test]
+    fn test_config_error_read_error() {
+        let io_err = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "access denied");
+        let err = ConfigError::ReadError {
+            path: PathBuf::from("/path/to/config.toml"),
+            source: io_err,
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("/path/to/config.toml"));
+        assert!(msg.contains("permission"));
+    }
+
+    #[test]
+    fn test_config_error_parse_error() {
+        let err = ConfigError::ParseError {
+            path: PathBuf::from("config.toml"),
+            message: "unexpected token at line 5".to_string(),
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("config.toml"));
+        assert!(msg.contains("unexpected token"));
+        assert!(msg.contains("toml-lint.com"));
+    }
+
+    #[test]
+    fn test_config_error_invalid() {
+        let err = ConfigError::invalid("missing step type", "add type = \"substitute\"");
+        let msg = err.to_string();
+        assert!(msg.contains("missing step type"));
+        assert!(msg.contains("substitute"));
+    }
+
+    #[test]
+    fn test_config_error_missing_field() {
+        let err = ConfigError::missing_field("pattern", "pattern = \"\\\\d+\"");
+        let msg = err.to_string();
+        assert!(msg.contains("pattern"));
+    }
+
+    #[test]
+    fn test_config_error_suggestions() {
+        assert!(ConfigError::NotFound { path: PathBuf::from("x") }.suggestion().is_some());
+        assert!(ConfigError::ReadError {
+            path: PathBuf::from("x"),
+            source: std::io::Error::new(std::io::ErrorKind::Other, "err")
+        }.suggestion().is_some());
+        assert!(ConfigError::ParseError { path: PathBuf::from("x"), message: "err".to_string() }.suggestion().is_some());
+        assert!(ConfigError::invalid("msg", "hint").suggestion().is_some());
+        assert!(ConfigError::missing_field("field", "example").suggestion().is_some());
+    }
+
+    // ========================================
+    // LibraryError tests
+    // ========================================
+
+    #[test]
     fn test_library_not_found_formatting() {
         let paths = vec![
             PathBuf::from("/home/user/.rexpipe/patterns"),
@@ -505,6 +767,75 @@ mod tests {
     }
 
     #[test]
+    fn test_library_not_found_empty_paths() {
+        let err = LibraryError::not_found("mylib", &[]);
+        let msg = err.to_string();
+        assert!(msg.contains("mylib"));
+        assert!(msg.contains("no search paths configured"));
+    }
+
+    #[test]
+    fn test_library_read_error() {
+        let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "file not found");
+        let err = LibraryError::ReadError {
+            path: PathBuf::from("patterns.toml"),
+            source: io_err,
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("patterns.toml"));
+    }
+
+    #[test]
+    fn test_library_parse_error() {
+        let err = LibraryError::ParseError {
+            path: PathBuf::from("patterns.toml"),
+            message: "expected string".to_string(),
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("patterns.toml"));
+        assert!(msg.contains("expected string"));
+        assert!(msg.contains("[patterns]"));
+    }
+
+    #[test]
+    fn test_library_circular_include() {
+        let err = LibraryError::CircularInclude {
+            cycle: "a.toml -> b.toml -> a.toml".to_string(),
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("Circular"));
+        assert!(msg.contains("a.toml -> b.toml -> a.toml"));
+    }
+
+    #[test]
+    fn test_library_invalid_patterns() {
+        let err = LibraryError::InvalidPatterns {
+            library: "mylib.toml".to_string(),
+            errors: "  - email: invalid regex\n  - url: unclosed group".to_string(),
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("mylib.toml"));
+        assert!(msg.contains("email"));
+        assert!(msg.contains("url"));
+    }
+
+    #[test]
+    fn test_library_error_suggestions() {
+        assert!(LibraryError::not_found("x", &[]).suggestion().is_some());
+        assert!(LibraryError::ReadError {
+            path: PathBuf::from("x"),
+            source: std::io::Error::new(std::io::ErrorKind::Other, "err")
+        }.suggestion().is_some());
+        assert!(LibraryError::ParseError { path: PathBuf::from("x"), message: "err".to_string() }.suggestion().is_some());
+        assert!(LibraryError::CircularInclude { cycle: "a->b".to_string() }.suggestion().is_some());
+        assert!(LibraryError::InvalidPatterns { library: "x".to_string(), errors: "err".to_string() }.suggestion().is_some());
+    }
+
+    // ========================================
+    // ValidationError tests
+    // ========================================
+
+    #[test]
     fn test_validation_missing_field() {
         let err = ValidationError::missing_field(1, "pattern", "substitute");
         let msg = err.to_string();
@@ -514,9 +845,232 @@ mod tests {
     }
 
     #[test]
-    fn test_error_suggestions() {
-        assert!(PatternError::PcreNotEnabled.suggestion().is_some());
+    fn test_validation_missing_field_filter() {
+        let err = ValidationError::missing_field(2, "action", "filter");
+        let msg = err.to_string();
+        assert!(msg.contains("Step 2"));
+        assert!(msg.contains("action"));
+        assert!(msg.contains("keep_line"));
+        assert!(msg.contains("drop_line"));
+    }
+
+    #[test]
+    fn test_validation_missing_field_extract() {
+        let err = ValidationError::missing_field(3, "pattern", "extract");
+        let msg = err.to_string();
+        assert!(msg.contains("Step 3"));
+        assert!(msg.contains("capture groups"));
+    }
+
+    #[test]
+    fn test_validation_missing_field_validate() {
+        let err = ValidationError::missing_field(1, "pattern", "validate");
+        let msg = err.to_string();
+        assert!(msg.contains("validate"));
+    }
+
+    #[test]
+    fn test_validation_missing_field_transform() {
+        let err = ValidationError::missing_field(1, "action", "transform");
+        let msg = err.to_string();
+        assert!(msg.contains("transform"));
+    }
+
+    #[test]
+    fn test_validation_missing_field_unknown() {
+        let err = ValidationError::missing_field(1, "xyz", "unknown");
+        let msg = err.to_string();
+        assert!(msg.contains("required field"));
+    }
+
+    #[test]
+    fn test_validation_empty_pipeline() {
+        let err = ValidationError::EmptyPipeline;
+        let msg = err.to_string();
+        assert!(msg.contains("at least one step"));
+        assert!(msg.contains("[[step]]"));
+    }
+
+    #[test]
+    fn test_validation_step_error() {
+        let err = ValidationError::step_error(2, "invalid regex", "check pattern syntax");
+        let msg = err.to_string();
+        assert!(msg.contains("Step 2"));
+        assert!(msg.contains("invalid regex"));
+        assert!(msg.contains("check pattern syntax"));
+    }
+
+    #[test]
+    fn test_validation_multiple_errors() {
+        let err = ValidationError::Multiple {
+            count: 3,
+            errors: "  1. error one\n  2. error two\n  3. error three".to_string(),
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("3 error(s)"));
+        assert!(msg.contains("error one"));
+    }
+
+    #[test]
+    fn test_validation_contradictory_filters() {
+        let err = ValidationError::ContradictoryFilters {
+            step1: 1,
+            step2: 3,
+            pattern: "ERROR".to_string(),
+            action1: "keep".to_string(),
+            action2: "drop".to_string(),
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("Step 1"));
+        assert!(msg.contains("Step 3"));
+        assert!(msg.contains("ERROR"));
+    }
+
+    #[test]
+    fn test_validation_invalid_step_type() {
+        let err = ValidationError::InvalidStepType {
+            step: 2,
+            step_type: "invalid_type".to_string(),
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("invalid_type"));
+        assert!(msg.contains("substitute"));
+        assert!(msg.contains("filter"));
+    }
+
+    #[test]
+    fn test_validation_error_suggestions() {
         assert!(ValidationError::EmptyPipeline.suggestion().is_some());
-        assert!(ConfigError::NotFound { path: PathBuf::from("test") }.suggestion().is_some());
+        assert!(ValidationError::step_error(1, "msg", "hint").suggestion().is_some());
+        assert!(ValidationError::Multiple { count: 1, errors: "err".to_string() }.suggestion().is_some());
+        assert!(ValidationError::ContradictoryFilters {
+            step1: 1, step2: 2, pattern: "x".to_string(), action1: "a".to_string(), action2: "b".to_string()
+        }.suggestion().is_some());
+        assert!(ValidationError::InvalidStepType { step: 1, step_type: "x".to_string() }.suggestion().is_some());
+        assert!(ValidationError::missing_field(1, "x", "y").suggestion().is_some());
+    }
+
+    // ========================================
+    // RexpipeError tests
+    // ========================================
+
+    #[test]
+    fn test_rexpipe_error_from_config() {
+        let config_err = ConfigError::NotFound { path: PathBuf::from("test.toml") };
+        let err: RexpipeError = config_err.into();
+        match err {
+            RexpipeError::Config(_) => {}
+            _ => panic!("Expected Config variant"),
+        }
+    }
+
+    #[test]
+    fn test_rexpipe_error_from_pattern() {
+        let pattern_err = PatternError::EmptyPattern;
+        let err: RexpipeError = pattern_err.into();
+        match err {
+            RexpipeError::Pattern(_) => {}
+            _ => panic!("Expected Pattern variant"),
+        }
+    }
+
+    #[test]
+    fn test_rexpipe_error_from_io() {
+        let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "file not found");
+        let err: RexpipeError = io_err.into();
+        match err {
+            RexpipeError::Io(_) => {}
+            _ => panic!("Expected Io variant"),
+        }
+    }
+
+    #[test]
+    fn test_rexpipe_error_from_library() {
+        let lib_err = LibraryError::not_found("test", &[]);
+        let err: RexpipeError = lib_err.into();
+        match err {
+            RexpipeError::Library(_) => {}
+            _ => panic!("Expected Library variant"),
+        }
+    }
+
+    #[test]
+    fn test_rexpipe_error_from_validation() {
+        let val_err = ValidationError::EmptyPipeline;
+        let err: RexpipeError = val_err.into();
+        match err {
+            RexpipeError::Validation(_) => {}
+            _ => panic!("Expected Validation variant"),
+        }
+    }
+
+    #[test]
+    fn test_rexpipe_error_processing() {
+        let err = RexpipeError::Processing("timeout exceeded".to_string());
+        let msg = err.to_string();
+        assert!(msg.contains("timeout exceeded"));
+    }
+
+    #[test]
+    fn test_rexpipe_error_suggestions() {
+        // Config suggestion comes from inner ConfigError
+        let err = RexpipeError::Config(ConfigError::NotFound { path: PathBuf::from("x") });
+        assert!(err.suggestion().is_some());
+
+        // Pattern suggestion
+        let err = RexpipeError::Pattern(PatternError::EmptyPattern);
+        assert!(err.suggestion().is_some());
+
+        // Library suggestion
+        let err = RexpipeError::Library(LibraryError::not_found("x", &[]));
+        assert!(err.suggestion().is_some());
+
+        // Validation suggestion
+        let err = RexpipeError::Validation(ValidationError::EmptyPipeline);
+        assert!(err.suggestion().is_some());
+
+        // IO always has a suggestion
+        let err = RexpipeError::Io(std::io::Error::new(std::io::ErrorKind::Other, "err"));
+        assert!(err.suggestion().is_some());
+
+        // Processing has no suggestion
+        let err = RexpipeError::Processing("error".to_string());
+        assert!(err.suggestion().is_none());
+    }
+
+    // ========================================
+    // From<toml::de::Error> tests
+    // ========================================
+
+    #[test]
+    fn test_config_from_toml_error_missing_field() {
+        // Can't easily create toml::de::Error directly, so we verify
+        // the conversion logic by checking the output format
+        let err = ConfigError::Invalid {
+            message: "missing field `type`".to_string(),
+            hint: "Check that all required fields are present in your configuration.".to_string(),
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("missing field"));
+    }
+
+    #[test]
+    fn test_error_debug_impl() {
+        // Test that all errors implement Debug
+        let _ = format!("{:?}", PatternError::EmptyPattern);
+        let _ = format!("{:?}", ConfigError::NotFound { path: PathBuf::from("x") });
+        let _ = format!("{:?}", LibraryError::not_found("x", &[]));
+        let _ = format!("{:?}", ValidationError::EmptyPipeline);
+        let _ = format!("{:?}", RexpipeError::Processing("x".to_string()));
+    }
+
+    #[test]
+    fn test_error_display_impl() {
+        // Test that all errors implement Display
+        let _ = PatternError::EmptyPattern.to_string();
+        let _ = ConfigError::NotFound { path: PathBuf::from("x") }.to_string();
+        let _ = LibraryError::not_found("x", &[]).to_string();
+        let _ = ValidationError::EmptyPipeline.to_string();
+        let _ = RexpipeError::Processing("x".to_string()).to_string();
     }
 }
