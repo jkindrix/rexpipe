@@ -89,7 +89,7 @@
 //! - [`learn`]: Pattern learning and inference from examples
 //! - [`testing`]: First-class pipeline testing support
 //! - [`data`]: Structured data processing (JSON, CSV, YAML, XML, TOML)
-//! - [`syntax`] (requires `tree-sitter` feature): Syntax-aware pattern matching
+//! - `syntax` (requires `tree-sitter` feature): Syntax-aware pattern matching
 
 // Core modules
 pub mod error;
@@ -110,17 +110,10 @@ pub mod checkpoint;
 pub mod crossfile;
 pub mod data;
 pub mod learn;
-pub mod natural;
 pub mod testing;
 
 #[cfg(feature = "tree-sitter")]
 pub mod syntax;
-
-#[cfg(feature = "python")]
-pub mod python;
-
-#[cfg(feature = "tui")]
-pub mod tui;
 
 // Re-export error types for convenience
 pub use error::{ConfigError, LibraryError, PatternError, RexpipeError, ValidationError};
@@ -151,6 +144,3 @@ pub use testing::{TestRunner, TestCase, TestConfig, TestSummary};
 
 // Re-export data types for structured data processing
 pub use data::{DataFormat, DataValue, DataError, DataReader, DataWriter};
-
-// Re-export natural language types for no-code pipeline building
-pub use natural::{NaturalLanguageParser, NaturalLanguageError, PipelineBuilder, BuiltinPatterns};

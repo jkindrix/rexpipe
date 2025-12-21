@@ -32,7 +32,7 @@ use std::fs::File;
 /// Parsed URI for a stream source or sink.
 #[derive(Debug, Clone)]
 pub struct StreamUri {
-    /// The scheme (stdin, stdout, file, tcp, udp, kafka, etc.)
+    /// The scheme (stdin, stdout, file, tcp, udp)
     pub scheme: String,
     /// The host (for network protocols)
     pub host: Option<String>,
@@ -40,10 +40,6 @@ pub struct StreamUri {
     pub port: Option<u16>,
     /// The path (for file:// URIs)
     pub path: Option<PathBuf>,
-    /// The topic (for kafka:// URIs)
-    pub topic: Option<String>,
-    /// Consumer group ID (for Kafka consumers)
-    pub group_id: Option<String>,
 }
 
 impl StreamUri {
@@ -56,7 +52,6 @@ impl StreamUri {
     /// - `file:///path/to/file`
     /// - `tcp://host:port`
     /// - `udp://host:port`
-    /// - `kafka://host:port/topic` or `kafka://host:port/topic?group_id=my-group`
     pub fn parse(uri: &str) -> Result<Self, String> {
         // Handle simple schemes without authority
         if uri == "stdin://" || uri == "stdin:" {
@@ -65,8 +60,6 @@ impl StreamUri {
                 host: None,
                 port: None,
                 path: None,
-                topic: None,
-                group_id: None,
             });
         }
         if uri == "stdout://" || uri == "stdout:" {
@@ -75,8 +68,6 @@ impl StreamUri {
                 host: None,
                 port: None,
                 path: None,
-                topic: None,
-                group_id: None,
             });
         }
         if uri == "stderr://" || uri == "stderr:" {
@@ -85,8 +76,6 @@ impl StreamUri {
                 host: None,
                 port: None,
                 path: None,
-                topic: None,
-                group_id: None,
             });
         }
 
@@ -112,8 +101,6 @@ impl StreamUri {
                     host: None,
                     port: None,
                     path: Some(PathBuf::from(path)),
-                    topic: None,
-                    group_id: None,
                 })
             }
             "tcp" | "udp" => {
@@ -131,62 +118,6 @@ impl StreamUri {
                     host: Some(host),
                     port: Some(port),
                     path: None,
-                    topic: None,
-                    group_id: None,
-                })
-            }
-            "kafka" => {
-                // kafka://host:port/topic or kafka://host:port/topic?group_id=my-group
-                // Split off query string first
-                let (path_part, query) = if let Some(idx) = rest.find('?') {
-                    (&rest[..idx], Some(&rest[idx + 1..]))
-                } else {
-                    (rest, None)
-                };
-
-                // Parse group_id from query string
-                let group_id = query.and_then(|q| {
-                    q.split('&')
-                        .find_map(|param| {
-                            let kv: Vec<&str> = param.splitn(2, '=').collect();
-                            if kv.len() == 2 && kv[0] == "group_id" {
-                                Some(kv[1].to_string())
-                            } else {
-                                None
-                            }
-                        })
-                });
-
-                // Split host:port/topic
-                let parts: Vec<&str> = path_part.splitn(2, '/').collect();
-                if parts.is_empty() {
-                    return Err(format!("Invalid kafka URI - expected host:port/topic: {}", uri));
-                }
-
-                let host_port = parts[0];
-                let topic = if parts.len() > 1 && !parts[1].is_empty() {
-                    Some(parts[1].to_string())
-                } else {
-                    None
-                };
-
-                // Parse host:port
-                let hp_parts: Vec<&str> = host_port.rsplitn(2, ':').collect();
-                if hp_parts.len() != 2 {
-                    return Err(format!("Invalid kafka URI - expected host:port: {}", uri));
-                }
-                let port: u16 = hp_parts[0]
-                    .parse()
-                    .map_err(|_| format!("Invalid port number: {}", hp_parts[0]))?;
-                let host = hp_parts[1].to_string();
-
-                Ok(StreamUri {
-                    scheme,
-                    host: Some(host),
-                    port: Some(port),
-                    path: None,
-                    topic,
-                    group_id,
                 })
             }
             _ => Err(format!("Unsupported URI scheme: {}", scheme)),
@@ -548,160 +479,6 @@ impl StreamSink for UdpSink {
     }
 }
 
-// ============================================================================
-// Kafka Source and Sink (requires `kafka` feature)
-// ============================================================================
-
-/// Kafka consumer source - reads messages from a Kafka topic.
-#[cfg(feature = "kafka")]
-pub struct KafkaSource {
-    consumer: rdkafka::consumer::StreamConsumer,
-    runtime: tokio::runtime::Runtime,
-}
-
-#[cfg(feature = "kafka")]
-impl KafkaSource {
-    /// Create a new Kafka consumer for the given broker and topic.
-    ///
-    /// # Arguments
-    /// * `brokers` - Kafka broker address (e.g., "localhost:9092")
-    /// * `topic` - Topic to consume from
-    /// * `group_id` - Consumer group ID (defaults to "rexpipe-consumer" if None)
-    pub fn new(brokers: &str, topic: &str, group_id: Option<&str>) -> io::Result<Self> {
-        use rdkafka::consumer::{Consumer, StreamConsumer};
-        use rdkafka::ClientConfig;
-
-        let group = group_id.unwrap_or("rexpipe-consumer");
-
-        let consumer: StreamConsumer = ClientConfig::new()
-            .set("bootstrap.servers", brokers)
-            .set("group.id", group)
-            .set("enable.auto.commit", "true")
-            .set("auto.offset.reset", "earliest")
-            .create()
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("Failed to create Kafka consumer: {}", e)))?;
-
-        consumer
-            .subscribe(&[topic])
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("Failed to subscribe to topic: {}", e)))?;
-
-        let runtime = tokio::runtime::Runtime::new()
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("Failed to create Tokio runtime: {}", e)))?;
-
-        Ok(KafkaSource { consumer, runtime })
-    }
-}
-
-#[cfg(feature = "kafka")]
-impl StreamSource for KafkaSource {
-    fn read_line(&mut self) -> io::Result<Option<String>> {
-        use rdkafka::Message;
-
-        let message = self.runtime.block_on(async {
-            use futures::StreamExt;
-            self.consumer.stream().next().await
-        });
-
-        match message {
-            Some(Ok(msg)) => {
-                match msg.payload_view::<str>() {
-                    Some(Ok(text)) => {
-                        let trimmed = text.trim_end_matches(|c| c == '\n' || c == '\r');
-                        Ok(Some(trimmed.to_string()))
-                    }
-                    Some(Err(_)) => Err(io::Error::new(io::ErrorKind::InvalidData, "Invalid UTF-8 in Kafka message")),
-                    None => Ok(Some(String::new())), // Empty message
-                }
-            }
-            Some(Err(e)) => Err(io::Error::new(io::ErrorKind::Other, format!("Kafka error: {}", e))),
-            None => Ok(None), // Stream ended
-        }
-    }
-}
-
-/// Kafka producer sink - writes messages to a Kafka topic.
-#[cfg(feature = "kafka")]
-pub struct KafkaSink {
-    producer: rdkafka::producer::FutureProducer,
-    topic: String,
-    runtime: tokio::runtime::Runtime,
-}
-
-#[cfg(feature = "kafka")]
-impl KafkaSink {
-    /// Create a new Kafka producer for the given broker and topic.
-    ///
-    /// # Arguments
-    /// * `brokers` - Kafka broker address (e.g., "localhost:9092")
-    /// * `topic` - Topic to produce to
-    pub fn new(brokers: &str, topic: &str) -> io::Result<Self> {
-        use rdkafka::producer::FutureProducer;
-        use rdkafka::ClientConfig;
-
-        let producer: FutureProducer = ClientConfig::new()
-            .set("bootstrap.servers", brokers)
-            .set("message.timeout.ms", "5000")
-            .create()
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("Failed to create Kafka producer: {}", e)))?;
-
-        let runtime = tokio::runtime::Runtime::new()
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("Failed to create Tokio runtime: {}", e)))?;
-
-        Ok(KafkaSink {
-            producer,
-            topic: topic.to_string(),
-            runtime,
-        })
-    }
-}
-
-#[cfg(feature = "kafka")]
-impl StreamSink for KafkaSink {
-    fn write_line(&mut self, line: &str) -> io::Result<()> {
-        use rdkafka::producer::FutureRecord;
-        use std::time::Duration;
-
-        let record = FutureRecord::to(&self.topic)
-            .payload(line)
-            .key("");
-
-        let result = self.runtime.block_on(async {
-            self.producer.send(record, Duration::from_secs(5)).await
-        });
-
-        match result {
-            Ok(_) => Ok(()),
-            Err((e, _)) => Err(io::Error::new(io::ErrorKind::Other, format!("Failed to send to Kafka: {}", e))),
-        }
-    }
-
-    fn write_bytes(&mut self, data: &[u8]) -> io::Result<()> {
-        use rdkafka::producer::FutureRecord;
-        use std::time::Duration;
-
-        let record = FutureRecord::to(&self.topic)
-            .payload(data)
-            .key("");
-
-        let result = self.runtime.block_on(async {
-            self.producer.send(record, Duration::from_secs(5)).await
-        });
-
-        match result {
-            Ok(_) => Ok(()),
-            Err((e, _)) => Err(io::Error::new(io::ErrorKind::Other, format!("Failed to send to Kafka: {}", e))),
-        }
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        use std::time::Duration;
-
-        self.runtime.block_on(async {
-            self.producer.flush(Duration::from_secs(5))
-        }).map_err(|e| io::Error::new(io::ErrorKind::Other, format!("Failed to flush Kafka producer: {}", e)))
-    }
-}
-
 /// Create a source from a URI.
 pub fn create_source(uri: &StreamUri) -> io::Result<Box<dyn StreamSource>> {
     match uri.scheme.as_str() {
@@ -724,21 +501,6 @@ pub fn create_source(uri: &StreamUri) -> io::Result<Box<dyn StreamSource>> {
             })?;
             Ok(Box::new(UdpSource::bind(&addr)?))
         }
-        #[cfg(feature = "kafka")]
-        "kafka" => {
-            let addr = uri.address().ok_or_else(|| {
-                io::Error::new(io::ErrorKind::InvalidInput, "Kafka broker address required")
-            })?;
-            let topic = uri.topic.as_ref().ok_or_else(|| {
-                io::Error::new(io::ErrorKind::InvalidInput, "Kafka topic required")
-            })?;
-            Ok(Box::new(KafkaSource::new(&addr, topic, uri.group_id.as_deref())?))
-        }
-        #[cfg(not(feature = "kafka"))]
-        "kafka" => Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "Kafka support not enabled. Build with --features kafka",
-        )),
         _ => Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             format!("Unsupported source scheme: {}", uri.scheme),
@@ -769,21 +531,6 @@ pub fn create_sink(uri: &StreamUri) -> io::Result<Box<dyn StreamSink>> {
             })?;
             Ok(Box::new(UdpSink::connect(&addr)?))
         }
-        #[cfg(feature = "kafka")]
-        "kafka" => {
-            let addr = uri.address().ok_or_else(|| {
-                io::Error::new(io::ErrorKind::InvalidInput, "Kafka broker address required")
-            })?;
-            let topic = uri.topic.as_ref().ok_or_else(|| {
-                io::Error::new(io::ErrorKind::InvalidInput, "Kafka topic required")
-            })?;
-            Ok(Box::new(KafkaSink::new(&addr, topic)?))
-        }
-        #[cfg(not(feature = "kafka"))]
-        "kafka" => Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "Kafka support not enabled. Build with --features kafka",
-        )),
         _ => Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             format!("Unsupported sink scheme: {}", uri.scheme),
@@ -836,34 +583,5 @@ mod tests {
     fn test_invalid_uri() {
         assert!(StreamUri::parse("invalid").is_err());
         assert!(StreamUri::parse("unknown://localhost:80").is_err());
-    }
-
-    #[test]
-    fn test_parse_kafka_uri() {
-        let uri = StreamUri::parse("kafka://localhost:9092/my-topic").unwrap();
-        assert_eq!(uri.scheme, "kafka");
-        assert_eq!(uri.host, Some("localhost".to_string()));
-        assert_eq!(uri.port, Some(9092));
-        assert_eq!(uri.topic, Some("my-topic".to_string()));
-        assert!(uri.group_id.is_none());
-    }
-
-    #[test]
-    fn test_parse_kafka_uri_with_group() {
-        let uri = StreamUri::parse("kafka://broker.example.com:9092/logs?group_id=my-consumer-group").unwrap();
-        assert_eq!(uri.scheme, "kafka");
-        assert_eq!(uri.host, Some("broker.example.com".to_string()));
-        assert_eq!(uri.port, Some(9092));
-        assert_eq!(uri.topic, Some("logs".to_string()));
-        assert_eq!(uri.group_id, Some("my-consumer-group".to_string()));
-    }
-
-    #[test]
-    fn test_parse_kafka_uri_without_topic() {
-        let uri = StreamUri::parse("kafka://localhost:9092/").unwrap();
-        assert_eq!(uri.scheme, "kafka");
-        assert_eq!(uri.host, Some("localhost".to_string()));
-        assert_eq!(uri.port, Some(9092));
-        assert!(uri.topic.is_none());
     }
 }
