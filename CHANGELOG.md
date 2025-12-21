@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Block Step Type**: Cross-line state machine processing for multi-line patterns
+  - Define block boundaries with trigger (`pattern`) and `until` patterns
+  - Block actions: `keep_block`, `drop_block`, `mark_block`, `substitute_in_block`, `collect_block`
+  - Enables extraction of stack traces, log entries, code blocks, or delimited records
+- **Git Filter Integration**: `--git-filter-setup <name>` generates git clean/smudge configuration
+  - Automatic file transformation on commit/checkout
+  - Integration with .gitattributes for pattern-based file matching
+- **Pattern Discovery Mode**: `--discover` analyzes input to detect common patterns
+  - Frequency analysis for 13 pattern types (email, IP, dates, URLs, etc.)
+  - Generates suggested pipeline configuration for detected patterns
+  - Bootstrap configuration from unknown log formats
+- Crate-level documentation with usage examples and doc-tests
+- Working doctests for `ResolvedLibrary::contains` and `ResolvedLibrary::pattern_names`
+
 ### Changed
 - Updated all dependencies to latest compatible versions
 - Migrated to `anyhow` for application error handling with rich context
@@ -14,10 +29,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed all clippy warnings (Entry API usage, recursion parameter, iterator idioms)
 - Improved `BinaryMode` to implement `FromStr` trait for idiomatic parsing
 - Improved documentation with proper intra-doc links and HTML escaping
-
-### Added
-- Crate-level documentation with usage examples and doc-tests
-- Working doctests for `ResolvedLibrary::contains` and `ResolvedLibrary::pattern_names`
 
 ## [1.1.0] - 2024-12-15
 
