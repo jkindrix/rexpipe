@@ -19,6 +19,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Frequency analysis for 13 pattern types (email, IP, dates, URLs, etc.)
   - Generates suggested pipeline configuration for detected patterns
   - Bootstrap configuration from unknown log formats
+- **Format-Preserving Encryption** (requires `--features fpe`):
+  - `fpe_encrypt` transform using NIST FF1 algorithm (AES-128/192/256)
+  - `fpe_decrypt` transform for reversible encryption
+  - Preserves data format (encrypted digits remain digits)
+  - Configurable radix (character set) for encryption
+- **Deterministic Masking**: `mask_deterministic` transform for consistent masking
+  - Same input+seed always produces same output
+  - Preserve prefix/suffix characters (e.g., first 4 and last 4)
+  - Useful for joining masked datasets or consistent test data
 - Crate-level documentation with usage examples and doc-tests
 - Working doctests for `ResolvedLibrary::contains` and `ResolvedLibrary::pattern_names`
 
