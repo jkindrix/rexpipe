@@ -31,6 +31,7 @@ fn test_end_to_end_log_processing() {
                 flags: Some(vec![RegexFlag::Global]),
                 description: None,
                 enabled: Some(true),
+                ..Default::default()
             },
             PipelineStep {
                 step_type: StepType::Filter,
@@ -41,6 +42,7 @@ fn test_end_to_end_log_processing() {
                 flags: None,
                 description: None,
                 enabled: Some(true),
+                ..Default::default()
             },
             PipelineStep {
                 step_type: StepType::Substitute,
@@ -51,6 +53,7 @@ fn test_end_to_end_log_processing() {
                 flags: Some(vec![RegexFlag::Global]),
                 description: None,
                 enabled: Some(true),
+                ..Default::default()
             },
         ],
     };
@@ -147,6 +150,7 @@ another DEBUG to drop"#;
             flags: None,
             description: None,
             enabled: Some(true),
+                ..Default::default()
         }],
     };
 
@@ -203,6 +207,7 @@ Invalid line without timestamp
             flags: None,
             description: Some("Validate timestamp format".to_string()),
             enabled: Some(true),
+                ..Default::default()
         }],
     };
 
@@ -246,6 +251,7 @@ fn test_extract_step_type() {
             flags: None,
             description: Some("Extract email addresses".to_string()),
             enabled: Some(true),
+                ..Default::default()
         }],
     };
 
@@ -279,6 +285,7 @@ fn test_error_handling() {
             flags: None,
             description: None,
             enabled: Some(true),
+                ..Default::default()
         }],
     };
 
@@ -305,6 +312,7 @@ fn test_disabled_steps() {
             flags: Some(vec![RegexFlag::Global]),
             description: None,
             enabled: Some(false), // Disabled step
+            ..Default::default()
         }],
     };
 
@@ -339,6 +347,7 @@ fn test_transform_uppercase() {
             flags: Some(vec![RegexFlag::Global]),
             description: Some("Convert lowercase words to uppercase".to_string()),
             enabled: Some(true),
+                ..Default::default()
         }],
     };
 
@@ -371,6 +380,7 @@ fn test_transform_lowercase() {
             flags: Some(vec![RegexFlag::Global]),
             description: Some("Convert uppercase to lowercase".to_string()),
             enabled: Some(true),
+                ..Default::default()
         }],
     };
 
@@ -417,6 +427,7 @@ fn test_pcre_positive_lookahead() {
             flags: Some(vec![RegexFlag::Global]),
             description: Some("Match foo only when followed by bar".to_string()),
             enabled: Some(true),
+                ..Default::default()
         }],
     };
 
@@ -457,6 +468,7 @@ fn test_pcre_negative_lookahead() {
             flags: Some(vec![RegexFlag::Global]),
             description: Some("Match foo only when NOT followed by bar".to_string()),
             enabled: Some(true),
+                ..Default::default()
         }],
     };
 
@@ -497,6 +509,7 @@ fn test_pcre_positive_lookbehind() {
             flags: Some(vec![RegexFlag::Global]),
             description: Some("Match numbers preceded by $".to_string()),
             enabled: Some(true),
+                ..Default::default()
         }],
     };
 
@@ -537,6 +550,7 @@ fn test_pcre_negative_lookbehind() {
             flags: Some(vec![RegexFlag::Global]),
             description: Some("Match numbers NOT preceded by $".to_string()),
             enabled: Some(true),
+                ..Default::default()
         }],
     };
 
@@ -581,6 +595,7 @@ fn test_pcre_combined_lookaround() {
             flags: Some(vec![RegexFlag::Global]),
             description: Some("Complex lookaround pattern".to_string()),
             enabled: Some(true),
+                ..Default::default()
         }],
     };
 
@@ -636,6 +651,7 @@ INFO: Processing complete"#;
             flags: Some(vec![RegexFlag::CaseInsensitive]),
             description: Some("Drop debug lines mentioning user".to_string()),
             enabled: Some(true),
+                ..Default::default()
         }],
     };
 
@@ -682,6 +698,7 @@ fn test_fixed_string_basic_replacement() {
             flags: Some(vec![RegexFlag::Global]),
             description: Some("Replace literal .*".to_string()),
             enabled: Some(true),
+                ..Default::default()
         }],
     };
 
@@ -722,6 +739,7 @@ fn test_fixed_string_special_chars() {
             flags: Some(vec![RegexFlag::Global]),
             description: None,
             enabled: Some(true),
+                ..Default::default()
         }],
     };
 
@@ -767,6 +785,7 @@ Line with ERROR without brackets"#;
             flags: None,
             description: None,
             enabled: Some(true),
+                ..Default::default()
         }],
     };
 
@@ -810,6 +829,7 @@ fn test_fixed_string_backslashes() {
             flags: Some(vec![RegexFlag::Global]),
             description: None,
             enabled: Some(true),
+                ..Default::default()
         }],
     };
 
@@ -850,6 +870,7 @@ fn test_fixed_string_multiple_occurrences() {
             flags: Some(vec![RegexFlag::Global]),
             description: None,
             enabled: Some(true),
+                ..Default::default()
         }],
     };
 
@@ -887,6 +908,7 @@ fn test_unicode_basic_matching() {
             flags: Some(vec![RegexFlag::Global]),
             description: None,
             enabled: Some(true),
+                ..Default::default()
         }],
     };
 
@@ -921,6 +943,7 @@ fn test_unicode_character_classes() {
             flags: Some(vec![RegexFlag::Global]),
             description: None,
             enabled: Some(true),
+                ..Default::default()
         }],
     };
 
@@ -954,6 +977,7 @@ fn test_unicode_emoji() {
             flags: Some(vec![RegexFlag::Global]),
             description: None,
             enabled: Some(true),
+                ..Default::default()
         }],
     };
 
@@ -991,6 +1015,7 @@ Mixed: English 和 中文"#;
             flags: None,
             description: None,
             enabled: Some(true),
+                ..Default::default()
         }],
     };
 
@@ -1029,6 +1054,7 @@ fn test_unicode_transform() {
             flags: Some(vec![RegexFlag::Global]),
             description: None,
             enabled: Some(true),
+                ..Default::default()
         }],
     };
 
@@ -1063,6 +1089,7 @@ fn test_unicode_accented_characters() {
             flags: Some(vec![RegexFlag::Global]),
             description: None,
             enabled: Some(true),
+                ..Default::default()
         }],
     };
 
@@ -1097,6 +1124,7 @@ fn test_unicode_word_boundaries() {
             flags: Some(vec![RegexFlag::Global, RegexFlag::Unicode]),
             description: None,
             enabled: Some(true),
+                ..Default::default()
         }],
     };
 
@@ -1134,6 +1162,7 @@ fn test_error_invalid_regex_pattern() {
             flags: None,
             description: None,
             enabled: Some(true),
+                ..Default::default()
         }],
     };
 
@@ -1159,6 +1188,7 @@ fn test_error_missing_replacement() {
             flags: None,
             description: None,
             enabled: Some(true),
+                ..Default::default()
         }],
     };
 
@@ -1186,6 +1216,7 @@ fn test_error_missing_filter_action() {
             flags: None,
             description: None,
             enabled: Some(true),
+                ..Default::default()
         }],
     };
 
@@ -1231,6 +1262,7 @@ fn test_error_empty_pattern() {
             flags: None,
             description: None,
             enabled: Some(true),
+                ..Default::default()
         }],
     };
 
@@ -1313,6 +1345,7 @@ fn test_pcre_mode_disabled_error() {
             flags: None,
             description: None,
             enabled: Some(true),
+                ..Default::default()
         }],
     };
 
@@ -1675,6 +1708,7 @@ fn test_max_line_length_configuration() {
             flags: Some(vec![RegexFlag::Global]),
             description: None,
             enabled: Some(true),
+                ..Default::default()
         }],
     };
 
@@ -1710,6 +1744,7 @@ fn test_max_line_action_truncate_config() {
             flags: Some(vec![RegexFlag::Global]),
             description: None,
             enabled: Some(true),
+                ..Default::default()
         }],
     };
 
@@ -1929,6 +1964,7 @@ fn test_context_lines_at_boundaries() {
             flags: None,
             description: None,
             enabled: Some(true),
+                ..Default::default()
         }],
     };
 

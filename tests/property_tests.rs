@@ -4,7 +4,8 @@
 
 use proptest::prelude::*;
 use rexpipe::pipeline::{
-    FilterAction, PipelineConfig, PipelineResult, PipelineSettings, PipelineStep, StepType,
+    FilterAction, PipelineConfig, PipelineResult, PipelineSettings, PipelineStep, RegexFlag,
+    StepType,
 };
 use rexpipe::processor::StreamProcessor;
 use std::io::Cursor;
@@ -293,6 +294,7 @@ proptest! {
             flags: None,
             description: None,
             enabled: Some(true),
+            ..Default::default()
         };
 
         let config = PipelineConfig {
@@ -373,6 +375,7 @@ proptest! {
             flags: None,
             description: None,
             enabled: Some(true),
+            ..Default::default()
         };
 
         let config = PipelineConfig {
@@ -416,6 +419,7 @@ proptest! {
             flags: None,
             description: None,
             enabled: Some(true),
+            ..Default::default()
         };
 
         let config = PipelineConfig {
@@ -456,16 +460,17 @@ proptest! {
     ) {
         let input = format!("test {} end", word);
 
-        // Step 1: Replace word with STEP1
+        // Step 1: Replace word with STEP1 (globally)
         let step1 = PipelineStep {
             step_type: StepType::Substitute,
             pattern: word.clone(),
             replacement: Some("STEP1".to_string()),
             action: None,
             transform: None,
-            flags: None,
+            flags: Some(vec![RegexFlag::Global]),
             description: None,
             enabled: Some(true),
+            ..Default::default()
         };
 
         // Step 2: Replace STEP1 with STEP2
@@ -478,6 +483,7 @@ proptest! {
             flags: None,
             description: None,
             enabled: Some(true),
+            ..Default::default()
         };
 
         let config = PipelineConfig {
@@ -527,6 +533,7 @@ proptest! {
             flags: None,
             description: None,
             enabled: Some(false),  // DISABLED
+            ..Default::default()
         };
 
         let config = PipelineConfig {
@@ -582,6 +589,7 @@ proptest! {
             flags: None,
             description: None,
             enabled: Some(true),
+            ..Default::default()
         };
 
         let config = PipelineConfig {
@@ -660,6 +668,7 @@ proptest! {
             flags: None,
             description: None,
             enabled: Some(true),
+            ..Default::default()
         };
 
         let config = PipelineConfig {

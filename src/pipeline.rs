@@ -138,6 +138,16 @@ pub struct PipelineStep {
     pub description: Option<String>,
     #[serde(default)]
     pub enabled: Option<bool>,
+    // === Block step fields ===
+    /// Pattern that ends the block (for Block step type)
+    #[serde(default)]
+    pub until: Option<String>,
+    /// Action to apply within the block
+    #[serde(default)]
+    pub block_action: Option<BlockAction>,
+    /// Number of context lines after trigger to include in block
+    #[serde(default)]
+    pub block_context: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -149,6 +159,8 @@ pub enum StepType {
     Extract,
     Validate,
     Transform,
+    /// Block-scoped processing: apply actions only within matching blocks
+    Block,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -214,6 +226,30 @@ pub enum TransformAction {
     CharCount,
     /// Count words and replace with count
     WordCount,
+}
+
+/// Actions for Block step type (cross-line processing)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BlockAction {
+    /// Keep only lines within matching blocks
+    KeepBlock,
+    /// Drop lines within matching blocks
+    DropBlock,
+    /// Mark/tag lines within matching blocks (prepend marker)
+    MarkBlock {
+        /// Marker to prepend to lines in the block
+        marker: String,
+    },
+    /// Apply a substitution to lines within the block
+    SubstituteInBlock {
+        /// Pattern to match within block lines
+        pattern: String,
+        /// Replacement text
+        replacement: String,
+    },
+    /// Collect and output block contents together (useful for log extraction)
+    CollectBlock,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -336,6 +372,9 @@ impl PipelineConfig {
             flags: Some(vec![RegexFlag::Global]),
             description: None,
             enabled: Some(true),
+            until: None,
+            block_action: None,
+            block_context: None,
         };
 
         PipelineConfig {
@@ -545,6 +584,7 @@ impl PipelineConfig {
                     StepType::Extract => "extract",
                     StepType::Validate => "validate",
                     StepType::Transform => "transform",
+                    StepType::Block => "block",
                 };
                 errors.push(crate::error::ValidationError::missing_field(
                     step_num,
@@ -920,6 +960,7 @@ mod tests {
             flags: None,
             description: None,
             enabled: Some(true),
+            ..Default::default()
         });
 
         // Substitute step without replacement should be rejected
@@ -973,6 +1014,7 @@ mod tests {
                     flags: None,
                     description: None,
                     enabled: Some(true),
+                    ..Default::default()
                 },
                 PipelineStep {
                     step_type: StepType::Filter,
@@ -983,6 +1025,7 @@ mod tests {
                     flags: None,
                     description: None,
                     enabled: Some(true),
+                    ..Default::default()
                 },
             ],
         };
@@ -1012,6 +1055,7 @@ mod tests {
                     flags: None,
                     description: None,
                     enabled: Some(true),
+                    ..Default::default()
                 },
                 PipelineStep {
                     step_type: StepType::Filter,
@@ -1022,6 +1066,7 @@ mod tests {
                     flags: None,
                     description: None,
                     enabled: Some(true),
+                    ..Default::default()
                 },
             ],
         };
@@ -1048,6 +1093,7 @@ mod tests {
                 flags: None,
                 description: None,
                 enabled: Some(true),
+                ..Default::default()
             }],
         };
 
@@ -1074,6 +1120,7 @@ mod tests {
                 flags: None,
                 description: None,
                 enabled: Some(true),
+                ..Default::default()
             }],
         };
 
@@ -1097,6 +1144,7 @@ mod tests {
                 flags: None,
                 description: None,
                 enabled: Some(true),
+                ..Default::default()
             }],
         };
 
@@ -1124,6 +1172,7 @@ mod tests {
                     flags: None,
                     description: None,
                     enabled: Some(true),
+                    ..Default::default()
                 },
                 PipelineStep {
                     step_type: StepType::Filter,
@@ -1134,6 +1183,7 @@ mod tests {
                     flags: None,
                     description: None,
                     enabled: Some(false), // Disabled!
+                    ..Default::default()
                 },
             ],
         };
@@ -1180,6 +1230,7 @@ mod tests {
                     flags: None,
                     description: None,
                     enabled: Some(true),
+                    ..Default::default()
                 },
                 PipelineStep {
                     step_type: StepType::Filter,
@@ -1190,6 +1241,7 @@ mod tests {
                     flags: None,
                     description: None,
                     enabled: Some(true),
+                    ..Default::default()
                 },
             ],
         };

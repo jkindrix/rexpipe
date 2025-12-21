@@ -1,7 +1,7 @@
 use crate::error::{PatternError, ValidationError};
 use crate::pipeline::{
-    ErrorType, FilterAction, MaxLineAction, PipelineConfig, PipelineError, PipelineResult,
-    PipelineSettings, RegexFlag, StepResult, StepType, TransformAction,
+    BlockAction, ErrorType, FilterAction, MaxLineAction, PipelineConfig, PipelineError,
+    PipelineResult, PipelineSettings, RegexFlag, StepResult, StepType, TransformAction,
 };
 use anyhow::{Context, Result};
 use log::{debug, trace};
@@ -197,6 +197,8 @@ pub struct StreamProcessor {
     /// together), we must avoid printing the same line twice. Tracking the last
     /// output line number lets us skip already-printed lines efficiently.
     last_output_line: u64,
+    /// Track active blocks for each Block step (step_index -> is_active)
+    block_states: Vec<bool>,
 }
 
 /// Abstraction over different regex engines.
@@ -446,6 +448,9 @@ struct CompiledStep {
     transform_action: Option<TransformAction>,
     step_type: StepType,
     is_global: bool,
+    // Block step fields
+    until_pattern: Option<CompiledPattern>,
+    block_action: Option<BlockAction>,
 }
 
 /// Runtime statistics collected during stream processing.
@@ -670,6 +675,9 @@ impl StreamProcessor {
             compiled_steps.len()
         );
 
+        // Initialize block states for Block step types
+        let block_states = vec![false; compiled_steps.len()];
+
         Ok(Self {
             config,
             compiled_steps,
@@ -677,6 +685,7 @@ impl StreamProcessor {
             context_before_buffer: VecDeque::new(),
             after_context_remaining: 0,
             last_output_line: 0,
+            block_states,
         })
     }
 
@@ -699,6 +708,13 @@ impl StreamProcessor {
             let pattern = Self::build_pattern(&step.pattern, &step.flags, settings)?;
             let replacement = step.replacement.clone();
 
+            // Compile the until pattern for Block steps
+            let until_pattern = if let Some(ref until_str) = step.until {
+                Some(Self::build_pattern(until_str, &step.flags, settings)?)
+            } else {
+                None
+            };
+
             compiled_steps.push(CompiledStep {
                 step_index: index,
                 pattern,
@@ -707,6 +723,8 @@ impl StreamProcessor {
                 transform_action: step.transform.clone(),
                 step_type: step.step_type.clone(),
                 is_global,
+                until_pattern,
+                block_action: step.block_action.clone(),
             });
         }
 
@@ -1142,7 +1160,7 @@ impl StreamProcessor {
         let line_start = Instant::now();
         let timeout_ms = self.config.settings.timeout_ms;
 
-        for compiled_step in &self.compiled_steps {
+        for step_idx in 0..self.compiled_steps.len() {
             // Check timeout if configured (0 = no timeout)
             if timeout_ms > 0 && line_start.elapsed().as_millis() as u64 > timeout_ms {
                 return Err(anyhow::anyhow!(
@@ -1151,6 +1169,7 @@ impl StreamProcessor {
                     line_number
                 ));
             }
+            let compiled_step = &self.compiled_steps[step_idx];
             let step_start = Instant::now();
             let mut step_result = StepResult::new(
                 compiled_step.step_index,
@@ -1158,7 +1177,7 @@ impl StreamProcessor {
                 format!("{:?}", compiled_step.pattern),
             );
 
-            match compiled_step.step_type {
+            match compiled_step.step_type.clone() {
                 StepType::Substitute => {
                     if let Some(ref replacement) = compiled_step.replacement {
                         let (result, was_modified) = self.apply_substitution(
@@ -1255,6 +1274,77 @@ impl StreamProcessor {
                         if compiled_step.pattern.is_match(&current_line) {
                             step_result.add_match();
                         }
+                    }
+                }
+                StepType::Block => {
+                    // Cross-line state machine: track blocks between trigger and until patterns
+                    let is_in_block = self.block_states[step_idx];
+
+                    // Check for block boundaries
+                    let trigger_matches = compiled_step.pattern.is_match(&current_line);
+                    let until_matches = compiled_step
+                        .until_pattern
+                        .as_ref()
+                        .map(|p| p.is_match(&current_line))
+                        .unwrap_or(false);
+
+                    // State transitions
+                    if !is_in_block && trigger_matches {
+                        // Enter block on trigger pattern
+                        self.block_states[step_idx] = true;
+                        step_result.add_match();
+                    } else if is_in_block && until_matches {
+                        // Exit block on until pattern
+                        self.block_states[step_idx] = false;
+                    }
+
+                    // Apply block action if we're inside the block (including trigger/until lines)
+                    let process_line = is_in_block || trigger_matches;
+                    if process_line {
+                        if let Some(ref action) = compiled_step.block_action {
+                            match action {
+                                BlockAction::KeepBlock => {
+                                    // Lines outside blocks are dropped
+                                    // (already inside block, so keep this line)
+                                }
+                                BlockAction::DropBlock => {
+                                    // Drop lines inside blocks
+                                    should_output = false;
+                                    break;
+                                }
+                                BlockAction::MarkBlock { marker } => {
+                                    // Prepend marker to lines in block
+                                    current_line = format!("{}{}", marker, current_line);
+                                    step_result.add_transformation();
+                                }
+                                BlockAction::SubstituteInBlock { pattern, replacement } => {
+                                    // Apply substitution only within block
+                                    if let Ok(sub_pattern) =
+                                        regex::Regex::new(pattern)
+                                    {
+                                        let new_line =
+                                            sub_pattern.replace_all(&current_line, replacement.as_str());
+                                        if new_line != current_line {
+                                            current_line = new_line.to_string();
+                                            step_result.add_transformation();
+                                        }
+                                    }
+                                }
+                                BlockAction::CollectBlock => {
+                                    // For CollectBlock, we'd need to buffer lines
+                                    // and output them together. For now, just mark them.
+                                    // Future: implement block collection buffer
+                                    step_result.add_match();
+                                }
+                            }
+                        }
+                    } else if matches!(
+                        compiled_step.block_action,
+                        Some(BlockAction::KeepBlock)
+                    ) {
+                        // KeepBlock: drop lines outside blocks
+                        should_output = false;
+                        break;
                     }
                 }
             }
@@ -1778,6 +1868,7 @@ mod tests {
                 flags: None,
                 description: None,
                 enabled: Some(true),
+                ..Default::default()
             }],
         };
 
@@ -1830,6 +1921,7 @@ mod tests {
                 flags: None,
                 description: None,
                 enabled: Some(true),
+                ..Default::default()
             }],
         };
 
@@ -1870,6 +1962,7 @@ mod tests {
                 flags: None,
                 description: None,
                 enabled: Some(true),
+                ..Default::default()
             }],
         };
 
@@ -2102,5 +2195,131 @@ mod tests {
             "Numbers should be replaced: {:?}",
             output_str
         );
+    }
+
+    #[test]
+    fn test_block_step_keep_block() {
+        // Test Block step with KeepBlock action - keep only lines within blocks
+        let config = PipelineConfig {
+            name: Some("Block Test".to_string()),
+            description: None,
+            version: None,
+            patterns_include: Vec::new(),
+            settings: PipelineSettings::default(),
+            step: vec![PipelineStep {
+                step_type: StepType::Block,
+                pattern: r"^BEGIN$".to_string(),
+                replacement: None,
+                action: None,
+                transform: None,
+                flags: None,
+                description: None,
+                enabled: Some(true),
+                until: Some(r"^END$".to_string()),
+                block_action: Some(BlockAction::KeepBlock),
+                block_context: None,
+            }],
+        };
+
+        let mut processor = StreamProcessor::new(config).unwrap();
+
+        let input = "outside 1\nBEGIN\ninside 1\ninside 2\nEND\noutside 2\n";
+        let reader = Cursor::new(input);
+        let mut output = Vec::new();
+
+        processor.process_stream(reader, &mut output).unwrap();
+        let output_str = String::from_utf8(output).unwrap();
+
+        // Should include lines inside block (including BEGIN/END)
+        assert!(output_str.contains("BEGIN"), "Should include BEGIN");
+        assert!(output_str.contains("inside 1"), "Should include inside 1");
+        assert!(output_str.contains("inside 2"), "Should include inside 2");
+        // Lines outside block should be dropped
+        assert!(!output_str.contains("outside 1"), "Should not include outside 1");
+        assert!(!output_str.contains("outside 2"), "Should not include outside 2");
+    }
+
+    #[test]
+    fn test_block_step_drop_block() {
+        // Test Block step with DropBlock action - drop lines within blocks
+        let config = PipelineConfig {
+            name: Some("Block Drop Test".to_string()),
+            description: None,
+            version: None,
+            patterns_include: Vec::new(),
+            settings: PipelineSettings::default(),
+            step: vec![PipelineStep {
+                step_type: StepType::Block,
+                pattern: r"^BEGIN$".to_string(),
+                replacement: None,
+                action: None,
+                transform: None,
+                flags: None,
+                description: None,
+                enabled: Some(true),
+                until: Some(r"^END$".to_string()),
+                block_action: Some(BlockAction::DropBlock),
+                block_context: None,
+            }],
+        };
+
+        let mut processor = StreamProcessor::new(config).unwrap();
+
+        let input = "keep 1\nBEGIN\ndrop 1\ndrop 2\nEND\nkeep 2\n";
+        let reader = Cursor::new(input);
+        let mut output = Vec::new();
+
+        processor.process_stream(reader, &mut output).unwrap();
+        let output_str = String::from_utf8(output).unwrap();
+
+        // Lines outside block should be kept
+        assert!(output_str.contains("keep 1"), "Should include keep 1");
+        assert!(output_str.contains("keep 2"), "Should include keep 2");
+        // Lines inside block (including BEGIN) should be dropped
+        assert!(!output_str.contains("drop 1"), "Should not include drop 1");
+        assert!(!output_str.contains("drop 2"), "Should not include drop 2");
+    }
+
+    #[test]
+    fn test_block_step_mark_block() {
+        // Test Block step with MarkBlock action - mark lines within blocks
+        let config = PipelineConfig {
+            name: Some("Block Mark Test".to_string()),
+            description: None,
+            version: None,
+            patterns_include: Vec::new(),
+            settings: PipelineSettings::default(),
+            step: vec![PipelineStep {
+                step_type: StepType::Block,
+                pattern: r"^START$".to_string(),
+                replacement: None,
+                action: None,
+                transform: None,
+                flags: None,
+                description: None,
+                enabled: Some(true),
+                until: Some(r"^STOP$".to_string()),
+                block_action: Some(BlockAction::MarkBlock {
+                    marker: ">>> ".to_string(),
+                }),
+                block_context: None,
+            }],
+        };
+
+        let mut processor = StreamProcessor::new(config).unwrap();
+
+        let input = "normal\nSTART\nmarked line\nSTOP\nnormal again\n";
+        let reader = Cursor::new(input);
+        let mut output = Vec::new();
+
+        processor.process_stream(reader, &mut output).unwrap();
+        let output_str = String::from_utf8(output).unwrap();
+
+        // Lines inside block should be marked
+        assert!(output_str.contains(">>> START"), "START should be marked");
+        assert!(output_str.contains(">>> marked line"), "marked line should be marked");
+        // Lines outside block should not be marked
+        assert!(output_str.contains("\nnormal\n") || output_str.starts_with("normal\n"),
+                "normal should not be marked");
     }
 }
