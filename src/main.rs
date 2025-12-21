@@ -75,6 +75,29 @@ fn should_use_color(matches: &clap::ArgMatches) -> bool {
     std::io::stdout().is_terminal()
 }
 
+/// Determine if JSON output should be used.
+/// AI-native behavior: JSON is default when stdout is not a terminal (piped output).
+/// This makes rexpipe ideal for AI agent consumption without explicit flags.
+///
+/// Priority:
+/// 1. --text flag forces plain text output (returns false)
+/// 2. --json flag forces JSON output (returns true)
+/// 3. Default: JSON when stdout is NOT a terminal (AI-native)
+fn should_use_json(matches: &clap::ArgMatches) -> bool {
+    // --text forces plain text output
+    if matches.get_flag("text") {
+        return false;
+    }
+
+    // --json forces JSON output
+    if matches.get_flag("json") {
+        return true;
+    }
+
+    // AI-native default: JSON when stdout is not a terminal
+    !io::stdout().is_terminal()
+}
+
 /// Categorize error type using structured error types for exit code selection.
 /// Falls back to string matching for errors that weren't wrapped in our types.
 fn categorize_error(error: &AnyhowError) -> i32 {
@@ -363,6 +386,19 @@ fn build_cli() -> Command {
                 .help("Preview changes without modifying (works with stdin or -i mode)")
                 .action(ArgAction::SetTrue),
         )
+        .arg(
+            Arg::new("apply")
+                .long("apply")
+                .help("Actually apply changes (required for in-place edits when piping/scripting)")
+                .long_help(
+                    "Explicitly confirm that file modifications should be applied. \
+                     In AI-native mode (non-interactive), this flag is required for \
+                     destructive operations like in-place editing (-i). This prevents \
+                     accidental file modifications when rexpipe is used by AI agents \
+                     or in automated pipelines."
+                )
+                .action(ArgAction::SetTrue),
+        )
         // === Server Mode ===
         .arg(
             Arg::new("server")
@@ -438,7 +474,13 @@ fn build_cli() -> Command {
         .arg(
             Arg::new("json")
                 .long("json")
-                .help("Output results as JSON")
+                .help("Output results as JSON (default when stdout is not a terminal)")
+                .action(ArgAction::SetTrue),
+        )
+        .arg(
+            Arg::new("text")
+                .long("text")
+                .help("Force plain text output even when piping (override AI-native JSON default)")
                 .action(ArgAction::SetTrue),
         )
         .arg(
@@ -453,6 +495,14 @@ fn build_cli() -> Command {
                 .long("no-color")
                 .help("Disable colored output (also respects NO_COLOR env var)")
                 .action(ArgAction::SetTrue),
+        )
+        .arg(
+            Arg::new("error-format")
+                .long("error-format")
+                .value_name("FORMAT")
+                .help("Error output format: text (default) or json for AI-parseable errors")
+                .value_parser(["text", "json"])
+                .default_value("text"),
         )
         // === Context Lines (for inspection) ===
         .arg(
@@ -570,37 +620,6 @@ fn build_cli() -> Command {
                 .help("Pretty print output (for JSON, XML, etc.)")
                 .action(ArgAction::SetTrue),
         )
-        // === Natural Language Mode ===
-        .arg(
-            Arg::new("natural")
-                .long("natural")
-                .short('N')
-                .value_name("DESCRIPTION")
-                .help("Describe transformation in natural language")
-                .long_help(
-                    "Build a pipeline from a natural language description.\n\n\
-                     Examples:\n  \
-                     --natural \"replace emails with [EMAIL]\"\n  \
-                     --natural \"remove blank lines and mask phone numbers\"\n  \
-                     --natural \"keep only lines with errors\"\n  \
-                     --natural \"extract all URLs\"\n  \
-                     --natural \"convert to uppercase\"\n\n\
-                     Supported patterns: email, phone, ip, url, date, time, number, etc.\n\
-                     Use --show-patterns to see all available patterns."
-                ),
-        )
-        .arg(
-            Arg::new("show-patterns")
-                .long("show-patterns")
-                .help("List available built-in patterns for natural language mode")
-                .action(ArgAction::SetTrue),
-        )
-        .arg(
-            Arg::new("builder")
-                .long("builder")
-                .help("Start interactive pipeline builder mode")
-                .action(ArgAction::SetTrue),
-        )
         // === Audit Trail ===
         .arg(
             Arg::new("audit")
@@ -714,6 +733,30 @@ fn build_cli() -> Command {
             Arg::new("validate")
                 .long("validate")
                 .help("Validate configuration only")
+                .action(ArgAction::SetTrue),
+        )
+        .arg(
+            Arg::new("explain")
+                .long("explain")
+                .help("Explain what the pipeline will do without processing data")
+                .long_help(
+                    "Output a human-readable description of the pipeline's behavior. \
+                     Lists each step, what patterns it matches, and what transformations \
+                     it applies. Useful for AI agents to understand a pipeline before \
+                     running it. Output can be JSON with --json flag."
+                )
+                .action(ArgAction::SetTrue),
+        )
+        .arg(
+            Arg::new("verify")
+                .long("verify")
+                .help("Output verification summary after processing")
+                .long_help(
+                    "After processing, output a verification summary confirming what \
+                     transformations were applied. Shows line counts, match counts, \
+                     and transformation counts. Useful for AI agents to confirm that \
+                     processing completed as expected. Output can be JSON with --json flag."
+                )
                 .action(ArgAction::SetTrue),
         )
         // === Security ===
@@ -839,8 +882,24 @@ fn main() {
     }
 
     if let Err(e) = run_application(&matches) {
-        eprintln!("Error: {}", e);
         let exit_code = categorize_error(&e);
+
+        // Check if JSON error output is requested
+        let use_json_errors = matches
+            .get_one::<String>("error-format")
+            .map(|s| s == "json")
+            .unwrap_or(false);
+
+        if use_json_errors {
+            // Output structured JSON error for AI consumption
+            match json_schema::output_error_json(&e.to_string(), exit_code, None) {
+                Ok(json) => eprintln!("{}", json),
+                Err(_) => eprintln!("Error: {}", e), // Fallback to plain text
+            }
+        } else {
+            eprintln!("Error: {}", e);
+        }
+
         std::process::exit(exit_code);
     }
 }
@@ -868,21 +927,6 @@ fn run_application(matches: &clap::ArgMatches) -> Result<()> {
     // Handle pattern learning mode
     if matches.get_flag("learn") {
         return run_pattern_learning(matches);
-    }
-
-    // Handle show-patterns mode (for natural language)
-    if matches.get_flag("show-patterns") {
-        return run_list_patterns();
-    }
-
-    // Handle natural language mode
-    if matches.get_one::<String>("natural").is_some() {
-        return run_natural_language_mode(matches);
-    }
-
-    // Handle interactive builder mode
-    if matches.get_flag("builder") {
-        return run_interactive_mode(matches);
     }
 
     // Handle data conversion mode
@@ -926,6 +970,11 @@ fn run_application(matches: &clap::ArgMatches) -> Result<()> {
         return validate_configuration(&config);
     }
 
+    // Handle explain mode: describe what pipeline will do
+    if matches.get_flag("explain") {
+        return explain_pipeline(&config, matches);
+    }
+
     // Check if we're in multi-file mode
     let paths: Vec<PathBuf> = matches
         .get_many::<String>("paths")
@@ -934,6 +983,19 @@ fn run_application(matches: &clap::ArgMatches) -> Result<()> {
 
     let is_multi_file =
         matches.get_flag("recursive") || matches.get_flag("in-place") || !paths.is_empty();
+
+    // AI-native safety: require --apply for in-place edits in non-interactive mode
+    // This prevents accidental file modifications when used by AI agents or scripts
+    let in_place = matches.get_flag("in-place");
+    let has_apply = matches.get_flag("apply");
+    let is_interactive = io::stdin().is_terminal() && io::stdout().is_terminal();
+
+    if in_place && !is_interactive && !has_apply && !matches.get_flag("dry-run") {
+        // Non-interactive in-place edit without --apply: show dry-run preview
+        eprintln!("AI-native safety: In-place editing requires --apply flag in non-interactive mode.");
+        eprintln!("Showing dry-run preview instead. Add --apply to actually modify files.\n");
+        return run_dry_run_preview(&config, matches, paths);
+    }
 
     // Handle dry-run: show preview for in-place mode, stdin preview, or just validate
     if matches.get_flag("dry-run") {
@@ -1170,7 +1232,7 @@ fn run_multi_file_mode(
     paths: Vec<PathBuf>,
 ) -> Result<()> {
     let quiet = matches.get_flag("quiet");
-    let json_output = matches.get_flag("json");
+    let json_output = should_use_json(matches);
     let jsonl_output = matches.get_flag("jsonl");
 
     debug!(
@@ -1539,6 +1601,186 @@ fn validate_configuration(config: &PipelineConfig) -> Result<()> {
     }
 }
 
+/// Explain what a pipeline will do without processing data.
+/// Outputs human-readable or JSON description of each step.
+fn explain_pipeline(config: &PipelineConfig, matches: &clap::ArgMatches) -> Result<()> {
+    use rexpipe::pipeline::{StepType, FilterAction, TransformAction};
+
+    let json_output = should_use_json(matches);
+
+    if json_output {
+        // JSON output for AI consumption
+        #[derive(serde::Serialize)]
+        struct StepExplanation {
+            step_number: usize,
+            step_type: String,
+            pattern: String,
+            description: String,
+            effect: String,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            replacement: Option<String>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            action: Option<String>,
+        }
+
+        #[derive(serde::Serialize)]
+        struct PipelineExplanation {
+            name: Option<String>,
+            step_count: usize,
+            steps: Vec<StepExplanation>,
+            summary: String,
+        }
+
+        let steps: Vec<StepExplanation> = config.step.iter().enumerate().map(|(i, step)| {
+            let (effect, action_str) = match step.step_type {
+                StepType::Substitute => {
+                    let repl = step.replacement.clone().unwrap_or_else(|| "(none)".to_string());
+                    (format!("Replace matches with '{}'", repl), None)
+                }
+                StepType::Filter => {
+                    let action = step.action.as_ref().map(|a| match a {
+                        FilterAction::KeepLine => "Keep only matching lines",
+                        FilterAction::DropLine => "Remove matching lines",
+                        FilterAction::KeepMatch => "Keep only the match text",
+                        FilterAction::DropMatch => "Remove the match from line",
+                    }).unwrap_or("Filter lines");
+                    (action.to_string(), step.action.as_ref().map(|a| format!("{:?}", a).to_lowercase()))
+                }
+                StepType::Extract => ("Extract matching text".to_string(), None),
+                StepType::Validate => ("Validate lines match pattern".to_string(), None),
+                StepType::Transform => {
+                    let t = step.transform.as_ref().map(|t| match t {
+                        TransformAction::Uppercase => "Convert to uppercase",
+                        TransformAction::Lowercase => "Convert to lowercase",
+                        TransformAction::TitleCase => "Convert to title case",
+                        TransformAction::Trim => "Trim whitespace",
+                        TransformAction::Reverse => "Reverse text",
+                        TransformAction::Base64Encode => "Encode to base64",
+                        TransformAction::Base64Decode => "Decode from base64",
+                        TransformAction::UrlEncode => "URL encode",
+                        TransformAction::UrlDecode => "URL decode",
+                        TransformAction::Prepend => "Prepend text",
+                        TransformAction::Append => "Append text",
+                        TransformAction::RemoveWhitespace => "Remove whitespace",
+                        TransformAction::NormalizeWhitespace => "Normalize whitespace",
+                        TransformAction::Deduplicate => "Remove duplicates",
+                        TransformAction::SortChars => "Sort characters",
+                        TransformAction::CharCount => "Count characters",
+                        TransformAction::WordCount => "Count words",
+                        TransformAction::Shell { .. } => "Run shell command",
+                        TransformAction::Plugin { .. } => "Run plugin",
+                        _ => "Custom transformation",
+                    }).unwrap_or("Transform matches");
+                    (t.to_string(), None)
+                }
+                StepType::Block => ("Process within block boundaries".to_string(), None),
+            };
+
+            StepExplanation {
+                step_number: i + 1,
+                step_type: format!("{:?}", step.step_type).to_lowercase(),
+                pattern: step.pattern.clone(),
+                description: step.description.clone().unwrap_or_default(),
+                effect,
+                replacement: step.replacement.clone(),
+                action: action_str,
+            }
+        }).collect();
+
+        let summary = if steps.is_empty() {
+            "Empty pipeline (passthrough)".to_string()
+        } else {
+            format!("Pipeline with {} step(s)", steps.len())
+        };
+
+        let explanation = PipelineExplanation {
+            name: config.name.clone(),
+            step_count: steps.len(),
+            steps,
+            summary,
+        };
+
+        let response = json_schema::JsonResponse::new("explain", explanation);
+        println!("{}", response.to_json()?);
+    } else {
+        // Human-readable output
+        println!("Pipeline Explanation");
+        println!("====================\n");
+
+        if let Some(name) = &config.name {
+            println!("Name: {}\n", name);
+        }
+
+        if config.step.is_empty() {
+            println!("Empty pipeline - input passes through unchanged.");
+            return Ok(());
+        }
+
+        println!("Steps ({}):\n", config.step.len());
+
+        for (i, step) in config.step.iter().enumerate() {
+            println!("  Step {}: {:?}", i + 1, step.step_type);
+            println!("    Pattern: '{}'", step.pattern);
+
+            if let Some(desc) = &step.description {
+                println!("    Description: {}", desc);
+            }
+
+            match step.step_type {
+                StepType::Substitute => {
+                    if let Some(repl) = &step.replacement {
+                        println!("    Replaces with: '{}'", repl);
+                    }
+                }
+                StepType::Filter => {
+                    if let Some(action) = &step.action {
+                        let action_desc = match action {
+                            FilterAction::KeepLine => "Keep only lines matching pattern",
+                            FilterAction::DropLine => "Remove lines matching pattern",
+                            FilterAction::KeepMatch => "Keep only matched text",
+                            FilterAction::DropMatch => "Remove matched text from line",
+                        };
+                        println!("    Action: {}", action_desc);
+                    }
+                }
+                StepType::Transform => {
+                    if let Some(transform) = &step.transform {
+                        let transform_desc: String = match transform {
+                            TransformAction::Uppercase => "Convert to uppercase".to_string(),
+                            TransformAction::Lowercase => "Convert to lowercase".to_string(),
+                            TransformAction::TitleCase => "Convert to title case".to_string(),
+                            TransformAction::Trim => "Trim whitespace".to_string(),
+                            TransformAction::Reverse => "Reverse text".to_string(),
+                            TransformAction::Base64Encode => "Encode to base64".to_string(),
+                            TransformAction::Base64Decode => "Decode from base64".to_string(),
+                            TransformAction::UrlEncode => "URL encode".to_string(),
+                            TransformAction::UrlDecode => "URL decode".to_string(),
+                            TransformAction::Prepend => "Prepend text".to_string(),
+                            TransformAction::Append => "Append text".to_string(),
+                            TransformAction::RemoveWhitespace => "Remove whitespace".to_string(),
+                            TransformAction::NormalizeWhitespace => "Normalize whitespace".to_string(),
+                            TransformAction::Deduplicate => "Remove duplicates".to_string(),
+                            TransformAction::SortChars => "Sort characters".to_string(),
+                            TransformAction::CharCount => "Count characters".to_string(),
+                            TransformAction::WordCount => "Count words".to_string(),
+                            TransformAction::Shell { command } => format!("Execute: {}", command),
+                            TransformAction::Plugin { name, .. } => format!("Plugin: {}", name),
+                            _ => "Custom transformation".to_string(),
+                        };
+                        println!("    Transform: {}", transform_desc);
+                    }
+                }
+                _ => {}
+            }
+            println!();
+        }
+
+        println!("Summary: Pipeline processes input through {} step(s).", config.step.len());
+    }
+
+    Ok(())
+}
+
 fn list_library_patterns(library_path: &str) -> Result<()> {
     let path = Path::new(library_path);
     let patterns = library::list_patterns(path)?;
@@ -1648,7 +1890,7 @@ fn run_processing_mode(
     matches: &clap::ArgMatches,
 ) -> Result<()> {
     let quiet = matches.get_flag("quiet");
-    let json_output = matches.get_flag("json");
+    let json_output = should_use_json(matches);
     let count_only = matches.get_flag("count");
 
     let mut processor = StreamProcessor::new(config.clone())?;
@@ -1693,6 +1935,66 @@ fn run_processing_mode(
     if json_output && matches.get_flag("performance") {
         // If both json and performance are requested, output performance as JSON
         eprintln!("{}", json_schema::output_performance_json(&result)?);
+    }
+
+    // Output verification summary if requested
+    if matches.get_flag("verify") {
+        output_verification_summary(&result, json_output)?;
+    }
+
+    Ok(())
+}
+
+/// Output a verification summary confirming what transformations were applied
+fn output_verification_summary(
+    result: &rexpipe::pipeline::PipelineResult,
+    json_output: bool,
+) -> Result<()> {
+    if json_output {
+        #[derive(serde::Serialize)]
+        struct VerificationResult {
+            status: String,
+            lines_processed: u64,
+            matches_found: u64,
+            transformations_applied: u64,
+            success_rate: f64,
+            verified: bool,
+        }
+
+        let verified = result.lines_processed > 0;
+        let status = if result.transformations_applied > 0 {
+            "transformations_applied"
+        } else if result.matches_found > 0 {
+            "matches_found_no_transformations"
+        } else {
+            "no_matches"
+        };
+
+        let verification = VerificationResult {
+            status: status.to_string(),
+            lines_processed: result.lines_processed,
+            matches_found: result.matches_found,
+            transformations_applied: result.transformations_applied,
+            success_rate: result.success_rate(),
+            verified,
+        };
+
+        let response = json_schema::JsonResponse::new("verify", verification);
+        eprintln!("{}", response.to_json()?);
+    } else {
+        eprintln!("\n--- Verification Summary ---");
+        eprintln!("Lines processed: {}", result.lines_processed);
+        eprintln!("Matches found: {}", result.matches_found);
+        eprintln!("Transformations applied: {}", result.transformations_applied);
+        eprintln!("Success rate: {:.1}%", result.success_rate() * 100.0);
+
+        if result.transformations_applied > 0 {
+            eprintln!("Status: ✓ Transformations applied successfully");
+        } else if result.matches_found > 0 {
+            eprintln!("Status: ⚠ Matches found but no transformations (filter-only mode?)");
+        } else {
+            eprintln!("Status: ⚠ No matches found");
+        }
     }
 
     Ok(())
@@ -2283,390 +2585,6 @@ fn parse_data_format(s: &str) -> Result<DataFormat> {
             s
         )),
     }
-}
-
-/// List all available built-in patterns for natural language mode.
-fn run_list_patterns() -> Result<()> {
-    use rexpipe::natural::BuiltinPatterns;
-
-    let patterns = BuiltinPatterns::new();
-    let mut names: Vec<_> = patterns.names().collect();
-    names.sort();
-    names.dedup();
-
-    println!("Available patterns for natural language mode:");
-    println!();
-
-    // Group patterns by category
-    let categories = [
-        ("Numbers", vec!["number", "numbers", "digit", "digits", "integer", "decimal", "float", "percentage"]),
-        ("Communication", vec!["email", "emails", "phone", "phone number", "url", "urls", "link", "links"]),
-        ("Network", vec!["ip", "ip address", "ipv4", "mac", "mac address"]),
-        ("Dates & Times", vec!["date", "dates", "time", "times", "timestamp", "iso date", "iso timestamp"]),
-        ("Financial", vec!["currency", "money", "price", "credit card", "ssn", "social security"]),
-        ("Text", vec!["word", "words", "whitespace", "blank line", "blank lines", "empty line", "empty lines",
-                      "leading whitespace", "trailing whitespace", "extra whitespace", "multiple spaces"]),
-        ("Code", vec!["comment", "comments", "string", "strings", "function", "hex", "uuid"]),
-        ("Logs", vec!["error", "errors", "warning", "warnings", "debug", "info"]),
-        ("HTML/XML", vec!["html tag", "html tags", "xml tag", "xml tags"]),
-    ];
-
-    for (category, pattern_names) in categories {
-        println!("{}:", category);
-        for name in pattern_names {
-            if let Some(regex) = patterns.get(name) {
-                println!("  {:20} -> {}", name, regex);
-            }
-        }
-        println!();
-    }
-
-    println!("Usage examples:");
-    println!("  rexpipe --natural \"replace emails with [EMAIL]\" input.txt");
-    println!("  rexpipe --natural \"remove blank lines\" input.txt");
-    println!("  rexpipe --natural \"mask all phone numbers\" input.txt");
-    println!("  rexpipe --natural \"keep only lines with errors\" input.txt");
-    println!("  rexpipe --natural \"extract all URLs\" input.txt");
-
-    Ok(())
-}
-
-/// Run natural language mode to build and execute a pipeline.
-fn run_natural_language_mode(matches: &clap::ArgMatches) -> Result<()> {
-    use rexpipe::natural::NaturalLanguageParser;
-    use rexpipe::processor::StreamProcessor;
-    use std::io::BufReader;
-
-    let description = matches
-        .get_one::<String>("natural")
-        .ok_or_else(|| anyhow!("Natural language description is required"))?;
-
-    // Parse the natural language description
-    let parser = NaturalLanguageParser::new();
-    let (result, suggestions) = parser.parse_with_suggestions(description);
-
-    let config = match result {
-        Ok(config) => config,
-        Err(e) => {
-            eprintln!("Error: {}", e);
-            for suggestion in suggestions {
-                eprintln!("  {}", suggestion);
-            }
-            return Err(anyhow!("Failed to parse natural language description"));
-        }
-    };
-
-    // Show what we understood
-    eprintln!("Parsed {} step(s) from description:", config.step.len());
-    for (i, step) in config.step.iter().enumerate() {
-        eprintln!("  {}. {:?}: pattern=\"{}\"", i + 1, step.step_type, step.pattern);
-        if let Some(ref replacement) = step.replacement {
-            eprintln!("      replacement=\"{}\"", replacement);
-        }
-        if let Some(ref action) = step.action {
-            eprintln!("      action={:?}", action);
-        }
-    }
-    eprintln!();
-
-    // Create processor
-    let mut processor = StreamProcessor::new(config)
-        .map_err(|e| anyhow!("Failed to create processor: {}", e))?;
-
-    // Process input
-    if let Some(input_file) = matches.get_one::<String>("input") {
-        let file = File::open(input_file)?;
-        let mut reader = BufReader::new(file);
-        if let Some(output_file) = matches.get_one::<String>("output") {
-            let mut output = File::create(output_file)?;
-            processor.process_stream(&mut reader, &mut output)
-                .map_err(|e| anyhow!("Processing error: {}", e))?;
-        } else {
-            processor.process_stream(&mut reader, &mut io::stdout())
-                .map_err(|e| anyhow!("Processing error: {}", e))?;
-        }
-    } else {
-        let stdin = io::stdin();
-        let mut reader = stdin.lock();
-        if let Some(output_file) = matches.get_one::<String>("output") {
-            let mut output = File::create(output_file)?;
-            processor.process_stream(&mut reader, &mut output)
-                .map_err(|e| anyhow!("Processing error: {}", e))?;
-        } else {
-            processor.process_stream(&mut reader, &mut io::stdout())
-                .map_err(|e| anyhow!("Processing error: {}", e))?;
-        }
-    }
-
-    Ok(())
-}
-
-/// Run interactive pipeline builder mode.
-fn run_interactive_mode(matches: &clap::ArgMatches) -> Result<()> {
-    use rexpipe::natural::{NaturalLanguageParser, PipelineBuilder, InteractiveCommand, CommandType};
-    use rexpipe::processor::StreamProcessor;
-    use std::io::{BufReader, Write as IoWrite};
-
-    println!("rexpipe Interactive Pipeline Builder");
-    println!("=====================================");
-    println!();
-    println!("Build a pipeline by describing transformations in natural language.");
-    println!("Type a description to add a step, or use commands:");
-    println!("  :list     - Show current pipeline");
-    println!("  :remove N - Remove step N");
-    println!("  :clear    - Clear all steps");
-    println!("  :test     - Test with sample input");
-    println!("  :run      - Run on input file");
-    println!("  :export   - Export to TOML");
-    println!("  :patterns - Show available patterns");
-    println!("  :help     - Show this help");
-    println!("  :quit     - Exit");
-    println!();
-
-    let parser = NaturalLanguageParser::new();
-    let mut builder = PipelineBuilder::new();
-    let mut history: Vec<rexpipe::pipeline::PipelineStep> = Vec::new();
-
-    loop {
-        // Print prompt
-        eprint!("> ");
-        io::stderr().flush()?;
-
-        // Read input
-        let mut line = String::new();
-        if io::stdin().read_line(&mut line)? == 0 {
-            break;
-        }
-
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-
-        // Parse command
-        let cmd = match InteractiveCommand::parse(line) {
-            Some(cmd) => cmd,
-            None => continue,
-        };
-
-        match cmd.command {
-            CommandType::Add => {
-                let description = if cmd.args.is_empty() {
-                    line.to_string()
-                } else {
-                    cmd.args.join(" ")
-                };
-
-                match parser.parse(&description) {
-                    Ok(config) => {
-                        for step in config.step {
-                            println!("Added: {:?} pattern=\"{}\"", step.step_type, step.pattern);
-                            history.push(step.clone());
-                            builder.add_step(step);
-                        }
-                    }
-                    Err(e) => {
-                        eprintln!("Could not understand: {}", e);
-                        if let Some(suggestion) = parser.suggest_pattern(&description) {
-                            eprintln!("Did you mean '{}'?", suggestion);
-                        }
-                    }
-                }
-            }
-
-            CommandType::List => {
-                if builder.step_count() == 0 {
-                    println!("Pipeline is empty.");
-                } else {
-                    println!("Current pipeline ({} steps):", builder.step_count());
-                    for (i, step) in history.iter().enumerate() {
-                        println!("  {}. {:?}: pattern=\"{}\"", i + 1, step.step_type, step.pattern);
-                    }
-                }
-            }
-
-            CommandType::Remove => {
-                if let Some(idx_str) = cmd.args.first() {
-                    if let Ok(idx) = idx_str.parse::<usize>() {
-                        if idx > 0 && idx <= history.len() {
-                            history.remove(idx - 1);
-                            builder = PipelineBuilder::new();
-                            for step in &history {
-                                builder.add_step(step.clone());
-                            }
-                            println!("Removed step {}.", idx);
-                        } else {
-                            eprintln!("Invalid step number.");
-                        }
-                    }
-                } else {
-                    eprintln!("Usage: :remove N");
-                }
-            }
-
-            CommandType::Clear => {
-                builder = PipelineBuilder::new();
-                history.clear();
-                println!("Pipeline cleared.");
-            }
-
-            CommandType::Test => {
-                if builder.step_count() == 0 {
-                    eprintln!("Pipeline is empty. Add some steps first.");
-                    continue;
-                }
-
-                println!("Enter test input (Ctrl+D or empty line to finish):");
-                let mut test_input = String::new();
-                loop {
-                    let mut line = String::new();
-                    if io::stdin().read_line(&mut line)? == 0 || line.trim().is_empty() {
-                        break;
-                    }
-                    test_input.push_str(&line);
-                }
-
-                if test_input.is_empty() {
-                    continue;
-                }
-
-                // Build a fresh config from history
-                let mut test_builder = PipelineBuilder::new();
-                for step in &history {
-                    test_builder.add_step(step.clone());
-                }
-                let config = test_builder.build();
-
-                match StreamProcessor::new(config) {
-                    Ok(mut processor) => {
-                        let mut output = Vec::new();
-                        let mut cursor = std::io::Cursor::new(test_input.as_bytes());
-                        match processor.process_stream(&mut cursor, &mut output) {
-                            Ok(_) => {
-                                println!("\nOutput:");
-                                println!("{}", String::from_utf8_lossy(&output));
-                            }
-                            Err(e) => eprintln!("Error: {}", e),
-                        }
-                    }
-                    Err(e) => eprintln!("Error creating processor: {}", e),
-                }
-            }
-
-            CommandType::Export => {
-                if builder.step_count() == 0 {
-                    eprintln!("Pipeline is empty.");
-                    continue;
-                }
-
-                // Build a fresh config from history
-                let mut export_builder = PipelineBuilder::new();
-                for step in &history {
-                    export_builder.add_step(step.clone());
-                }
-                let config = export_builder.build();
-
-                match toml::to_string_pretty(&config) {
-                    Ok(toml_str) => {
-                        println!("\n# Pipeline configuration");
-                        println!("{}", toml_str);
-                    }
-                    Err(e) => eprintln!("Error exporting: {}", e),
-                }
-            }
-
-            CommandType::Run => {
-                if builder.step_count() == 0 {
-                    eprintln!("Pipeline is empty. Add some steps first.");
-                    continue;
-                }
-
-                // Get input file
-                let input_file: String = if let Some(file) = cmd.args.first() {
-                    file.clone()
-                } else if let Some(file) = matches.get_one::<String>("input") {
-                    file.clone()
-                } else {
-                    eprintln!("Usage: :run <file>");
-                    continue;
-                };
-
-                // Build config from history
-                let mut run_builder = PipelineBuilder::new();
-                for step in &history {
-                    run_builder.add_step(step.clone());
-                }
-                let config = run_builder.build();
-
-                match StreamProcessor::new(config) {
-                    Ok(mut processor) => {
-                        match File::open(&input_file) {
-                            Ok(file) => {
-                                let mut reader = BufReader::new(file);
-                                match processor.process_stream(&mut reader, &mut io::stdout()) {
-                                    Ok(_) => {}
-                                    Err(e) => eprintln!("Error: {}", e),
-                                }
-                            }
-                            Err(e) => eprintln!("Error opening file: {}", e),
-                        }
-                    }
-                    Err(e) => eprintln!("Error creating processor: {}", e),
-                }
-            }
-
-            CommandType::Undo => {
-                if history.is_empty() {
-                    eprintln!("Nothing to undo.");
-                } else {
-                    history.pop();
-                    builder = PipelineBuilder::new();
-                    for step in &history {
-                        builder.add_step(step.clone());
-                    }
-                    println!("Undone last step.");
-                }
-            }
-
-            CommandType::Patterns => {
-                let patterns = parser.available_patterns();
-                println!("Available patterns:");
-                for chunk in patterns.chunks(5) {
-                    println!("  {}", chunk.join(", "));
-                }
-            }
-
-            CommandType::Help => {
-                println!("Commands:");
-                println!("  <description>  - Add step from natural language");
-                println!("  :add <desc>    - Add step explicitly");
-                println!("  :list          - Show current pipeline");
-                println!("  :remove N      - Remove step N");
-                println!("  :clear         - Clear all steps");
-                println!("  :test          - Test with sample input");
-                println!("  :run [file]    - Run on input file");
-                println!("  :export        - Export pipeline to TOML");
-                println!("  :undo          - Undo last action");
-                println!("  :patterns      - Show available patterns");
-                println!("  :help          - Show this help");
-                println!("  :quit          - Exit");
-                println!();
-                println!("Example descriptions:");
-                println!("  replace emails with [EMAIL]");
-                println!("  remove blank lines");
-                println!("  keep only lines with errors");
-                println!("  mask all phone numbers");
-                println!("  convert to uppercase");
-            }
-
-            CommandType::Quit => {
-                println!("Goodbye!");
-                break;
-            }
-        }
-    }
-
-    Ok(())
 }
 
 #[cfg(test)]

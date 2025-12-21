@@ -132,6 +132,26 @@ pub struct PerformanceResult {
     pub lines_per_second: Option<f64>,
 }
 
+/// Structured error response for AI-parseable error output.
+///
+/// This provides machine-readable errors with categorized exit codes,
+/// making it easy for AI agents to understand and handle errors programmatically.
+#[derive(Debug, Clone, Serialize)]
+pub struct ErrorResult {
+    /// Human-readable error message
+    pub message: String,
+    /// Error category (config, pattern, io, validation, general)
+    pub category: String,
+    /// Unix-style exit code for this error type
+    pub exit_code: i32,
+    /// Optional additional context about the error
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub details: Option<String>,
+    /// Optional suggestion for how to fix the error
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub suggestion: Option<String>,
+}
+
 // ============================================================================
 // Conversion helpers
 // ============================================================================
@@ -286,5 +306,60 @@ pub fn output_performance_json(
         lines_per_second: None,
     };
     let response = JsonResponse::new("performance", data);
+    response.to_json()
+}
+
+/// Output a standardized JSON error response.
+///
+/// Converts an error and exit code into a structured JSON response that
+/// AI agents can parse and handle programmatically.
+///
+/// # Example Output
+/// ```json
+/// {
+///   "metadata": {
+///     "schema_version": "1.0",
+///     "mode": "error",
+///     "tool_version": "1.1.0"
+///   },
+///   "data": {
+///     "message": "Invalid regex pattern",
+///     "category": "pattern",
+///     "exit_code": 4,
+///     "suggestion": "Check regex syntax"
+///   }
+/// }
+/// ```
+pub fn output_error_json(
+    message: &str,
+    exit_code: i32,
+    details: Option<&str>,
+) -> Result<String, serde_json::Error> {
+    let category = match exit_code {
+        2 => "usage",
+        3 => "config",
+        4 => "pattern",
+        5 => "io",
+        6 => "validation",
+        _ => "general",
+    };
+
+    let suggestion = match exit_code {
+        2 => Some("Run 'rexpipe --help' for usage information"),
+        3 => Some("Check configuration file syntax and paths"),
+        4 => Some("Verify regex pattern syntax; use --fixed for literal strings"),
+        5 => Some("Check file paths and permissions"),
+        6 => Some("Review pipeline configuration for validation errors"),
+        _ => None,
+    };
+
+    let data = ErrorResult {
+        message: message.to_string(),
+        category: category.to_string(),
+        exit_code,
+        details: details.map(|s| s.to_string()),
+        suggestion: suggestion.map(|s| s.to_string()),
+    };
+    let response = JsonResponse::new("error", data);
     response.to_json()
 }
