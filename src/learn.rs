@@ -1,0 +1,821 @@
+//! Pattern learning and inference from examples.
+//!
+//! This module provides intelligent pattern discovery and learning capabilities:
+//!
+//! - **Example-based learning**: Infer regex patterns from positive/negative examples
+//! - **Pattern generalization**: Generate patterns that match all examples
+//! - **Confidence scoring**: Rate pattern quality and specificity
+//! - **Pattern suggestions**: Recommend patterns based on content analysis
+//!
+//! ## Algorithm
+//!
+//! The pattern learner uses a combination of techniques:
+//! 1. Character class detection (digits, letters, etc.)
+//! 2. Common pattern template matching
+//! 3. Sequence analysis for repetition and structure
+//! 4. Negative example filtering
+//!
+//! ## Example
+//!
+//! ```
+//! use rexpipe::learn::PatternLearner;
+//!
+//! let mut learner = PatternLearner::new();
+//!
+//! // Add positive examples (what we want to match)
+//! learner.add_positive("user@example.com");
+//! learner.add_positive("admin@company.org");
+//! learner.add_positive("test123@domain.net");
+//!
+//! // Add negative examples (what we don't want to match)
+//! learner.add_negative("not-an-email");
+//! learner.add_negative("@invalid");
+//!
+//! // Learn patterns
+//! let patterns = learner.learn().unwrap();
+//!
+//! // Get the best pattern
+//! if let Some(best) = patterns.first() {
+//!     println!("Pattern: {} (confidence: {}%)", best.pattern, best.confidence);
+//! }
+//! ```
+
+use regex::Regex;
+use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
+use thiserror::Error;
+
+/// Errors that can occur during pattern learning.
+#[derive(Error, Debug)]
+pub enum LearnError {
+    #[error("Insufficient examples: need at least {min} positive examples, got {got}")]
+    InsufficientExamples { min: usize, got: usize },
+
+    #[error("No valid pattern found that matches all positive examples")]
+    NoPatternFound,
+
+    #[error("Pattern conflicts with negative example: {0}")]
+    NegativeConflict(String),
+
+    #[error("Invalid regex generated: {0}")]
+    InvalidRegex(#[from] regex::Error),
+
+    #[error("Learning timeout exceeded")]
+    Timeout,
+}
+
+pub type Result<T> = std::result::Result<T, LearnError>;
+
+/// An example for pattern learning.
+#[derive(Debug, Clone)]
+pub struct Example {
+    /// The example text
+    pub text: String,
+    /// Whether this is a positive (should match) or negative (should not match) example
+    pub positive: bool,
+    /// Optional: specific substring to extract
+    pub extract: Option<String>,
+}
+
+impl Example {
+    /// Create a positive example.
+    pub fn positive(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            positive: true,
+            extract: None,
+        }
+    }
+
+    /// Create a negative example.
+    pub fn negative(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            positive: false,
+            extract: None,
+        }
+    }
+
+    /// Create a positive example with extraction target.
+    pub fn with_extract(text: impl Into<String>, extract: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            positive: true,
+            extract: Some(extract.into()),
+        }
+    }
+}
+
+/// A learned pattern with metadata.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LearnedPattern {
+    /// The regex pattern
+    pub pattern: String,
+    /// Confidence score (0-100)
+    pub confidence: u8,
+    /// Number of positive examples matched
+    pub matches_positive: usize,
+    /// Number of negative examples (correctly) not matched
+    pub avoids_negative: usize,
+    /// Pattern category/type
+    pub category: PatternCategory,
+    /// Human-readable description
+    pub description: String,
+    /// Specificity score (how specific vs. general the pattern is)
+    pub specificity: u8,
+}
+
+/// Categories of patterns.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PatternCategory {
+    /// Email addresses
+    Email,
+    /// URLs and URIs
+    Url,
+    /// IP addresses (v4 or v6)
+    IpAddress,
+    /// Phone numbers
+    Phone,
+    /// Dates and timestamps
+    DateTime,
+    /// Credit card numbers
+    CreditCard,
+    /// Social security numbers
+    Ssn,
+    /// UUIDs
+    Uuid,
+    /// Generic identifiers
+    Identifier,
+    /// Numeric patterns
+    Numeric,
+    /// Alphanumeric patterns
+    Alphanumeric,
+    /// Custom/unknown
+    Custom,
+}
+
+impl PatternCategory {
+    /// Get the common pattern template for this category.
+    fn template(&self) -> Option<&'static str> {
+        match self {
+            PatternCategory::Email => Some(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}"),
+            PatternCategory::Url => Some(r"https?://[^\s]+"),
+            PatternCategory::IpAddress => Some(r"\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}"),
+            PatternCategory::Phone => Some(r"[\d\s\-\(\)]+"),
+            PatternCategory::DateTime => Some(r"\d{4}-\d{2}-\d{2}"),
+            PatternCategory::CreditCard => Some(r"\d{4}[\s\-]?\d{4}[\s\-]?\d{4}[\s\-]?\d{4}"),
+            PatternCategory::Ssn => Some(r"\d{3}-\d{2}-\d{4}"),
+            PatternCategory::Uuid => Some(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"),
+            PatternCategory::Identifier => Some(r"[a-zA-Z_][a-zA-Z0-9_]*"),
+            PatternCategory::Numeric => Some(r"\d+"),
+            PatternCategory::Alphanumeric => Some(r"[a-zA-Z0-9]+"),
+            PatternCategory::Custom => None,
+        }
+    }
+}
+
+/// Configuration for pattern learning.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LearnConfig {
+    /// Minimum confidence threshold (0-100)
+    #[serde(default = "default_min_confidence")]
+    pub min_confidence: u8,
+
+    /// Maximum number of patterns to return
+    #[serde(default = "default_max_patterns")]
+    pub max_patterns: usize,
+
+    /// Whether to try common pattern templates first
+    #[serde(default = "default_true")]
+    pub use_templates: bool,
+
+    /// Whether to generate capture groups
+    #[serde(default)]
+    pub generate_captures: bool,
+
+    /// Maximum pattern complexity (regex length)
+    #[serde(default = "default_max_complexity")]
+    pub max_complexity: usize,
+
+    /// Timeout in milliseconds
+    #[serde(default = "default_timeout")]
+    pub timeout_ms: u64,
+}
+
+fn default_min_confidence() -> u8 {
+    70
+}
+
+fn default_max_patterns() -> usize {
+    5
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_max_complexity() -> usize {
+    200
+}
+
+fn default_timeout() -> u64 {
+    5000
+}
+
+impl Default for LearnConfig {
+    fn default() -> Self {
+        Self {
+            min_confidence: default_min_confidence(),
+            max_patterns: default_max_patterns(),
+            use_templates: default_true(),
+            generate_captures: false,
+            max_complexity: default_max_complexity(),
+            timeout_ms: default_timeout(),
+        }
+    }
+}
+
+/// Pattern learner for inferring regex patterns from examples.
+pub struct PatternLearner {
+    config: LearnConfig,
+    positive_examples: Vec<String>,
+    negative_examples: Vec<String>,
+    extraction_targets: Vec<(String, String)>, // (full_text, target)
+}
+
+impl PatternLearner {
+    /// Create a new pattern learner with default configuration.
+    pub fn new() -> Self {
+        Self::with_config(LearnConfig::default())
+    }
+
+    /// Create a pattern learner with custom configuration.
+    pub fn with_config(config: LearnConfig) -> Self {
+        Self {
+            config,
+            positive_examples: Vec::new(),
+            negative_examples: Vec::new(),
+            extraction_targets: Vec::new(),
+        }
+    }
+
+    /// Add a positive example (text that should match).
+    pub fn add_positive(&mut self, text: impl Into<String>) {
+        self.positive_examples.push(text.into());
+    }
+
+    /// Add a negative example (text that should not match).
+    pub fn add_negative(&mut self, text: impl Into<String>) {
+        self.negative_examples.push(text.into());
+    }
+
+    /// Add an extraction example (text with target substring).
+    pub fn add_extraction(&mut self, full_text: impl Into<String>, target: impl Into<String>) {
+        let full = full_text.into();
+        let tgt = target.into();
+        self.positive_examples.push(tgt.clone());
+        self.extraction_targets.push((full, tgt));
+    }
+
+    /// Add multiple examples at once.
+    pub fn add_examples(&mut self, examples: impl IntoIterator<Item = Example>) {
+        for example in examples {
+            if example.positive {
+                if let Some(extract) = example.extract {
+                    self.add_extraction(example.text, extract);
+                } else {
+                    self.add_positive(example.text);
+                }
+            } else {
+                self.add_negative(example.text);
+            }
+        }
+    }
+
+    /// Clear all examples.
+    pub fn clear(&mut self) {
+        self.positive_examples.clear();
+        self.negative_examples.clear();
+        self.extraction_targets.clear();
+    }
+
+    /// Get the total number of examples (positive + negative).
+    pub fn example_count(&self) -> usize {
+        self.positive_examples.len() + self.negative_examples.len()
+    }
+
+    /// Learn patterns from the provided examples.
+    pub fn learn(&self) -> Result<Vec<LearnedPattern>> {
+        if self.positive_examples.len() < 2 {
+            return Err(LearnError::InsufficientExamples {
+                min: 2,
+                got: self.positive_examples.len(),
+            });
+        }
+
+        let mut candidates: Vec<LearnedPattern> = Vec::new();
+
+        // Try template-based patterns first
+        if self.config.use_templates {
+            candidates.extend(self.try_templates()?);
+        }
+
+        // Generate patterns from character analysis
+        candidates.extend(self.learn_from_structure()?);
+
+        // Filter by negative examples
+        candidates = self.filter_by_negatives(candidates)?;
+
+        // Sort by confidence
+        candidates.sort_by(|a, b| b.confidence.cmp(&a.confidence));
+
+        // Limit results
+        candidates.truncate(self.config.max_patterns);
+
+        if candidates.is_empty() {
+            return Err(LearnError::NoPatternFound);
+        }
+
+        Ok(candidates)
+    }
+
+    /// Try common pattern templates.
+    fn try_templates(&self) -> Result<Vec<LearnedPattern>> {
+        let mut results = Vec::new();
+
+        let categories = [
+            PatternCategory::Email,
+            PatternCategory::Url,
+            PatternCategory::IpAddress,
+            PatternCategory::Phone,
+            PatternCategory::DateTime,
+            PatternCategory::CreditCard,
+            PatternCategory::Ssn,
+            PatternCategory::Uuid,
+        ];
+
+        for category in categories {
+            if let Some(template) = category.template() {
+                if let Ok(pattern) = self.evaluate_pattern(template, category) {
+                    if pattern.confidence >= self.config.min_confidence {
+                        results.push(pattern);
+                    }
+                }
+            }
+        }
+
+        Ok(results)
+    }
+
+    /// Learn patterns from structural analysis of examples.
+    fn learn_from_structure(&self) -> Result<Vec<LearnedPattern>> {
+        let mut results = Vec::new();
+
+        // Analyze character classes in examples
+        let analysis = self.analyze_examples();
+
+        // Generate patterns from analysis
+        for pattern_str in self.generate_patterns(&analysis) {
+            if pattern_str.len() > self.config.max_complexity {
+                continue;
+            }
+
+            if let Ok(pattern) = self.evaluate_pattern(&pattern_str, PatternCategory::Custom) {
+                if pattern.confidence >= self.config.min_confidence {
+                    results.push(pattern);
+                }
+            }
+        }
+
+        Ok(results)
+    }
+
+    /// Analyze character patterns in examples.
+    fn analyze_examples(&self) -> ExampleAnalysis {
+        let mut analysis = ExampleAnalysis::default();
+
+        for example in &self.positive_examples {
+            let char_types: Vec<CharType> = example.chars().map(CharType::from).collect();
+            analysis.char_sequences.push(char_types);
+            analysis.lengths.push(example.len());
+
+            // Collect unique characters
+            for c in example.chars() {
+                analysis.unique_chars.insert(c);
+            }
+        }
+
+        // Find common length
+        if !analysis.lengths.is_empty() {
+            let min_len = *analysis.lengths.iter().min().unwrap();
+            let max_len = *analysis.lengths.iter().max().unwrap();
+            analysis.min_length = min_len;
+            analysis.max_length = max_len;
+            analysis.fixed_length = min_len == max_len;
+        }
+
+        analysis
+    }
+
+    /// Generate pattern candidates from analysis.
+    fn generate_patterns(&self, analysis: &ExampleAnalysis) -> Vec<String> {
+        let mut patterns = Vec::new();
+
+        // Pattern 1: Character class sequence
+        if let Some(seq) = self.generate_char_class_pattern(analysis) {
+            patterns.push(seq);
+        }
+
+        // Pattern 2: Literal with wildcards
+        if let Some(literal) = self.generate_literal_pattern() {
+            patterns.push(literal);
+        }
+
+        // Pattern 3: Common prefix/suffix with variable middle
+        if let Some(affixed) = self.generate_affix_pattern() {
+            patterns.push(affixed);
+        }
+
+        patterns
+    }
+
+    /// Generate a pattern based on character classes.
+    fn generate_char_class_pattern(&self, analysis: &ExampleAnalysis) -> Option<String> {
+        if analysis.char_sequences.is_empty() {
+            return None;
+        }
+
+        // Find common character class pattern
+        let first_seq = &analysis.char_sequences[0];
+        let mut pattern = String::new();
+
+        let mut i = 0;
+        while i < first_seq.len() {
+            // Check if this position has the same char type in all examples
+            let char_type = first_seq[i];
+            let consistent = analysis.char_sequences.iter().all(|seq| {
+                seq.get(i).map(|&ct| ct == char_type).unwrap_or(false)
+            });
+
+            if consistent {
+                // Count consecutive same-type characters
+                let mut count = 1;
+                while i + count < first_seq.len() && first_seq[i + count] == char_type {
+                    let all_same = analysis.char_sequences.iter().all(|seq| {
+                        seq.get(i + count).map(|&ct| ct == char_type).unwrap_or(false)
+                    });
+                    if all_same {
+                        count += 1;
+                    } else {
+                        break;
+                    }
+                }
+
+                // Add to pattern
+                let class_str = char_type.as_regex_class();
+                if count == 1 {
+                    pattern.push_str(class_str);
+                } else if analysis.fixed_length {
+                    pattern.push_str(&format!("{}{{{}}}", class_str, count));
+                } else {
+                    pattern.push_str(&format!("{}+", class_str));
+                }
+
+                i += count;
+            } else {
+                // Variable position - use wildcard
+                pattern.push('.');
+                i += 1;
+            }
+        }
+
+        // Handle variable length
+        if !analysis.fixed_length && !pattern.is_empty() {
+            // Make trailing quantifiers more flexible
+            pattern = pattern.replace("+", "+?");
+        }
+
+        Some(pattern)
+    }
+
+    /// Generate a pattern based on common literal parts.
+    fn generate_literal_pattern(&self) -> Option<String> {
+        if self.positive_examples.len() < 2 {
+            return None;
+        }
+
+        // Find longest common substring
+        let first = &self.positive_examples[0];
+        let mut best_common = String::new();
+
+        for start in 0..first.len() {
+            for end in start + 1..=first.len() {
+                let candidate = &first[start..end];
+                if candidate.len() <= best_common.len() {
+                    continue;
+                }
+
+                let all_contain = self.positive_examples.iter().all(|ex| ex.contains(candidate));
+                if all_contain {
+                    best_common = candidate.to_string();
+                }
+            }
+        }
+
+        if best_common.len() >= 2 {
+            // Build pattern with literal and wildcards
+            let escaped = regex::escape(&best_common);
+            Some(format!(".*{}.*", escaped))
+        } else {
+            None
+        }
+    }
+
+    /// Generate a pattern based on common prefix/suffix.
+    fn generate_affix_pattern(&self) -> Option<String> {
+        if self.positive_examples.is_empty() {
+            return None;
+        }
+
+        // Find common prefix
+        let first = &self.positive_examples[0];
+        let mut prefix_len = 0;
+
+        'prefix: for i in 0..first.len() {
+            let c = first.chars().nth(i)?;
+            for ex in &self.positive_examples[1..] {
+                if ex.chars().nth(i) != Some(c) {
+                    break 'prefix;
+                }
+            }
+            prefix_len = i + 1;
+        }
+
+        // Find common suffix
+        let mut suffix_len = 0;
+        'suffix: for i in 0..first.len() {
+            let idx = first.len() - 1 - i;
+            let c = first.chars().nth(idx)?;
+            for ex in &self.positive_examples[1..] {
+                if ex.len() <= i || ex.chars().nth(ex.len() - 1 - i) != Some(c) {
+                    break 'suffix;
+                }
+            }
+            suffix_len = i + 1;
+        }
+
+        if prefix_len >= 2 || suffix_len >= 2 {
+            let prefix = &first[..prefix_len];
+            let suffix = &first[first.len() - suffix_len..];
+
+            let pattern = format!(
+                "{}.*{}",
+                regex::escape(prefix),
+                regex::escape(suffix)
+            );
+
+            Some(pattern)
+        } else {
+            None
+        }
+    }
+
+    /// Evaluate a pattern against examples.
+    fn evaluate_pattern(&self, pattern_str: &str, category: PatternCategory) -> Result<LearnedPattern> {
+        let regex = Regex::new(pattern_str)?;
+
+        let matches_positive = self
+            .positive_examples
+            .iter()
+            .filter(|ex| regex.is_match(ex))
+            .count();
+
+        let avoids_negative = self
+            .negative_examples
+            .iter()
+            .filter(|ex| !regex.is_match(ex))
+            .count();
+
+        // Calculate confidence
+        let positive_rate = if self.positive_examples.is_empty() {
+            0.0
+        } else {
+            matches_positive as f64 / self.positive_examples.len() as f64
+        };
+
+        let negative_rate = if self.negative_examples.is_empty() {
+            1.0
+        } else {
+            avoids_negative as f64 / self.negative_examples.len() as f64
+        };
+
+        let confidence = ((positive_rate * 0.7 + negative_rate * 0.3) * 100.0) as u8;
+
+        // Calculate specificity (shorter patterns are more general)
+        let specificity = (100 - (pattern_str.len().min(100))) as u8;
+
+        let description = format!(
+            "Matches {}/{} positive examples",
+            matches_positive,
+            self.positive_examples.len()
+        );
+
+        Ok(LearnedPattern {
+            pattern: pattern_str.to_string(),
+            confidence,
+            matches_positive,
+            avoids_negative,
+            category,
+            description,
+            specificity,
+        })
+    }
+
+    /// Filter patterns by negative examples.
+    fn filter_by_negatives(&self, patterns: Vec<LearnedPattern>) -> Result<Vec<LearnedPattern>> {
+        Ok(patterns
+            .into_iter()
+            .filter(|p| {
+                // Must not match any negative examples
+                if let Ok(regex) = Regex::new(&p.pattern) {
+                    !self.negative_examples.iter().any(|ex| regex.is_match(ex))
+                } else {
+                    false
+                }
+            })
+            .collect())
+    }
+}
+
+impl Default for PatternLearner {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Analysis of example structure.
+#[derive(Debug, Default)]
+struct ExampleAnalysis {
+    char_sequences: Vec<Vec<CharType>>,
+    lengths: Vec<usize>,
+    min_length: usize,
+    max_length: usize,
+    fixed_length: bool,
+    unique_chars: HashSet<char>,
+}
+
+/// Character type classification.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CharType {
+    Digit,
+    LowerLetter,
+    UpperLetter,
+    Whitespace,
+    Punctuation,
+    Symbol,
+    Other,
+}
+
+impl CharType {
+    fn from(c: char) -> Self {
+        if c.is_ascii_digit() {
+            CharType::Digit
+        } else if c.is_ascii_lowercase() {
+            CharType::LowerLetter
+        } else if c.is_ascii_uppercase() {
+            CharType::UpperLetter
+        } else if c.is_whitespace() {
+            CharType::Whitespace
+        } else if c.is_ascii_punctuation() {
+            CharType::Punctuation
+        } else if c.is_ascii() {
+            CharType::Symbol
+        } else {
+            CharType::Other
+        }
+    }
+
+    fn as_regex_class(&self) -> &'static str {
+        match self {
+            CharType::Digit => r"\d",
+            CharType::LowerLetter => r"[a-z]",
+            CharType::UpperLetter => r"[A-Z]",
+            CharType::Whitespace => r"\s",
+            CharType::Punctuation => r"[[:punct:]]",
+            CharType::Symbol => r".",
+            CharType::Other => r".",
+        }
+    }
+}
+
+/// Generate a pipeline configuration from learned patterns.
+pub fn generate_pipeline_config(patterns: &[LearnedPattern]) -> String {
+    let mut config = String::new();
+
+    config.push_str("# Auto-generated pipeline from pattern learning\n");
+    config.push_str("name = \"learned-patterns\"\n\n");
+
+    for (i, pattern) in patterns.iter().enumerate() {
+        config.push_str(&format!("# {} (confidence: {}%)\n", pattern.description, pattern.confidence));
+        config.push_str("[[step]]\n");
+        config.push_str("type = \"substitute\"\n");
+        config.push_str(&format!("pattern = '{}'\n", pattern.pattern.replace('\'', "\\'")));
+        config.push_str(&format!("replacement = \"MATCH_{}\"\n", i + 1));
+        config.push_str(&format!("description = \"{:?} pattern\"\n\n", pattern.category));
+    }
+
+    config
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_pattern_learner_email() {
+        let mut learner = PatternLearner::new();
+
+        learner.add_positive("user@example.com");
+        learner.add_positive("admin@company.org");
+        learner.add_positive("test123@domain.net");
+
+        learner.add_negative("not-an-email");
+        learner.add_negative("@invalid");
+        learner.add_negative("missing@");
+
+        let patterns = learner.learn().unwrap();
+        assert!(!patterns.is_empty());
+
+        // The email template should match
+        let best = &patterns[0];
+        assert!(best.confidence >= 70);
+    }
+
+    #[test]
+    fn test_pattern_learner_ssn() {
+        let mut learner = PatternLearner::new();
+
+        learner.add_positive("123-45-6789");
+        learner.add_positive("987-65-4321");
+        learner.add_positive("111-22-3333");
+
+        learner.add_negative("12-345-6789");
+        learner.add_negative("1234567890");
+
+        let patterns = learner.learn().unwrap();
+        assert!(!patterns.is_empty());
+    }
+
+    #[test]
+    fn test_insufficient_examples() {
+        let mut learner = PatternLearner::new();
+        learner.add_positive("only-one");
+
+        let result = learner.learn();
+        assert!(matches!(result, Err(LearnError::InsufficientExamples { .. })));
+    }
+
+    #[test]
+    fn test_char_type_classification() {
+        assert_eq!(CharType::from('a'), CharType::LowerLetter);
+        assert_eq!(CharType::from('A'), CharType::UpperLetter);
+        assert_eq!(CharType::from('5'), CharType::Digit);
+        assert_eq!(CharType::from(' '), CharType::Whitespace);
+        assert_eq!(CharType::from('.'), CharType::Punctuation);
+    }
+
+    #[test]
+    fn test_learned_pattern_serialization() {
+        let pattern = LearnedPattern {
+            pattern: r"\d+".to_string(),
+            confidence: 95,
+            matches_positive: 10,
+            avoids_negative: 5,
+            category: PatternCategory::Numeric,
+            description: "Matches numbers".to_string(),
+            specificity: 50,
+        };
+
+        let json = serde_json::to_string(&pattern).unwrap();
+        let restored: LearnedPattern = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.confidence, 95);
+    }
+
+    #[test]
+    fn test_generate_pipeline_config() {
+        let patterns = vec![LearnedPattern {
+            pattern: r"\d+".to_string(),
+            confidence: 90,
+            matches_positive: 5,
+            avoids_negative: 3,
+            category: PatternCategory::Numeric,
+            description: "Matches 5/5 positive examples".to_string(),
+            specificity: 97,
+        }];
+
+        let config = generate_pipeline_config(&patterns);
+        assert!(config.contains("[[step]]"));
+        assert!(config.contains(r"\d+"));
+    }
+}
