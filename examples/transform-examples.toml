@@ -1,0 +1,84 @@
+# Transform Step Examples
+#
+# This pipeline demonstrates all available Transform actions in rexpipe.
+# Transform steps match patterns and apply transformations to the matched text.
+
+name = "Transform Step Examples"
+description = "Demonstrates all Transform action types available in rexpipe"
+version = "1.0.0"
+
+# =============================================================================
+# Case Transformations
+# =============================================================================
+
+[[step]]
+type = "transform"
+description = "Uppercase: Convert email domains to uppercase"
+pattern = '@[a-z0-9.-]+\.[a-z]{2,}'
+transform = "uppercase"
+flags = ["global"]
+enabled = true
+
+[[step]]
+type = "transform"
+description = "Lowercase: Normalize mixed-case usernames"
+pattern = '[A-Za-z]+_[A-Za-z]+'
+transform = "lowercase"
+flags = ["global"]
+enabled = true
+
+[[step]]
+type = "transform"
+description = "TitleCase: Capitalize names properly"
+pattern = '\b[a-z]+'
+transform = "title_case"
+flags = ["global"]
+enabled = true
+
+# =============================================================================
+# Whitespace Transformations
+# =============================================================================
+
+[[step]]
+type = "transform"
+description = "Trim: Remove leading/trailing whitespace from fields"
+pattern = '\s*[^,]+\s*'
+transform = "trim"
+flags = ["global"]
+enabled = true
+
+[[step]]
+type = "transform"
+description = "RemoveWhitespace: Compact phone numbers"
+pattern = '\d[\d\s-]+'
+transform = "remove_whitespace"
+flags = ["global"]
+enabled = true
+
+# =============================================================================
+# Content Modifications
+# =============================================================================
+
+[[step]]
+type = "transform"
+description = "Prepend: Add prefix to log entries"
+pattern = '^\[(?:INFO|WARN|ERROR)\]'
+transform = "prepend"
+replacement = "APP: "
+enabled = true
+
+[[step]]
+type = "transform"
+description = "Append: Add units to numeric values"
+pattern = '\d+(?:\.\d+)?'
+transform = "append"
+replacement = "ms"
+flags = ["global"]
+enabled = true
+
+[[step]]
+type = "transform"
+description = "Reverse: Reverse identifier strings (for obfuscation demo)"
+pattern = 'ID_\d+'
+transform = "reverse"
+enabled = true

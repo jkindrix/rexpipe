@@ -1,0 +1,65 @@
+# Shell Transform Examples
+#
+# The Shell transform executes external commands and uses their output
+# as the replacement text. Use with caution - requires appropriate permissions.
+#
+# Security: Shell transforms are disabled by default. Enable with:
+#   --allow-shell flag
+#
+# The matched text is passed to the command via stdin.
+# The command's stdout becomes the replacement.
+
+name = "Shell Transform Examples"
+description = "Examples using external commands for text transformation"
+version = "1.0.0"
+
+[settings]
+allow_shell = true  # Required to enable shell transforms
+timeout_ms = 5000   # Shell command timeout (5 seconds)
+
+# =============================================================================
+# Hash and Encode Transformations
+# =============================================================================
+
+[[step]]
+type = "transform"
+description = "Base64 encode matched content"
+pattern = 'SECRET_[A-Za-z0-9_]+'
+transform.shell.command = "base64"
+enabled = true
+
+[[step]]
+type = "transform"
+description = "URL encode special characters"
+pattern = '[\s&?=]+'
+transform.shell.command = "python3 -c \"import sys, urllib.parse; print(urllib.parse.quote(sys.stdin.read().strip()), end='')\""
+enabled = true
+
+# =============================================================================
+# Data Processing Examples
+# =============================================================================
+
+[[step]]
+type = "transform"
+description = "Format JSON inline (compact to pretty)"
+pattern = '\{[^}]+\}'
+transform.shell.command = "jq ."
+enabled = true
+
+# =============================================================================
+# System Integration Examples
+# =============================================================================
+
+[[step]]
+type = "transform"
+description = "Add current timestamp to matched text"
+pattern = 'TIMESTAMP'
+transform.shell.command = "date '+%Y-%m-%d %H:%M:%S'"
+enabled = true
+
+[[step]]
+type = "transform"
+description = "Generate UUID for placeholder"
+pattern = 'UUID_PLACEHOLDER'
+transform.shell.command = "uuidgen 2>/dev/null || cat /proc/sys/kernel/random/uuid"
+enabled = true
