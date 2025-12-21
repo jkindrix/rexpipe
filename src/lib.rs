@@ -79,10 +79,7 @@
 //! - [`files`]: Multi-file processing with directory recursion
 //! - [`library`]: Pattern library loading and resolution
 //! - [`inspector`]: Interactive debugging and pattern inspection
-//! - [`compass`]: COMPASS strategic framework for analysis
 //! - [`plugin`]: Extensible plugin system for custom transformations
-
-pub mod compass;
 pub mod error;
 pub mod files;
 pub mod inspector;

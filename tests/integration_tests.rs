@@ -1,4 +1,3 @@
-use rexpipe::compass::CompassAgent;
 use rexpipe::inspector::{Inspector, InspectorOptions};
 use rexpipe::pipeline::{
     FilterAction, PipelineConfig, PipelineSettings, PipelineStep, RegexFlag, StepType,
@@ -8,37 +7,6 @@ use rexpipe::processor::StreamProcessor;
 use std::io::Cursor;
 use std::io::Write;
 use tempfile::NamedTempFile;
-
-#[test]
-fn test_compass_agent_full_workflow() {
-    let mut agent = CompassAgent::new();
-
-    // Execute complete COMPASS workflow
-    assert!(
-        agent
-            .clarify_intent("Build regex pipeline processor")
-            .is_ok()
-    );
-    assert!(agent.advance_phase().is_ok());
-
-    assert!(agent.orient_research("Existing tools fragmented").is_ok());
-    assert!(agent.advance_phase().is_ok());
-
-    assert!(agent.map_solution().is_ok());
-    assert!(agent.advance_phase().is_ok());
-
-    assert!(agent.validate_strategy().is_ok());
-    assert!(agent.advance_phase().is_ok());
-
-    assert!(agent.architect_implementation().is_ok());
-    assert!(agent.advance_phase().is_ok());
-
-    assert!(agent.synthesize_final().is_ok());
-
-    let report = agent.generate_report();
-    assert!(report.contains("COMPASS Agent Execution Report"));
-    assert!(report.contains("Confidence: "));
-}
 
 #[test]
 fn test_end_to_end_log_processing() {

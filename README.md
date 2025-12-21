@@ -1,10 +1,10 @@
 # rexpipe
 
-A unified regex pipeline processor with COMPASS framework integration.
+A unified regex pipeline processor for text transformation.
 
 ## Overview
 
-rexpipe transforms regex text processing from a fragmented, debugging-intensive, resource-heavy activity into a unified, transparent, and efficient workflow. Built with the COMPASS Strategic Collaboration Framework, it provides systematic analysis and implementation planning for complex text processing pipelines.
+rexpipe transforms regex text processing from a fragmented, debugging-intensive, resource-heavy activity into a unified, transparent, and efficient workflow.
 
 ## Key Features
 
@@ -62,13 +62,6 @@ rexpipe --config examples/log-cleanup.toml --inspect < sample.log
 
 # Interactive debugging
 rexpipe --config examples/log-cleanup.toml --inspect --interactive < sample.log
-```
-
-### COMPASS Strategic Analysis
-
-```bash
-# Run strategic framework analysis
-rexpipe --compass
 ```
 
 ## Configuration Format
@@ -503,7 +496,6 @@ OPTIONS:
         --validate-library <FILE> Validate a pattern library file
 
     # Utilities
-        --compass                 Run COMPASS strategic analysis
         --validate                Validate configuration only
         --export <FORMAT>         Export configuration (toml or json)
         --completions <SHELL>     Generate shell completion script
@@ -591,19 +583,6 @@ cat access.log | rexpipe --config log-cleanup.toml
 - **10-20x less RAM usage** on large files
 - **Single process** eliminates inter-process communication overhead
 - **Constant memory usage** regardless of file size
-
-## COMPASS Framework
-
-The integrated COMPASS (Clarify, Orient, Map, Pause, Architect, Synthesize) framework provides:
-
-1. **Clarify Core Intent**: Understanding fundamental requirements
-2. **Orient Through Research**: Evidence-based problem analysis
-3. **Map Solution Space**: Comprehensive solution design
-4. **Pause for Strategic Validation**: Alignment confirmation
-5. **Architect Implementation**: Detailed specification creation
-6. **Synthesize and Validate**: Quality assurance and final validation
-
-Run `rexpipe --compass` to see the framework in action.
 
 ## Multi-File Processing
 
@@ -926,4 +905,4 @@ This enables the `AsyncMultiFileProcessor` for concurrent file operations using 
 
 ## Acknowledgments
 
-Developed using the COMPASS Strategic Collaboration Framework for systematic approach to complex software challenges.
+Thank you to all contributors and the Rust community.

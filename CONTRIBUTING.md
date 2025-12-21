@@ -167,7 +167,6 @@ src/
 ├── files.rs       # Multi-file processing
 ├── library.rs     # Pattern library resolution
 ├── inspector.rs   # Interactive debugging
-├── compass.rs     # COMPASS framework
 ├── json_schema.rs # JSON output schemas
 └── error.rs       # Error type definitions
 

@@ -68,7 +68,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `validate`: Ensure lines match required patterns
   - `transform`: Apply text transformations (uppercase, lowercase, trim, etc.)
 - **Inspection Mode**: Interactive debugging with match visualization
-- **COMPASS Framework**: Strategic analysis framework integration
 - **Performance Metrics**: Processing statistics and throughput reporting
 
 [Unreleased]: https://github.com/jkindrix/rexpipe/compare/v1.1.0...HEAD

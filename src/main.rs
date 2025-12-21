@@ -7,7 +7,6 @@ use std::io::{self, BufReader, IsTerminal};
 use std::path::{Path, PathBuf};
 
 // Import from the library crate
-use rexpipe::compass::CompassAgent;
 use rexpipe::error::{ConfigError, LibraryError, PatternError, RexpipeError, ValidationError};
 use rexpipe::files::{FileProcessingOptions, MultiFileProcessor, MultiFileResult};
 use rexpipe::inspector::{Inspector, InspectorOptions};
@@ -211,8 +210,7 @@ For more information, see: https://github.com/rexpipe/rexpipe
 fn build_cli() -> Command {
     Command::new("rexpipe")
         .version("1.1.0")
-        .author("Strategic Collaboration Agent")
-        .about("Unified regex pipeline processor with COMPASS framework integration")
+        .about("Unified regex pipeline processor for text transformation")
         .after_long_help(EXAMPLES_HELP)
         // === Pattern and Config ===
         .arg(
@@ -453,12 +451,6 @@ fn build_cli() -> Command {
                 .action(ArgAction::SetTrue),
         )
         .arg(
-            Arg::new("compass")
-                .long("compass")
-                .help("Run COMPASS strategic analysis")
-                .action(ArgAction::SetTrue),
-        )
-        .arg(
             Arg::new("validate")
                 .long("validate")
                 .help("Validate configuration only")
@@ -605,16 +597,6 @@ fn run_application(matches: &clap::ArgMatches) -> Result<()> {
 
     // Build pipeline settings from CLI flags
     let settings = build_pipeline_settings(matches);
-
-    // Handle COMPASS mode - can optionally analyze a config
-    if matches.get_flag("compass") {
-        // Try to load config if provided
-        if matches.contains_id("config") && matches.get_one::<String>("config").is_some() {
-            let config = load_pipeline_config(matches, settings)?;
-            return run_compass_analysis_for_pipeline(&config);
-        }
-        return run_compass_analysis();
-    }
 
     // Load or create pipeline configuration
     let config = load_pipeline_config(matches, settings)?;
@@ -1335,64 +1317,6 @@ fn validate_library_file(library_path: &str) -> Result<()> {
             Err(e)
         }
     }
-}
-
-fn run_compass_analysis() -> Result<()> {
-    println!("Initializing COMPASS Strategic Collaboration Agent...\n");
-
-    let mut agent = CompassAgent::new();
-    run_compass_phases(&mut agent)
-}
-
-fn run_compass_analysis_for_pipeline(config: &PipelineConfig) -> Result<()> {
-    println!("Initializing COMPASS Strategic Collaboration Agent for Pipeline Analysis...\n");
-
-    let mut agent = CompassAgent::for_pipeline(config);
-    println!(
-        "Analyzing: {}\n",
-        config.name.as_deref().unwrap_or("Unnamed Pipeline")
-    );
-    run_compass_phases(&mut agent)
-}
-
-fn run_compass_phases(agent: &mut CompassAgent) -> Result<()> {
-    // Execute COMPASS framework
-    println!("Phase 1: Clarifying Core Intent");
-    let intent = agent.clarify_intent(&agent.context.problem_statement.clone())?;
-    println!("✓ {}\n", intent);
-    agent.advance_phase()?;
-
-    println!("Phase 2: Orienting Through Research");
-    let research = agent.orient_research("")?;
-    println!("✓ {}\n", research);
-    agent.advance_phase()?;
-
-    println!("Phase 3: Mapping Solution Space");
-    let solution = agent.map_solution()?;
-    println!("✓ {}\n", solution);
-    agent.advance_phase()?;
-
-    println!("Phase 4: Pausing for Strategic Validation");
-    let should_proceed = agent.validate_strategy()?;
-    println!(
-        "✓ Strategic validation: {}\n",
-        if should_proceed { "PROCEED" } else { "PIVOT" }
-    );
-    agent.advance_phase()?;
-
-    println!("Phase 5: Architecting Implementation");
-    let _architecture = agent.architect_implementation()?;
-    println!("✓ Architecture defined\n");
-    agent.advance_phase()?;
-
-    println!("Phase 6: Synthesizing and Validating");
-    let _synthesis = agent.synthesize_final()?;
-    println!("✓ Framework execution complete\n");
-
-    // Generate final report
-    println!("{}", agent.generate_report());
-
-    Ok(())
 }
 
 fn run_inspection_mode(
