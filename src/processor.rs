@@ -20,9 +20,12 @@ static REPETITION_REGEX: LazyLock<Regex> =
 #[cfg(feature = "pcre")]
 use fancy_regex::Regex as FancyRegex;
 
-/// Represents the line ending style detected in input
+/// Represents the line ending style detected in input.
+///
+/// Used internally to preserve the original line ending style when
+/// `preserve_line_endings` is enabled in pipeline settings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum LineEnding {
+enum LineEnding {
     /// Unix-style line ending (LF, `\n`)
     #[default]
     Lf,
@@ -33,8 +36,8 @@ pub enum LineEnding {
 }
 
 impl LineEnding {
-    /// Get the byte sequence for this line ending
-    pub fn as_bytes(&self) -> &'static [u8] {
+    /// Get the byte sequence for this line ending.
+    fn as_bytes(&self) -> &'static [u8] {
         match self {
             LineEnding::Lf => b"\n",
             LineEnding::Crlf => b"\r\n",
@@ -54,6 +57,89 @@ fn detect_line_ending(line: &str) -> LineEnding {
     }
 }
 
+/// Result of handling a line that exceeds the maximum length limit.
+///
+/// This enum represents the three possible outcomes when a line
+/// is too long based on the configured `max_line_action`.
+#[derive(Debug)]
+enum LongLineResult {
+    /// Skip the line - output it unchanged, don't process
+    Skip,
+    /// Line was truncated - continue processing with truncated content
+    Truncated,
+    /// Return an error - line is too long and error action is configured
+    Error(String),
+}
+
+/// Handle a line that exceeds the maximum length limit.
+///
+/// # Arguments
+///
+/// * `line` - The line buffer (may be mutated if truncating)
+/// * `line_number` - Current line number for error messages
+/// * `max_length` - Maximum allowed line length in bytes
+/// * `action` - What to do when line exceeds limit
+///
+/// # Returns
+///
+/// `LongLineResult` indicating how the line was handled
+fn handle_long_line(
+    line: &mut String,
+    line_number: u64,
+    max_length: usize,
+    action: MaxLineAction,
+) -> LongLineResult {
+    match action {
+        MaxLineAction::Error => LongLineResult::Error(format!(
+            "Line {} exceeds maximum length ({} > {} bytes). \
+             Use --max-line-action=skip to skip long lines, or \
+             --max-line-action=truncate to truncate them.",
+            line_number,
+            line.len(),
+            max_length
+        )),
+        MaxLineAction::Skip => {
+            debug!(
+                "Skipping line {} ({} bytes exceeds limit of {})",
+                line_number,
+                line.len(),
+                max_length
+            );
+            LongLineResult::Skip
+        }
+        MaxLineAction::Truncate => {
+            debug!(
+                "Truncating line {} from {} to {} bytes",
+                line_number,
+                line.len(),
+                max_length
+            );
+            // Truncate at a UTF-8 character boundary.
+            //
+            // Why char_indices: Rust strings are UTF-8, and multi-byte characters
+            // (emoji, CJK, etc.) must not be split mid-character. char_indices()
+            // gives us (byte_offset, char) pairs. We find the last character that
+            // ends before max_length, then truncate after it.
+            //
+            // Why i + c.len_utf8(): 'i' is the start byte of the character, and
+            // len_utf8() gives its byte length (1-4). Adding them gives the byte
+            // offset where this character ends, which is our safe truncation point.
+            let truncate_at = line
+                .char_indices()
+                .take_while(|(i, _)| *i < max_length)
+                .last()
+                .map(|(i, c)| i + c.len_utf8())
+                .unwrap_or(max_length);
+            line.truncate(truncate_at);
+            // Ensure we have a newline after truncation
+            if !line.ends_with('\n') {
+                line.push('\n');
+            }
+            LongLineResult::Truncated
+        }
+    }
+}
+
 /// Represents a line with its metadata for context tracking
 #[derive(Debug, Clone)]
 struct ContextLine {
@@ -62,22 +148,84 @@ struct ContextLine {
     line_ending: LineEnding,
 }
 
+/// Core streaming text processor for rexpipe pipelines.
+///
+/// `StreamProcessor` executes a configured pipeline against text input,
+/// processing line-by-line with constant memory usage regardless of input size.
+/// It supports substitution, filtering, extraction, validation, and transformation
+/// operations through a unified streaming interface.
+///
+/// # Features
+///
+/// - **Streaming Processing**: Processes input line-by-line with O(1) memory usage
+/// - **Context Lines**: Supports before/after context lines (like grep -B/-A)
+/// - **Multiple Regex Engines**: Standard Rust regex, PCRE via fancy-regex, or fixed strings
+/// - **Line Ending Preservation**: Optionally preserves CRLF vs LF line endings
+/// - **Timeout Protection**: Per-line timeout to prevent ReDoS hangs
+///
+/// # Example
+///
+/// ```
+/// use rexpipe::pipeline::PipelineConfig;
+/// use rexpipe::processor::StreamProcessor;
+/// use std::io::Cursor;
+///
+/// let config = PipelineConfig::from_inline_pattern(r"\d+", Some("NUM"));
+/// let mut processor = StreamProcessor::new(config).unwrap();
+///
+/// let input = Cursor::new("Order 123 shipped\nOrder 456 pending\n");
+/// let mut output = Vec::new();
+/// let result = processor.process_stream(input, &mut output).unwrap();
+///
+/// assert_eq!(result.matches_found, 2);
+/// ```
 pub struct StreamProcessor {
     config: PipelineConfig,
     compiled_steps: Vec<CompiledStep>,
     stats: ProcessorStats,
-    /// Buffer for before-context lines
+    /// Buffer for before-context lines.
+    ///
+    /// Why VecDeque: We need O(1) push_back and pop_front operations to maintain
+    /// a sliding window of N most recent lines. VecDeque provides this via a ring
+    /// buffer, while Vec would require O(N) shifts for pop_front.
     context_before_buffer: VecDeque<ContextLine>,
     /// Counter for remaining after-context lines to output
     after_context_remaining: usize,
-    /// Track which lines have been output to avoid duplicates
+    /// Track which lines have been output to avoid duplicates.
+    ///
+    /// Why track line numbers: When context ranges overlap (e.g., two matches close
+    /// together), we must avoid printing the same line twice. Tracking the last
+    /// output line number lets us skip already-printed lines efficiently.
     last_output_line: u64,
 }
 
-/// Abstraction over different regex engines
+/// Abstraction over different regex engines.
+///
+/// `CompiledPattern` provides a unified interface for pattern matching across
+/// different matching strategies. The internal representation is opaque - use the
+/// provided methods (`is_match`, `replace_all`, etc.) rather than matching on variants.
+///
+/// # Matching Strategies
+///
+/// - **Standard**: Uses the Rust `regex` crate with linear-time guarantees (ReDoS-safe)
+/// - **Fixed**: Literal string matching (fastest, no regex interpretation)
+/// - **PCRE**: Uses `fancy-regex` for advanced features like lookahead/lookbehind
+///
+/// The engine is selected based on pipeline settings (`fixed_strings`, `pcre_mode`).
+///
+/// # Thread Safety
+///
+/// All variants are `Send + Sync`, enabling safe use in parallel processing.
+///
+/// # Stability
+///
+/// This enum is marked `#[non_exhaustive]` to allow adding new matching strategies
+/// in future versions without breaking existing code. Always use the provided methods
+/// rather than pattern matching on variants.
 #[derive(Clone)]
+#[non_exhaustive]
 pub enum CompiledPattern {
-    /// Standard Rust regex (fast, but no lookahead/lookbehind)
+    /// Standard Rust regex (fast, ReDoS-safe with linear-time guarantees)
     Standard(Regex),
     /// Fixed string matching (fastest, no regex interpretation)
     Fixed(String),
@@ -126,7 +274,12 @@ impl CompiledPattern {
     }
 
     /// Replace all matches and return both the result and match count in a single pass.
-    /// This avoids running the regex twice (once to count, once to replace).
+    ///
+    /// Why single-pass: Running the regex twice (once to count, once to replace) doubles
+    /// CPU time for large inputs. By using a closure in replace_all, we increment a counter
+    /// during the replacement pass itself. For the standard regex engine, we use Cell<usize>
+    /// because Rust closures in replace_all are FnMut, but Cell provides interior mutability
+    /// without requiring &mut self.
     pub fn replace_all_counting(&self, text: &str, replacement: &str) -> (String, usize) {
         match self {
             CompiledPattern::Standard(re) => {
@@ -245,11 +398,43 @@ impl CompiledPattern {
                 .collect(),
         }
     }
+
+    /// Returns the original pattern string.
+    ///
+    /// This method provides access to the pattern used to create this compiled pattern
+    /// without exposing the internal regex engine representation.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use rexpipe::processor::StreamProcessor;
+    /// use rexpipe::pipeline::PipelineConfig;
+    ///
+    /// let config = PipelineConfig::from_inline_pattern(r"\d+", None);
+    /// let processor = StreamProcessor::new(config).unwrap();
+    /// // Pattern string is available for debugging/display
+    /// ```
+    pub fn pattern_str(&self) -> &str {
+        match self {
+            CompiledPattern::Standard(re) => re.as_str(),
+            CompiledPattern::Fixed(s) => s,
+            #[cfg(feature = "pcre")]
+            CompiledPattern::Pcre(re) => re.as_str(),
+        }
+    }
 }
 
+/// Represents captured groups from a regex match.
+///
+/// Contains both the full match and any named or numbered capture groups
+/// extracted during pattern matching.
 #[derive(Debug, Clone)]
 pub struct CaptureGroup {
+    /// Captured group values (index 0 is full match, 1+ are capture groups).
+    /// `None` indicates an optional group that didn't participate in the match.
     pub groups: Vec<Option<String>>,
+    /// The full match as (start_offset, end_offset, matched_text).
+    /// `None` if there was no match.
     pub full_match: Option<(usize, usize, String)>,
 }
 
@@ -263,18 +448,86 @@ struct CompiledStep {
     is_global: bool,
 }
 
+/// Runtime statistics collected during stream processing.
+///
+/// Provides performance metrics including line counts, byte throughput,
+/// and per-step timing breakdowns for optimization and debugging.
+///
+/// # Field Access
+///
+/// While fields are currently public for backward compatibility, prefer using
+/// the accessor methods which provide a stable API.
+///
+/// # Construction
+///
+/// This struct cannot be constructed outside of rexpipe due to `#[non_exhaustive]`.
+/// Use [`StreamProcessor::stats`] to obtain processing statistics.
 #[derive(Debug, Default)]
+#[non_exhaustive]
 pub struct ProcessorStats {
+    /// Total number of lines read from input
     pub lines_read: u64,
+    /// Total bytes processed from input stream
     pub bytes_processed: u64,
+    /// Timestamp when processing started (for throughput calculation)
     pub processing_start: Option<Instant>,
+    /// Per-step cumulative processing time in milliseconds (step_index -> ms)
     pub step_timings: HashMap<usize, u64>,
 }
 
+impl ProcessorStats {
+    /// Get the total number of lines read from input.
+    #[inline]
+    pub fn lines_read(&self) -> u64 {
+        self.lines_read
+    }
+
+    /// Get the total bytes processed from input stream.
+    #[inline]
+    pub fn bytes_processed(&self) -> u64 {
+        self.bytes_processed
+    }
+
+    /// Get the timestamp when processing started.
+    #[inline]
+    pub fn processing_start(&self) -> Option<Instant> {
+        self.processing_start
+    }
+
+    /// Get per-step cumulative processing time in milliseconds.
+    #[inline]
+    pub fn step_timings(&self) -> &HashMap<usize, u64> {
+        &self.step_timings
+    }
+
+    /// Calculate elapsed processing time since start.
+    ///
+    /// Returns `None` if processing hasn't started yet.
+    pub fn elapsed(&self) -> Option<std::time::Duration> {
+        self.processing_start.map(|start| start.elapsed())
+    }
+}
+
+
 /// Detailed information about a single regex match.
+///
+/// This struct provides comprehensive information about where a pattern matched,
+/// what was captured, and what the replacement would look like.
+///
+/// # Field Access
+///
+/// While fields are currently public for backward compatibility, prefer using
+/// the accessor methods (`line_number()`, `full_match()`, etc.) which provide
+/// a stable API. Direct field access may be deprecated in future versions.
+///
+/// # Construction
+///
+/// This struct cannot be constructed outside of rexpipe due to `#[non_exhaustive]`.
+/// Use [`StreamProcessor::inspect_line`] to obtain match information.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct MatchInfo {
-    /// Line number where this match occurred (1-based, for external use)
+    /// Line number where this match occurred (1-based, for display)
     pub line_number: u64,
     /// Byte offset where the match starts
     pub byte_start: usize,
@@ -288,6 +541,84 @@ pub struct MatchInfo {
     pub replacement_preview: Option<String>,
     /// Index of the pipeline step that produced this match
     pub step_index: usize,
+}
+
+impl MatchInfo {
+    /// Get the line number where this match occurred (1-based).
+    #[inline]
+    pub fn line_number(&self) -> u64 {
+        self.line_number
+    }
+
+    /// Get the byte offset where the match starts.
+    #[inline]
+    pub fn byte_start(&self) -> usize {
+        self.byte_start
+    }
+
+    /// Get the byte offset where the match ends.
+    #[inline]
+    pub fn byte_end(&self) -> usize {
+        self.byte_end
+    }
+
+    /// Get the full matched text.
+    #[inline]
+    pub fn full_match(&self) -> &str {
+        &self.full_match
+    }
+
+    /// Get the captured groups (index 0 is full match, 1+ are capture groups).
+    #[inline]
+    pub fn captures(&self) -> &[Option<String>] {
+        &self.captures
+    }
+
+    /// Get the replacement preview, if available.
+    #[inline]
+    pub fn replacement_preview(&self) -> Option<&str> {
+        self.replacement_preview.as_deref()
+    }
+
+    /// Get the index of the pipeline step that produced this match.
+    #[inline]
+    pub fn step_index(&self) -> usize {
+        self.step_index
+    }
+
+    /// Get the byte range of this match as a Range.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use rexpipe::processor::MatchInfo;
+    /// // MatchInfo is obtained via StreamProcessor::inspect_line()
+    /// // Example shows usage once you have a MatchInfo instance
+    /// ```
+    #[inline]
+    pub fn byte_range(&self) -> std::ops::Range<usize> {
+        self.byte_start..self.byte_end
+    }
+
+    /// Get the length of the match in bytes.
+    #[inline]
+    pub fn match_len(&self) -> usize {
+        self.byte_end - self.byte_start
+    }
+
+    /// Check if this match has any captured groups (beyond the full match).
+    #[inline]
+    pub fn has_captures(&self) -> bool {
+        self.captures.len() > 1
+    }
+
+    /// Get a specific capture group by index (1-based for named groups).
+    ///
+    /// Returns `None` if the index is out of bounds or the group didn't participate
+    /// in the match.
+    pub fn get_capture(&self, index: usize) -> Option<&str> {
+        self.captures.get(index).and_then(|c| c.as_deref())
+    }
 }
 
 impl StreamProcessor {
@@ -430,30 +761,31 @@ impl StreamProcessor {
         }
 
         // Standard regex mode
-        match Self::build_regex(pattern, flags) {
+        match Self::build_regex(pattern, flags, settings.regex_size_limit) {
             Ok(regex) => Ok(CompiledPattern::Standard(regex)),
             Err(e) => Err(PatternError::invalid_regex(pattern, e.to_string()))
                 .context("Regex pattern compilation failed"),
         }
     }
 
-    /// Default regex size limit (10MB) to prevent ReDoS via compilation complexity
-    const DEFAULT_REGEX_SIZE_LIMIT: usize = 10 * 1024 * 1024;
-
     /// Maximum pattern length before warning (patterns longer than this may be slow)
     #[cfg(feature = "pcre")]
     const PATTERN_LENGTH_WARNING: usize = 1000;
 
-    fn build_regex(pattern: &str, flags: &Option<Vec<RegexFlag>>) -> Result<Regex, regex::Error> {
+    fn build_regex(
+        pattern: &str,
+        flags: &Option<Vec<RegexFlag>>,
+        regex_size_limit: usize,
+    ) -> Result<Regex, regex::Error> {
         let mut builder = RegexBuilder::new(pattern);
 
         // Apply ReDoS protection via size limits
         // The Rust regex crate already guarantees O(m * n) linear time matching,
         // but we add size limits to prevent compilation DoS attacks
-        builder.size_limit(Self::DEFAULT_REGEX_SIZE_LIMIT);
+        builder.size_limit(regex_size_limit);
 
         // Also limit DFA size to prevent memory exhaustion
-        builder.dfa_size_limit(Self::DEFAULT_REGEX_SIZE_LIMIT);
+        builder.dfa_size_limit(regex_size_limit);
 
         if let Some(flags) = flags {
             for flag in flags {
@@ -606,6 +938,52 @@ impl StreamProcessor {
         }
     }
 
+    /// Process an input stream through the pipeline, writing results to output.
+    ///
+    /// This is the primary entry point for stream processing. It reads the input
+    /// line-by-line, applies all pipeline steps, and writes transformed output
+    /// to the writer. Memory usage remains constant regardless of input size.
+    ///
+    /// # Arguments
+    ///
+    /// * `reader` - Any type implementing `BufRead` (file, stdin, string buffer)
+    /// * `writer` - Any type implementing `Write` (file, stdout, vector)
+    ///
+    /// # Returns
+    ///
+    /// A `PipelineResult` containing:
+    /// - Lines processed count
+    /// - Matches found count
+    /// - Transformations applied count
+    /// - Per-step statistics
+    /// - Any errors encountered
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use rexpipe::pipeline::PipelineConfig;
+    /// use rexpipe::processor::StreamProcessor;
+    /// use std::io::Cursor;
+    ///
+    /// let config = PipelineConfig::from_inline_pattern(r"ERROR", None);
+    /// let mut processor = StreamProcessor::new(config).unwrap();
+    ///
+    /// let input = Cursor::new("INFO: startup\nERROR: failed\nINFO: done\n");
+    /// let mut output = Vec::new();
+    /// let result = processor.process_stream(input, &mut output).unwrap();
+    ///
+    /// // Filter step keeps only lines matching "ERROR"
+    /// let output_str = String::from_utf8(output).unwrap();
+    /// assert!(output_str.contains("ERROR"));
+    /// assert!(!output_str.contains("INFO"));
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - I/O error occurs reading input or writing output
+    /// - Line exceeds `max_line_length` with `max_line_action = Error`
+    /// - Validation step fails (when configured to error on mismatch)
     pub fn process_stream<R: BufRead, W: Write>(
         &mut self,
         mut reader: R,
@@ -636,48 +1014,18 @@ impl StreamProcessor {
 
             // Check for lines exceeding the maximum length
             if max_line_length > 0 && line_buffer.len() > max_line_length {
-                match max_line_action {
-                    MaxLineAction::Error => {
-                        return Err(anyhow::anyhow!(
-                            "Line {} exceeds maximum length ({} > {} bytes). \
-                             Use --max-line-action=skip to skip long lines, or \
-                             --max-line-action=truncate to truncate them.",
-                            line_number,
-                            line_buffer.len(),
-                            max_line_length
-                        ));
+                match handle_long_line(&mut line_buffer, line_number, max_line_length, max_line_action) {
+                    LongLineResult::Error(msg) => {
+                        return Err(anyhow::anyhow!(msg));
                     }
-                    MaxLineAction::Skip => {
-                        debug!(
-                            "Skipping line {} ({} bytes exceeds limit of {})",
-                            line_number,
-                            line_buffer.len(),
-                            max_line_length
-                        );
+                    LongLineResult::Skip => {
                         // Output the original line unchanged
                         writer.write_all(line_buffer.as_bytes())?;
                         line_buffer.clear();
                         continue;
                     }
-                    MaxLineAction::Truncate => {
-                        debug!(
-                            "Truncating line {} from {} to {} bytes",
-                            line_number,
-                            line_buffer.len(),
-                            max_line_length
-                        );
-                        // Truncate at a UTF-8 character boundary
-                        let truncate_at = line_buffer
-                            .char_indices()
-                            .take_while(|(i, _)| *i < max_line_length)
-                            .last()
-                            .map(|(i, c)| i + c.len_utf8())
-                            .unwrap_or(max_line_length);
-                        line_buffer.truncate(truncate_at);
-                        // Ensure we have a newline after truncation
-                        if !line_buffer.ends_with('\n') {
-                            line_buffer.push('\n');
-                        }
+                    LongLineResult::Truncated => {
+                        // Line was truncated in place, continue processing
                     }
                 }
             }
@@ -951,7 +1299,111 @@ impl StreamProcessor {
         }
     }
 
-    /// Applies transformation and returns (result, was_modified) to avoid cloning for comparison.
+    /// Apply a single transform action to matched text.
+    ///
+    /// This is extracted from apply_transform for clarity. Each action defines
+    /// how to transform the matched substring.
+    fn transform_match(
+        matched: &str,
+        action: &TransformAction,
+        extra_text: &Option<String>,
+        shell_timeout_secs: u64,
+    ) -> String {
+        match action {
+            TransformAction::Uppercase => matched.to_uppercase(),
+            TransformAction::Lowercase => matched.to_lowercase(),
+            TransformAction::Trim => matched.trim().to_string(),
+            TransformAction::Prepend => {
+                let prefix = extra_text.as_deref().unwrap_or("");
+                format!("{}{}", prefix, matched)
+            }
+            TransformAction::Append => {
+                let suffix = extra_text.as_deref().unwrap_or("");
+                format!("{}{}", matched, suffix)
+            }
+            TransformAction::Reverse => matched.chars().rev().collect(),
+            TransformAction::RemoveWhitespace => {
+                matched.chars().filter(|c| !c.is_whitespace()).collect()
+            }
+            TransformAction::TitleCase => matched
+                .split_whitespace()
+                .map(|word| {
+                    let mut chars = word.chars();
+                    match chars.next() {
+                        None => String::new(),
+                        Some(first) => first
+                            .to_uppercase()
+                            .chain(chars.flat_map(|c| c.to_lowercase()))
+                            .collect(),
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(" "),
+            TransformAction::Shell { command } => {
+                crate::plugin::PluginRegistry::execute_shell_with_timeout(
+                    command,
+                    matched,
+                    shell_timeout_secs,
+                )
+                .unwrap_or_else(|e| {
+                    eprintln!("Shell transform error: {}", e);
+                    matched.to_string()
+                })
+            }
+            TransformAction::Plugin { name, args } => {
+                crate::plugin::PluginRegistry::global().execute(name, matched, args).unwrap_or_else(|e| {
+                    eprintln!("Plugin error: {}", e);
+                    matched.to_string()
+                })
+            }
+            TransformAction::Base64Encode => {
+                use std::io::Write;
+                let mut buf = Vec::new();
+                let _ = write!(buf, "{}", matched);
+                base64_encode(&buf)
+            }
+            TransformAction::Base64Decode => {
+                base64_decode(matched).unwrap_or_else(|| matched.to_string())
+            }
+            TransformAction::UrlEncode => url_encode(matched),
+            TransformAction::UrlDecode => {
+                url_decode(matched).unwrap_or_else(|| matched.to_string())
+            }
+            TransformAction::NormalizeWhitespace => {
+                let mut result = String::new();
+                let mut last_was_space = false;
+                for c in matched.chars() {
+                    if c.is_whitespace() {
+                        if !last_was_space {
+                            result.push(' ');
+                            last_was_space = true;
+                        }
+                    } else {
+                        result.push(c);
+                        last_was_space = false;
+                    }
+                }
+                result.trim().to_string()
+            }
+            TransformAction::Deduplicate => {
+                let lines: Vec<&str> = matched.lines().collect();
+                let mut seen = std::collections::HashSet::new();
+                lines
+                    .into_iter()
+                    .filter(|line| seen.insert(*line))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            }
+            TransformAction::SortChars => {
+                let mut chars: Vec<char> = matched.chars().collect();
+                chars.sort();
+                chars.into_iter().collect()
+            }
+            TransformAction::CharCount => matched.chars().count().to_string(),
+            TransformAction::WordCount => matched.split_whitespace().count().to_string(),
+        }
+    }
+
     fn apply_transform(
         &self,
         pattern: &CompiledPattern,
@@ -967,108 +1419,23 @@ impl StreamProcessor {
             return Ok((input.to_string(), false));
         }
 
-        // Transform function that will be applied to each match
-        let transform_fn = |matched: &str| -> String {
-            match action {
-                TransformAction::Uppercase => matched.to_uppercase(),
-                TransformAction::Lowercase => matched.to_lowercase(),
-                TransformAction::Trim => matched.trim().to_string(),
-                TransformAction::Prepend => {
-                    let prefix = extra_text.as_deref().unwrap_or("");
-                    format!("{}{}", prefix, matched)
-                }
-                TransformAction::Append => {
-                    let suffix = extra_text.as_deref().unwrap_or("");
-                    format!("{}{}", matched, suffix)
-                }
-                TransformAction::Reverse => matched.chars().rev().collect(),
-                TransformAction::RemoveWhitespace => {
-                    matched.chars().filter(|c| !c.is_whitespace()).collect()
-                }
-                TransformAction::TitleCase => matched
-                    .split_whitespace()
-                    .map(|word| {
-                        let mut chars = word.chars();
-                        match chars.next() {
-                            None => String::new(),
-                            Some(first) => first
-                                .to_uppercase()
-                                .chain(chars.flat_map(|c| c.to_lowercase()))
-                                .collect(),
-                        }
-                    })
-                    .collect::<Vec<_>>()
-                    .join(" "),
-                TransformAction::Shell { command } => crate::plugin::PluginRegistry::execute_shell(
-                    command, matched,
-                )
-                .unwrap_or_else(|e| {
-                    eprintln!("Shell transform error: {}", e);
-                    matched.to_string()
-                }),
-                TransformAction::Plugin { name, args } => {
-                    let registry = crate::plugin::PluginRegistry::new();
-                    registry.execute(name, matched, args).unwrap_or_else(|e| {
-                        eprintln!("Plugin error: {}", e);
-                        matched.to_string()
-                    })
-                }
-                TransformAction::Base64Encode => {
-                    use std::io::Write;
-                    let mut buf = Vec::new();
-                    let _ = write!(buf, "{}", matched);
-                    base64_encode(&buf)
-                }
-                TransformAction::Base64Decode => {
-                    base64_decode(matched).unwrap_or_else(|| matched.to_string())
-                }
-                TransformAction::UrlEncode => url_encode(matched),
-                TransformAction::UrlDecode => {
-                    url_decode(matched).unwrap_or_else(|| matched.to_string())
-                }
-                TransformAction::NormalizeWhitespace => {
-                    let mut result = String::new();
-                    let mut last_was_space = false;
-                    for c in matched.chars() {
-                        if c.is_whitespace() {
-                            if !last_was_space {
-                                result.push(' ');
-                                last_was_space = true;
-                            }
-                        } else {
-                            result.push(c);
-                            last_was_space = false;
-                        }
-                    }
-                    result.trim().to_string()
-                }
-                TransformAction::Deduplicate => {
-                    let lines: Vec<&str> = matched.lines().collect();
-                    let mut seen = std::collections::HashSet::new();
-                    lines
-                        .into_iter()
-                        .filter(|line| seen.insert(*line))
-                        .collect::<Vec<_>>()
-                        .join("\n")
-                }
-                TransformAction::SortChars => {
-                    let mut chars: Vec<char> = matched.chars().collect();
-                    chars.sort();
-                    chars.into_iter().collect()
-                }
-                TransformAction::CharCount => matched.chars().count().to_string(),
-                TransformAction::WordCount => matched.split_whitespace().count().to_string(),
-            }
-        };
-
         // Apply transformation to matches
         let result = if is_global {
-            // Replace all matches with transformed versions
+            // Replace all matches with transformed versions.
+            //
+            // Why offset tracking with i64: When we replace matched text, the transformed
+            // result may be longer or shorter than the original. This shifts all subsequent
+            // byte positions. We track the cumulative offset to adjust match positions.
+            //
+            // Why i64 instead of isize: Transformations can shrink text (negative offset)
+            // or grow it (positive offset). i64 ensures we can handle both directions
+            // across the full usize range without overflow on 32-bit systems.
             let mut result = input.to_string();
             let mut offset: i64 = 0;
 
+            let shell_timeout = self.config.settings.shell_timeout_secs;
             for (start, end, matched) in pattern.find_iter(input) {
-                let transformed = transform_fn(&matched);
+                let transformed = Self::transform_match(&matched, action, extra_text, shell_timeout);
                 let adj_start = (start as i64 + offset) as usize;
                 let adj_end = (end as i64 + offset) as usize;
 
@@ -1079,6 +1446,8 @@ impl StreamProcessor {
                     &result[adj_end..]
                 );
 
+                // Update offset: if transformed is longer, offset grows positive;
+                // if shorter, offset becomes negative, shifting future positions left.
                 offset += transformed.len() as i64 - matched.len() as i64;
                 step_result.add_match();
             }
@@ -1086,7 +1455,8 @@ impl StreamProcessor {
         } else {
             // Replace only first match
             if let Some((start, end, matched)) = pattern.find_iter(input).first() {
-                let transformed = transform_fn(matched);
+                let shell_timeout = self.config.settings.shell_timeout_secs;
+                let transformed = Self::transform_match(matched, action, extra_text, shell_timeout);
                 step_result.add_match();
                 format!("{}{}{}", &input[..*start], transformed, &input[*end..])
             } else {
@@ -1210,11 +1580,31 @@ impl ProcessorStats {
             0
         }
     }
+
+    /// Get the total elapsed processing time in milliseconds.
+    pub fn elapsed_ms(&self) -> u64 {
+        self.processing_start
+            .map(|start| start.elapsed().as_millis() as u64)
+            .unwrap_or(0)
+    }
+
+    /// Get the processing time for a specific step in milliseconds.
+    pub fn step_time_ms(&self, step_index: usize) -> u64 {
+        self.step_timings.get(&step_index).copied().unwrap_or(0)
+    }
 }
 
 // Helper functions for encoding/decoding transformations
 
-/// Base64 encode bytes using a simple implementation
+/// Base64 encode bytes using a simple implementation.
+///
+/// Why not use a crate: Base64 is straightforward (RFC 4648), and adding a dependency
+/// for a single transform seems excessive. This implementation handles the standard
+/// alphabet and padding correctly.
+///
+/// Algorithm: Process 3 bytes at a time, producing 4 base64 characters. Each 6-bit
+/// group maps to one character from the 64-character alphabet. Padding with '=' is
+/// added when input length isn't divisible by 3.
 fn base64_encode(data: &[u8]) -> String {
     const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut result = String::new();
@@ -1247,7 +1637,14 @@ fn base64_encode(data: &[u8]) -> String {
     result
 }
 
-/// Base64 decode a string
+/// Base64 decode a string.
+///
+/// Why Option<String>: Decoding can fail if the input contains invalid characters
+/// or is malformed. Returning None allows callers to fall back gracefully.
+///
+/// Why i8 lookup table: Using -1 for invalid characters lets us detect errors
+/// in a single array lookup. The table maps ASCII values 0-127 to their 6-bit
+/// values (0-63), or -1 if the character isn't part of the base64 alphabet.
 fn base64_decode(s: &str) -> Option<String> {
     const DECODE: [i8; 128] = [
         -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
@@ -1283,7 +1680,15 @@ fn base64_decode(s: &str) -> Option<String> {
     String::from_utf8(bytes).ok()
 }
 
-/// URL encode a string (percent encoding)
+/// URL encode a string (percent encoding).
+///
+/// Why these characters are unreserved: RFC 3986 defines the "unreserved" set as
+/// ALPHA / DIGIT / "-" / "." / "_" / "~". These can appear literally in URLs
+/// without encoding. All other characters must be percent-encoded.
+///
+/// Why c as u32: Most ASCII characters fit in a single byte, but we use u32 to
+/// handle the full Unicode range correctly (multi-byte sequences become multiple
+/// %XX escapes per byte).
 fn url_encode(s: &str) -> String {
     s.chars()
         .map(|c| {
@@ -1296,25 +1701,33 @@ fn url_encode(s: &str) -> String {
         .collect()
 }
 
-/// URL decode a string (percent decoding)
+/// URL decode a string (percent decoding).
+///
+/// Why '+' becomes space: HTML form encoding (application/x-www-form-urlencoded)
+/// uses '+' for spaces instead of '%20'. We support both for compatibility with
+/// form data.
+///
+/// Why Option: Returns None if percent sequences are malformed (incomplete or
+/// non-hex characters). This allows callers to preserve the original on failure.
 fn url_decode(s: &str) -> Option<String> {
     let mut result = String::new();
     let mut chars = s.chars().peekable();
 
     while let Some(c) = chars.next() {
         if c == '%' {
+            // Read two hex digits after '%'
             let hex: String = chars.by_ref().take(2).collect();
             if hex.len() == 2 {
                 if let Ok(byte) = u8::from_str_radix(&hex, 16) {
                     result.push(byte as char);
                 } else {
-                    return None;
+                    return None; // Invalid hex digits
                 }
             } else {
-                return None;
+                return None; // Truncated escape sequence
             }
         } else if c == '+' {
-            result.push(' ');
+            result.push(' '); // Form-urlencoded space
         } else {
             result.push(c);
         }
@@ -1343,7 +1756,9 @@ mod tests {
 
         assert_eq!(output_str.trim(), "Test NUMBER and NUMBER");
         assert_eq!(result.lines_processed, 1);
-        assert!(result.transformations_applied > 0);
+        // Each substitution (123→NUMBER, 456→NUMBER) counts as one transformation
+        assert_eq!(result.transformations_applied, 1, "One substitution step applied");
+        assert_eq!(result.matches_found, 2, "Two digit sequences matched");
     }
 
     #[test]
@@ -1403,16 +1818,8 @@ mod tests {
             version: None,
             patterns_include: Vec::new(),
             settings: PipelineSettings {
-                pcre_mode: false,
-                fixed_strings: false,
                 context_before: 2,
-                context_after: 0,
-                timeout_ms: 0,
-                allow_shell: true,
-                strict_mode: false,
-                preserve_line_endings: false,
-                max_line_length: 0,
-                max_line_action: MaxLineAction::Skip,
+                ..Default::default()
             },
             step: vec![PipelineStep {
                 step_type: StepType::Filter,
@@ -1451,16 +1858,8 @@ mod tests {
             version: None,
             patterns_include: Vec::new(),
             settings: PipelineSettings {
-                pcre_mode: false,
-                fixed_strings: false,
-                context_before: 0,
                 context_after: 2,
-                timeout_ms: 0,
-                allow_shell: true,
-                strict_mode: false,
-                preserve_line_endings: false,
-                max_line_length: 0,
-                max_line_action: MaxLineAction::Skip,
+                ..Default::default()
             },
             step: vec![PipelineStep {
                 step_type: StepType::Filter,

@@ -83,9 +83,9 @@ use std::sync::Arc;
 /// processing is only used when it's likely to provide a performance gain.
 pub const PARALLEL_THRESHOLD: usize = 4;
 
-/// Number of bytes to read when checking if a file is binary.
+/// Default number of bytes to read when checking if a file is binary.
 /// Checking the first 8KB is usually sufficient to detect binary files.
-const BINARY_DETECTION_BYTES: usize = 8 * 1024;
+pub const DEFAULT_BINARY_DETECTION_BYTES: usize = 8 * 1024;
 
 /// Binary file handling mode.
 ///
@@ -119,13 +119,32 @@ impl BinaryMode {
 ///
 /// This uses the same heuristic as ripgrep: a file is considered binary
 /// if it contains a NUL byte in the first few kilobytes.
+///
+/// Uses the default detection size of [`DEFAULT_BINARY_DETECTION_BYTES`].
+/// For configurable detection size, use [`is_binary_file_with_size`].
 pub fn is_binary_file(path: &Path) -> std::io::Result<bool> {
+    is_binary_file_with_size(path, DEFAULT_BINARY_DETECTION_BYTES)
+}
+
+/// Check if a file appears to be binary with configurable detection size.
+///
+/// # Arguments
+///
+/// * `path` - Path to the file to check
+/// * `detection_bytes` - Number of bytes to read for binary detection
+///
+/// # Returns
+///
+/// `Ok(true)` if the file appears to be binary (contains NUL bytes),
+/// `Ok(false)` if it appears to be text, or an error if the file cannot be read.
+pub fn is_binary_file_with_size(path: &Path, detection_bytes: usize) -> std::io::Result<bool> {
     use std::io::Read;
 
     let file = File::open(path)?;
     let mut reader = BufReader::new(file);
-    let mut buffer = [0u8; BINARY_DETECTION_BYTES];
 
+    // Allocate buffer dynamically based on requested size
+    let mut buffer = vec![0u8; detection_bytes];
     let bytes_read = reader.read(&mut buffer)?;
 
     // Check for NUL bytes in the buffer
@@ -236,6 +255,12 @@ impl ShutdownSignal {
     }
 
     /// Request a shutdown. Called by signal handlers.
+    ///
+    /// Why SeqCst: We use sequential consistency (the strongest ordering) because:
+    /// 1. This is called rarely (only on Ctrl+C), so performance isn't critical
+    /// 2. We need the store to be immediately visible to all threads
+    /// 3. Signal handlers have complex memory visibility requirements
+    /// A weaker ordering could cause worker threads to miss the shutdown signal.
     pub fn request_shutdown(&self) {
         self.flag.store(true, Ordering::SeqCst);
     }
@@ -284,26 +309,42 @@ pub struct ShutdownInterrupted {
     pub files_remaining: u64,
 }
 
-/// Result of processing a single file
+/// Result of processing a single file.
+///
+/// Contains match statistics and modification status for one file in a batch operation.
 #[derive(Debug, Clone)]
 pub struct FileResult {
+    /// Path to the processed file
     pub path: PathBuf,
+    /// Number of pattern matches found in this file
     pub matches_found: u64,
+    /// Number of lines read from this file
     pub lines_processed: u64,
+    /// Whether the file was modified (in-place editing only)
     pub modified: bool,
+    /// Error message if processing failed, None on success
     pub error: Option<String>,
 }
 
-/// Aggregated results from processing multiple files
+/// Aggregated results from processing multiple files.
+///
+/// Provides aggregate statistics across all processed files, plus per-file details
+/// and any errors that occurred during processing.
 #[derive(Debug, Default)]
 pub struct MultiFileResult {
+    /// Total number of files processed (including those without matches)
     pub files_processed: u64,
+    /// Number of files that contained at least one match
     pub files_matched: u64,
+    /// Number of files that were modified (in-place editing only)
     pub files_modified: u64,
-    /// Number of files skipped (e.g., binary files)
+    /// Number of files skipped (e.g., binary files, permission denied)
     pub files_skipped: u64,
+    /// Total pattern matches across all files
     pub total_matches: u64,
+    /// Total lines processed across all files
     pub total_lines: u64,
+    /// Per-file results for detailed analysis
     pub file_results: Vec<FileResult>,
     /// Errors that occurred during file processing
     pub errors: Vec<String>,
@@ -316,10 +357,25 @@ pub struct MultiFileResult {
     pub interrupted: Option<ShutdownInterrupted>,
 }
 
-/// Callback type for streaming file results as they're processed
+/// Callback type for streaming file results as they're processed.
+///
+/// Invoked after each file is processed, enabling real-time output or progress tracking.
 pub type StreamingCallback = Box<dyn Fn(&FileResult) + Send + Sync>;
 
-/// Options for multi-file processing
+/// Options for configuring multi-file processing behavior.
+///
+/// Use the builder pattern to construct options:
+///
+/// ```
+/// use rexpipe::files::FileProcessingOptions;
+///
+/// let options = FileProcessingOptions::new()
+///     .include_pattern("*.rs".to_string())
+///     .parallel(true)
+///     .in_place(true)
+///     .backup_suffix(Some(".bak".to_string()))
+///     .max_depth(Some(5));
+/// ```
 #[derive(Clone)]
 pub struct FileProcessingOptions {
     /// Edit files in-place
@@ -338,6 +394,11 @@ pub struct FileProcessingOptions {
     pub exclude_patterns: Vec<String>,
     /// Process files in parallel
     pub parallel: bool,
+    /// Minimum file count before parallel processing is used.
+    ///
+    /// For small file counts, parallel processing overhead exceeds benefit.
+    /// Default: [`PARALLEL_THRESHOLD`] (4 files).
+    pub parallel_threshold: usize,
     /// Only count matches, don't output content
     pub count_only: bool,
     /// Only list files with matches
@@ -354,6 +415,10 @@ pub struct FileProcessingOptions {
     pub shutdown_signal: Option<ShutdownSignal>,
     /// Binary file handling mode
     pub binary_mode: BinaryMode,
+    /// Number of bytes to read when checking if a file is binary.
+    ///
+    /// Default: [`DEFAULT_BINARY_DETECTION_BYTES`] (8KB).
+    pub binary_detection_bytes: usize,
 }
 
 impl std::fmt::Debug for FileProcessingOptions {
@@ -367,6 +432,7 @@ impl std::fmt::Debug for FileProcessingOptions {
             .field("include_patterns", &self.include_patterns)
             .field("exclude_patterns", &self.exclude_patterns)
             .field("parallel", &self.parallel)
+            .field("parallel_threshold", &self.parallel_threshold)
             .field("count_only", &self.count_only)
             .field("files_with_matches", &self.files_with_matches)
             .field("files_without_matches", &self.files_without_matches)
@@ -375,6 +441,7 @@ impl std::fmt::Debug for FileProcessingOptions {
             .field("streaming_output", &self.streaming_output)
             .field("shutdown_signal", &self.shutdown_signal.is_some())
             .field("binary_mode", &self.binary_mode)
+            .field("binary_detection_bytes", &self.binary_detection_bytes)
             .finish()
     }
 }
@@ -390,6 +457,7 @@ impl Default for FileProcessingOptions {
             include_patterns: Vec::new(),
             exclude_patterns: Vec::new(),
             parallel: false,
+            parallel_threshold: PARALLEL_THRESHOLD,
             count_only: false,
             files_with_matches: false,
             files_without_matches: false,
@@ -398,6 +466,7 @@ impl Default for FileProcessingOptions {
             streaming_output: false,
             shutdown_signal: None,
             binary_mode: BinaryMode::Auto,
+            binary_detection_bytes: DEFAULT_BINARY_DETECTION_BYTES,
         }
     }
 }
@@ -405,6 +474,14 @@ impl Default for FileProcessingOptions {
 impl FileProcessingOptions {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Set the number of bytes to read when detecting binary files.
+    ///
+    /// Default: [`DEFAULT_BINARY_DETECTION_BYTES`] (8KB).
+    pub fn binary_detection_bytes(mut self, bytes: usize) -> Self {
+        self.binary_detection_bytes = bytes;
+        self
     }
 
     pub fn in_place(mut self, in_place: bool) -> Self {
@@ -444,6 +521,15 @@ impl FileProcessingOptions {
 
     pub fn parallel(mut self, parallel: bool) -> Self {
         self.parallel = parallel;
+        self
+    }
+
+    /// Set the minimum file count before parallel processing is used.
+    ///
+    /// For small file counts, parallel processing overhead may exceed benefit.
+    /// Default: [`PARALLEL_THRESHOLD`] (4 files).
+    pub fn parallel_threshold(mut self, threshold: usize) -> Self {
+        self.parallel_threshold = threshold;
         self
     }
 
@@ -518,8 +604,8 @@ impl FileProcessingOptions {
         match self.binary_mode {
             BinaryMode::Text => false, // Never skip in text mode
             BinaryMode::Skip | BinaryMode::Auto => {
-                // Check if file is binary
-                match is_binary_file(path) {
+                // Check if file is binary using configurable detection size
+                match is_binary_file_with_size(path, self.binary_detection_bytes) {
                     Ok(true) => {
                         trace!("Skipping binary file: {}", path.display());
                         true
@@ -560,7 +646,42 @@ fn create_progress_bar(file_count: u64, show_progress: bool, quiet: bool) -> Opt
     Some(pb)
 }
 
-/// Multi-file processor for batch operations
+/// Multi-file processor for batch operations.
+///
+/// `MultiFileProcessor` handles batch processing of multiple files with support for:
+///
+/// - **Directory recursion**: Walk directories to discover matching files
+/// - **Parallel processing**: Process files concurrently using Rayon
+/// - **In-place editing**: Modify files with optional backup creation
+/// - **VCS awareness**: Respect .gitignore and other ignore files
+/// - **Progress indicators**: Show processing progress for large file sets
+/// - **Graceful shutdown**: Handle Ctrl+C without corrupting files
+///
+/// # Example
+///
+/// ```no_run
+/// use rexpipe::pipeline::PipelineConfig;
+/// use rexpipe::files::{MultiFileProcessor, FileProcessingOptions};
+/// use std::path::PathBuf;
+///
+/// // Create a substitution pipeline
+/// let config = PipelineConfig::from_inline_pattern(r"TODO", Some("DONE"));
+///
+/// // Configure for parallel processing with in-place editing
+/// let options = FileProcessingOptions::new()
+///     .include_pattern("*.rs".to_string())
+///     .parallel(true)
+///     .in_place(true)
+///     .backup_suffix(Some(".bak".to_string()));
+///
+/// let processor = MultiFileProcessor::new(config, options);
+///
+/// // Discover and process files
+/// let files = processor.discover_files(&[PathBuf::from("src/")]).unwrap();
+/// let result = processor.process_files(&files).unwrap();
+///
+/// println!("Modified {} files", result.files_modified);
+/// ```
 pub struct MultiFileProcessor {
     config: PipelineConfig,
     options: FileProcessingOptions,
@@ -739,15 +860,16 @@ impl MultiFileProcessor {
     ///
     /// When `options.parallel` is true, files are processed in parallel using Rayon.
     /// However, to avoid overhead on small file sets, parallel processing is only
-    /// used when the file count exceeds [`PARALLEL_THRESHOLD`].
+    /// used when the file count exceeds `options.parallel_threshold`.
     pub fn process_files(&self, files: &[PathBuf]) -> Result<MultiFileResult> {
         // Only use parallel processing if enabled AND file count exceeds threshold
-        let use_parallel = self.options.parallel && files.len() >= PARALLEL_THRESHOLD;
+        let threshold = self.options.parallel_threshold;
+        let use_parallel = self.options.parallel && files.len() >= threshold;
         debug!(
             "Processing {} files (parallel: {}, threshold: {})",
             files.len(),
             use_parallel,
-            PARALLEL_THRESHOLD
+            threshold
         );
         if use_parallel {
             self.process_files_parallel(files)
@@ -1149,7 +1271,8 @@ impl MultiFileProcessor {
         };
 
         // Only use parallel processing if enabled AND file count exceeds threshold
-        let use_parallel = self.options.parallel && files.len() >= PARALLEL_THRESHOLD;
+        let threshold = self.options.parallel_threshold;
+        let use_parallel = self.options.parallel && files.len() >= threshold;
         let results: Vec<FileResult> = if use_parallel {
             files
                 .par_iter()

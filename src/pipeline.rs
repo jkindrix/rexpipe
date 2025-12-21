@@ -16,7 +16,7 @@ pub struct PipelineConfig {
     pub step: Vec<PipelineStep>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PipelineSettings {
     /// Use PCRE-compatible regex engine via fancy-regex (requires pcre feature)
     #[serde(default)]
@@ -61,6 +61,45 @@ pub struct PipelineSettings {
     /// - "truncate": Truncate the line at the limit
     #[serde(default)]
     pub max_line_action: MaxLineAction,
+    /// Timeout in seconds for shell transform commands (0 = no timeout).
+    ///
+    /// Shell transforms execute external commands which may hang. This timeout
+    /// prevents indefinite hangs. Default: 30 seconds.
+    #[serde(default = "default_shell_timeout")]
+    pub shell_timeout_secs: u64,
+    /// Maximum regex pattern size in bytes for ReDoS protection.
+    ///
+    /// Patterns exceeding this size will be rejected to prevent memory exhaustion.
+    /// Default: 10MB (10 * 1024 * 1024 bytes).
+    #[serde(default = "default_regex_size_limit")]
+    pub regex_size_limit: usize,
+}
+
+impl Default for PipelineSettings {
+    fn default() -> Self {
+        Self {
+            pcre_mode: false,
+            fixed_strings: false,
+            context_before: 0,
+            context_after: 0,
+            timeout_ms: 0,
+            allow_shell: default_allow_shell(),
+            strict_mode: false,
+            preserve_line_endings: false,
+            max_line_length: 0,
+            max_line_action: MaxLineAction::default(),
+            shell_timeout_secs: default_shell_timeout(),
+            regex_size_limit: default_regex_size_limit(),
+        }
+    }
+}
+
+fn default_shell_timeout() -> u64 {
+    30
+}
+
+fn default_regex_size_limit() -> usize {
+    10 * 1024 * 1024
 }
 
 fn default_allow_shell() -> bool {
@@ -868,7 +907,13 @@ mod tests {
             step: vec![],
         };
 
-        assert!(config.validate().is_err());
+        // Empty pipeline should be rejected
+        let err = config.validate().expect_err("Empty pipeline should be invalid");
+        assert!(
+            err.iter().any(|e| e.contains("at least one step")),
+            "Error should mention missing steps: {:?}",
+            err
+        );
 
         config.step.push(PipelineStep {
             step_type: StepType::Substitute,
@@ -881,10 +926,16 @@ mod tests {
             enabled: Some(true),
         });
 
-        assert!(config.validate().is_err());
+        // Substitute step without replacement should be rejected
+        let err = config.validate().expect_err("Substitute without replacement should be invalid");
+        assert!(
+            err.iter().any(|e| e.contains("replacement")),
+            "Error should mention missing replacement: {:?}",
+            err
+        );
 
         config.step[0].replacement = Some("replacement".to_string());
-        assert!(config.validate().is_ok());
+        config.validate().expect("Valid config should pass validation");
     }
 
     #[test]
