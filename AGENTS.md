@@ -4,7 +4,7 @@ Machine-readable instructions for AI coding agents working on the rexpipe projec
 
 ## Project Overview
 
-rexpipe is an AI-native regex pipeline processor optimized for use by AI agents and automated text processing pipelines. Version 2.0 refocused the tool on core primitives with machine-readable defaults.
+rexpipe is a modern regex pipeline processor optimized for scripting and automated text processing. Version 2.0 refocused the tool on core primitives with machine-readable defaults.
 
 **Key design principle:** When stdout is not a TTY (piped/scripted), output JSON by default for machine consumption.
 
@@ -109,9 +109,9 @@ Test naming convention: `test_<function>_<scenario>`
 4. Write conventional commit messages (feat:, fix:, docs:, etc.)
 5. Update CHANGELOG.md for user-facing changes
 
-## AI-Native Features
+## Automation Features
 
-These flags are designed for AI agent consumption:
+These flags are designed for scripting and automation:
 
 | Flag | Purpose |
 |------|---------|

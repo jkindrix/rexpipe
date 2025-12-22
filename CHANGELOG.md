@@ -9,24 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-**AI-Native Text Processor Transformation**
+**Automation-First Redesign**
 
-This release transforms rexpipe from a general-purpose text processor into a focused,
-AI-native tool optimized for use by AI agents and automated pipelines.
+This release redesigns rexpipe as an automation-first text processor optimized for
+scripting, pipelines, and programmatic use.
 
-#### AI-Native Behavior Changes
+#### Behavior Changes
 - **JSON output as default for pipes**: When stdout is not a terminal (piped output),
   JSON is now the default format. Use `--text` to force plain text output.
 - **Safer in-place editing**: In non-interactive mode (piped/scripted), in-place
   editing (`-i`) now requires explicit `--apply` flag. Without it, a dry-run preview
-  is shown instead. This prevents accidental file modifications by AI agents.
+  is shown instead. This prevents accidental file modifications by scripts.
 - **Structured error output**: `--error-format json` provides machine-parseable
   errors with categories, exit codes, and suggestions.
 
 #### New Features
 - `--explain`: Describe what a pipeline will do without processing data
   - Lists each step, patterns, and transformations
-  - JSON output with `--json` flag for AI consumption
+  - JSON output with `--json` flag for scripting
 - `--verify`: Output verification summary after processing
   - Confirms lines processed, matches found, transformations applied
   - JSON output with `--json` flag for programmatic verification
@@ -39,9 +39,8 @@ AI-native tool optimized for use by AI agents and automated pipelines.
 
 **Focus on Core Primitives** - Removed ~2,500 lines of non-essential code:
 
-- **Natural Language Interface** (`natural.rs`): AI agents don't need natural
-  language interfaces - they can use the CLI directly
-- **TUI Dashboard** (`tui.rs`): AI agents don't need interactive dashboards
+- **Natural Language Interface** (`natural.rs`): Unnecessary complexity
+- **TUI Dashboard** (`tui.rs`): Out of scope for a CLI pipeline tool
 - **Python Bindings** (`python.rs`): Premature optimization - can add later if needed
 - **Apache Kafka Integration**: Broken functionality that distracted from core value
   - Removed Kafka source/sink from stream module

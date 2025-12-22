@@ -602,7 +602,7 @@ replacement = "⚠️ SLOW: response_time=$1ms"
 | **Compliance** | GDPR anonymization, reversible transforms, tracking param removal |
 | **Documentation** | Broken link detection, glossary linking, i18n string extraction |
 | **Creative** | Subtitle timing, chord transposition, recipe parsing, stack trace dedup |
-| **AI/ML** | Prompt extraction, training data cleanup, LLM response sanitization |
+| **ML Processing** | Prompt extraction, training data cleanup, LLM response sanitization |
 | **Forensics** | IOC extraction, malware strings, suspicious command detection, event log parsing |
 | **Finance** | IBAN extraction, invoice parsing, stock ticker detection |
 | **Healthcare** | PHI detection, ICD-10 codes, drug dosage normalization |
@@ -632,7 +632,7 @@ replacement = "⚠️ SLOW: response_time=$1ms"
 | **Telecom** | Phone formats, SIP URIs, IMEI numbers |
 | **Education** | Student IDs, grades, course codes |
 | **Utilities** | Smart meters, outage logs |
-| **AI/LLM Ops** | Prompt injection detection, token usage, MCP tool calls, RAG deduplication, guardrails |
+| **LLM Processing** | Prompt injection detection, token usage, tool calls, RAG deduplication, guardrails |
 | **Cloud Native** | K8s container logs, OTel trace context, Prometheus validation, service mesh correlation |
 | **Supply Chain** | SBOM parsing, license compliance, dependency confusion, CVE extraction, commit signatures |
 | **IaC** | Terraform plan diff, Pulumi outputs, CloudFormation inventory, secret detection |
@@ -646,7 +646,7 @@ replacement = "⚠️ SLOW: response_time=$1ms"
 
 ---
 
-## AI/ML Workflows
+## ML Data Workflows
 
 ### 46. LLM Prompt Template Extraction
 
@@ -668,7 +668,7 @@ pattern = "^(.{50}).*$"
 action = "deduplicate_by_prefix"
 ```
 
-### 48. AI Response Cleanup
+### 48. LLM Response Cleanup
 
 ```toml
 # Strip common LLM artifacts from generated text
@@ -1737,7 +1737,7 @@ rexpipe -p 'OUTAGE\\s+(\\d{4}-\\d{2}-\\d{2}T[\\d:]+)\\s+DURATION:(\\d+)min' --ex
 
 ---
 
-## AI & LLM Operations
+## LLM Output Processing
 
 ### 152. Prompt Injection Detection
 
@@ -1764,7 +1764,7 @@ rexpipe -p '(?:confidence|certainty|probability)[:=\s]+(\d+(?:\.\d+)?%?)' --extr
 ### 154. Token Usage Parsing from API Responses
 
 ```toml
-# Parse OpenAI/Anthropic API usage metadata
+# Parse LLM API usage metadata
 [[step]]
 type = "extract"
 pattern = '"(prompt_tokens|completion_tokens|total_tokens|input_tokens|output_tokens)":\s*(\d+)'
@@ -1772,10 +1772,10 @@ capture_names = ["token_type", "count"]
 output_format = "csv"
 ```
 
-### 155. AI Guardrail Violation Logging
+### 155. Guardrail Violation Logging
 
 ```toml
-# Extract and categorize AI safety violations
+# Extract and categorize safety violations
 [[step]]
 type = "extract"
 pattern = '\[BLOCKED\]\s+category=(\w+)\s+severity=(\w+)\s+content="([^"]+)"'

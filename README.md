@@ -1,30 +1,28 @@
 # rexpipe
 
-**The text processor AI agents trust.**
+**A modern regex pipeline processor for automated text processing.**
 
-An AI-native regex pipeline processor optimized for use by AI agents and automated text processing pipelines.
+rexpipe consolidates complex regex workflows into a single, efficient tool. It replaces fragile `grep | sed | awk` chains with unified, configurable pipelines that are faster, safer, and easier to maintain.
 
 ## Why rexpipe?
 
-AI agents have fundamentally different needs than humans using `sed`, `awk`, and `grep`:
+Traditional Unix text tools work well for interactive use but fall short in automated pipelines:
 
-| Human Needs | AI Agent Needs |
-|-------------|----------------|
-| Muscle memory, terse syntax | Predictable semantics |
-| Silent failures are OK | Rich, structured errors |
-| Text output to read | Machine-readable JSON |
-| Trust the user | Safe by default |
-| One-off commands | Composable pipelines |
+| Traditional Tools | rexpipe |
+|-------------------|---------|
+| Multiple processes, piping overhead | Single process, streaming |
+| Implicit failures, cryptic errors | Structured errors with suggestions |
+| Text-only output | JSON or text output |
+| Easy to accidentally modify files | Safe-by-default with `--apply` |
+| Ad-hoc one-liners | Reusable TOML configurations |
 
-**rexpipe is built for AI agents first.**
+## Key Features
 
-## AI-Native Features
-
-- **JSON by default for pipes** - When stdout is not a TTY, output is JSON
-- **Structured errors** - `--error-format json` for machine-parseable errors
-- **Safe in-place editing** - Requires `--apply` in non-interactive mode
-- **Explain before execute** - `--explain` describes what pipeline will do
-- **Verify after execute** - `--verify` confirms what was done
+- **JSON output for scripting** - When stdout is not a TTY, output is JSON by default
+- **Structured errors** - `--error-format json` for parseable error handling
+- **Safe in-place editing** - Requires `--apply` in non-interactive mode to prevent accidents
+- **Explain mode** - `--explain` describes what pipeline will do before running
+- **Verify mode** - `--verify` confirms what transformations were applied
 - **Schema versioning** - All JSON includes `schema_version` for stability
 
 ## Core Features
@@ -76,7 +74,7 @@ echo "Test 123 and 456" | rexpipe --pattern '\d+' --replacement 'NUMBER'
 # Use --text for plain text: Test NUMBER and NUMBER
 ```
 
-### AI-Native Workflow
+### Scripting Workflow
 
 ```bash
 # 1. Explain what pipeline will do (before running)
@@ -532,7 +530,7 @@ OPTIONS:
         --text                    Force plain text output (override JSON default)
         --error-format <FMT>      Error output format: text (default) or json
 
-    # AI-Native Features
+    # Safety & Verification
         --explain                 Describe what pipeline will do (no processing)
         --verify                  Output verification summary after processing
         --apply                   Confirm in-place edits (required when scripted)
@@ -1261,130 +1259,6 @@ replacement = "new_api"
 language = "rust"
 exclude_scopes = ["tests", "comments", "strings"]
 description = "Update API calls in production code only"
-```
-
-## Pipeline Server Mode
-
-rexpipe can run as a TCP server for network-based text processing.
-
-### Starting the Server
-
-```bash
-# Start server with default address
-rexpipe --server
-
-# Start on custom address
-rexpipe --server --bind 0.0.0.0:9000
-
-# Start with default pipeline configuration
-rexpipe --server --config my-pipeline.toml
-
-# Start with async mode (requires async feature)
-rexpipe --server --async
-```
-
-### Protocol
-
-The server uses a simple line-based protocol:
-
-```text
-# Client sends:
-{"step":[{"type":"substitute","pattern":"\\d+","replacement":"NUM"}]}
----
-There are 42 apples.
-And 17 oranges.
----
-
-# Server responds:
-There are NUM apples.
-And NUM oranges.
----
-```
-
-### Protocol Steps
-
-1. Send JSON pipeline configuration on a single line (or skip to use default)
-2. Send `---` delimiter
-3. Send text to process (line by line)
-4. Send `---` delimiter or close connection
-5. Server responds with processed text followed by `---`
-
-### Example Client (bash)
-
-```bash
-# Using netcat
-{
-  echo '{"step":[{"type":"substitute","pattern":"\\d+","replacement":"NUM"}]}'
-  echo '---'
-  echo 'Test 123 data'
-  echo '---'
-} | nc localhost 8080
-```
-
-## Continuous Streaming Mode
-
-Continuous streaming mode enables long-running pipelines with URI-based sources and sinks for processing logs, network streams, or real-time data.
-
-### Starting Streaming Mode
-
-```bash
-# Process syslog via UDP
-rexpipe --config sanitize.toml --stream \
-    --input udp://0.0.0.0:514 \
-    --output file:///var/log/sanitized.log
-
-# TCP log aggregation
-rexpipe --config normalize.toml --stream \
-    --input tcp://0.0.0.0:5140 \
-    --output tcp://logserver.local:5140
-
-# File-to-file processing (continuous, handles new lines as they're appended)
-rexpipe --config transform.toml --stream \
-    --input file:///var/log/app.log \
-    --output stdout://
-```
-
-### Supported URIs
-
-| URI Scheme | Input | Output | Description |
-|------------|-------|--------|-------------|
-| `stdin://` | ✓ | - | Standard input |
-| `stdout://` | - | ✓ | Standard output |
-| `stderr://` | - | ✓ | Standard error |
-| `file:///path` | ✓ | ✓ | Local file (absolute path) |
-| `tcp://host:port` | ✓ | ✓ | TCP connection (client for input, server binds for output) |
-| `udp://host:port` | ✓ | ✓ | UDP socket |
-
-### CLI Options for Streaming
-
-| Option | Description |
-|--------|-------------|
-| `--stream` | Enable continuous streaming mode |
-| `--input <URI>` | Input source URI (default: `stdin://`) |
-| `--output <URI>` | Output sink URI (default: `stdout://`) |
-
-### Use Cases
-
-**Log sanitization daemon:**
-```bash
-# Sanitize sensitive data from incoming syslog messages
-rexpipe --config pii-redact.toml --stream \
-    --input udp://0.0.0.0:514 \
-    --output file:///var/log/sanitized-syslog.log
-```
-
-**Real-time log transformation:**
-```bash
-# Normalize log format before forwarding to aggregator
-rexpipe --config log-normalize.toml --stream \
-    --input tcp://0.0.0.0:5000 \
-    --output tcp://elasticsearch.local:9200
-```
-
-**Development log filtering:**
-```bash
-# Filter and highlight development logs in real-time
-tail -F app.log | rexpipe --config dev-filter.toml --stream
 ```
 
 ## Acknowledgments

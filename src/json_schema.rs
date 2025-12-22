@@ -132,10 +132,10 @@ pub struct PerformanceResult {
     pub lines_per_second: Option<f64>,
 }
 
-/// Structured error response for AI-parseable error output.
+/// Structured error response for machine-parseable error output.
 ///
 /// This provides machine-readable errors with categorized exit codes,
-/// making it easy for AI agents to understand and handle errors programmatically.
+/// making it easy for scripts and programs to handle errors programmatically.
 #[derive(Debug, Clone, Serialize)]
 pub struct ErrorResult {
     /// Human-readable error message
@@ -312,7 +312,7 @@ pub fn output_performance_json(
 /// Output a standardized JSON error response.
 ///
 /// Converts an error and exit code into a structured JSON response that
-/// AI agents can parse and handle programmatically.
+/// scripts and programs can parse and handle programmatically.
 ///
 /// # Example Output
 /// ```json
