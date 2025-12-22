@@ -1,6 +1,6 @@
 use rexpipe::inspector::{Inspector, InspectorOptions};
 use rexpipe::pipeline::{
-    FilterAction, PipelineConfig, PipelineSettings, PipelineStep, RegexFlag, StepType,
+    PipelineConfig, PipelineSettings, PipelineStep, RegexFlag, StepAction, StepType,
     TransformAction,
 };
 use rexpipe::processor::StreamProcessor;
@@ -37,7 +37,7 @@ fn test_end_to_end_log_processing() {
                 step_type: StepType::Filter,
                 pattern: "DEBUG".to_string(),
                 replacement: None,
-                action: Some(FilterAction::DropLine),
+                action: Some(StepAction::DropLine),
                 transform: None,
                 flags: None,
                 description: None,
@@ -146,7 +146,7 @@ another DEBUG to drop"#;
             step_type: StepType::Filter,
             pattern: "DEBUG".to_string(),
             replacement: None,
-            action: Some(FilterAction::DropLine),
+            action: Some(StepAction::DropLine),
             transform: None,
             flags: None,
             description: None,
@@ -659,7 +659,7 @@ INFO: Processing complete"#;
             // Drop lines starting with DEBUG followed by anything containing "user"
             pattern: r"^DEBUG:(?=.*user)".to_string(),
             replacement: None,
-            action: Some(FilterAction::DropLine),
+            action: Some(StepAction::DropLine),
             transform: None,
             flags: Some(vec![RegexFlag::CaseInsensitive]),
             description: Some("Drop debug lines mentioning user".to_string()),
@@ -796,7 +796,7 @@ Line with ERROR without brackets"#;
             // Match literal [ERROR] including brackets
             pattern: "[ERROR]".to_string(),
             replacement: None,
-            action: Some(FilterAction::DropLine),
+            action: Some(StepAction::DropLine),
             transform: None,
             flags: None,
             description: None,
@@ -1032,7 +1032,7 @@ Mixed: English 和 中文"#;
             // Keep only lines with CJK characters
             pattern: r"\p{Han}".to_string(),
             replacement: None,
-            action: Some(FilterAction::KeepLine),
+            action: Some(StepAction::KeepLine),
             transform: None,
             flags: None,
             description: None,

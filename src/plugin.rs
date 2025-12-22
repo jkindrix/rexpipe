@@ -360,6 +360,78 @@ impl PluginRegistry {
                 .map(|d| d.as_secs().to_string())
                 .unwrap_or_else(|_| "0".to_string())
         });
+
+        // Music: chord transposition
+        // Transposes a chord by a number of semitones
+        // Usage: transpose <semitones>
+        // Example: "C" with args ["2"] -> "D"
+        //          "Am7" with args ["5"] -> "Dm7"
+        //          "F#m" with args ["-2"] -> "Em"
+        self.register("transpose", |s, args| {
+            let semitones: i32 = args.first().and_then(|a| a.parse().ok()).unwrap_or(0);
+            if semitones == 0 {
+                return s.to_string();
+            }
+
+            // Chromatic scale using sharps
+            const NOTES_SHARP: [&str; 12] = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+            // Chromatic scale using flats
+            const NOTES_FLAT: [&str; 12] = ["C", "Db", "D", "Eb", "E", "F", "Gb", "G", "Ab", "A", "Bb", "B"];
+
+            // Parse the chord: extract root note (with optional accidental) and suffix
+            let chars: Vec<char> = s.chars().collect();
+            if chars.is_empty() {
+                return s.to_string();
+            }
+
+            // First char must be A-G
+            let root_letter = chars[0].to_ascii_uppercase();
+            if !('A'..='G').contains(&root_letter) {
+                return s.to_string();
+            }
+
+            // Check for accidental (# or b)
+            let (accidental, suffix_start) = if chars.len() > 1 {
+                match chars[1] {
+                    '#' => (Some('#'), 2),
+                    'b' => (Some('b'), 2),
+                    _ => (None, 1),
+                }
+            } else {
+                (None, 1)
+            };
+
+            // Build root note string
+            let root = if let Some(acc) = accidental {
+                format!("{}{}", root_letter, acc)
+            } else {
+                root_letter.to_string()
+            };
+
+            // Get suffix (m, maj, min, dim, aug, 7, 9, 11, 13, etc.)
+            let suffix: String = chars[suffix_start..].iter().collect();
+
+            // Determine if we're using sharps or flats based on input
+            let use_flats = accidental == Some('b');
+            let notes = if use_flats { &NOTES_FLAT } else { &NOTES_SHARP };
+
+            // Find current note index
+            let current_idx = notes.iter().position(|&n| n.eq_ignore_ascii_case(&root));
+            let current_idx = current_idx.or_else(|| {
+                // Try the other scale if not found
+                let other_notes = if use_flats { &NOTES_SHARP } else { &NOTES_FLAT };
+                other_notes.iter().position(|&n| n.eq_ignore_ascii_case(&root))
+            });
+
+            match current_idx {
+                Some(idx) => {
+                    // Calculate new index with wrapping
+                    let new_idx = ((idx as i32 + semitones).rem_euclid(12)) as usize;
+                    format!("{}{}", notes[new_idx], suffix)
+                }
+                None => s.to_string(), // Return unchanged if note not found
+            }
+        });
     }
 
     /// Register a custom plugin function
@@ -1141,5 +1213,96 @@ mod tests {
     fn test_shell_command_invalid() {
         let result = PluginRegistry::execute_shell("nonexistent_command_xyz", "input");
         assert!(result.is_err());
+    }
+
+    // Transpose plugin tests
+    #[test]
+    fn test_transpose_basic() {
+        let registry = PluginRegistry::new();
+        // C up 2 semitones = D
+        assert_eq!(
+            registry.execute("transpose", "C", &["2".to_string()]).unwrap(),
+            "D"
+        );
+    }
+
+    #[test]
+    fn test_transpose_with_suffix() {
+        let registry = PluginRegistry::new();
+        // Am up 5 semitones = Dm
+        assert_eq!(
+            registry.execute("transpose", "Am", &["5".to_string()]).unwrap(),
+            "Dm"
+        );
+    }
+
+    #[test]
+    fn test_transpose_complex_chord() {
+        let registry = PluginRegistry::new();
+        // Cmaj7 up 4 semitones = Emaj7
+        assert_eq!(
+            registry.execute("transpose", "Cmaj7", &["4".to_string()]).unwrap(),
+            "Emaj7"
+        );
+    }
+
+    #[test]
+    fn test_transpose_sharp() {
+        let registry = PluginRegistry::new();
+        // F# up 2 semitones = G#
+        assert_eq!(
+            registry.execute("transpose", "F#", &["2".to_string()]).unwrap(),
+            "G#"
+        );
+    }
+
+    #[test]
+    fn test_transpose_flat() {
+        let registry = PluginRegistry::new();
+        // Bb up 2 semitones = C
+        assert_eq!(
+            registry.execute("transpose", "Bb", &["2".to_string()]).unwrap(),
+            "C"
+        );
+    }
+
+    #[test]
+    fn test_transpose_negative() {
+        let registry = PluginRegistry::new();
+        // D down 2 semitones = C
+        assert_eq!(
+            registry.execute("transpose", "D", &["-2".to_string()]).unwrap(),
+            "C"
+        );
+    }
+
+    #[test]
+    fn test_transpose_wrap_around() {
+        let registry = PluginRegistry::new();
+        // B up 2 semitones = C#
+        assert_eq!(
+            registry.execute("transpose", "B", &["2".to_string()]).unwrap(),
+            "C#"
+        );
+    }
+
+    #[test]
+    fn test_transpose_zero() {
+        let registry = PluginRegistry::new();
+        // No change
+        assert_eq!(
+            registry.execute("transpose", "Am7", &["0".to_string()]).unwrap(),
+            "Am7"
+        );
+    }
+
+    #[test]
+    fn test_transpose_no_args() {
+        let registry = PluginRegistry::new();
+        // Default to 0 semitones (no change)
+        assert_eq!(
+            registry.execute("transpose", "C", &[]).unwrap(),
+            "C"
+        );
     }
 }

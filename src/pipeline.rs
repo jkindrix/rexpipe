@@ -3,7 +3,6 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
 
-use crate::audit::AuditConfig;
 use crate::bidirectional::BidirectionalConfig;
 use crate::checkpoint::CheckpointConfig;
 use crate::crossfile::CrossFileConfig;
@@ -23,10 +22,6 @@ pub struct PipelineConfig {
     pub step: Vec<PipelineStep>,
 
     // === Advanced feature configurations ===
-
-    /// Audit trail configuration for compliance and provenance tracking
-    #[serde(default)]
-    pub audit: AuditConfig,
 
     /// Bidirectional (reversible) pipeline configuration
     #[serde(default)]
@@ -69,6 +64,10 @@ pub struct PipelineSettings {
     /// Strict mode - reject patterns with potential ReDoS vulnerabilities
     #[serde(default)]
     pub strict_mode: bool,
+    /// Enable block processing mode.
+    /// When true, the pipeline operates on multi-line blocks rather than individual lines.
+    #[serde(default)]
+    pub block_mode: bool,
     /// Preserve CRLF line endings in in-place editing mode
     ///
     /// When true, the processor detects and preserves the original line ending
@@ -114,6 +113,7 @@ impl Default for PipelineSettings {
             timeout_ms: 0,
             allow_shell: default_allow_shell(),
             strict_mode: false,
+            block_mode: false,
             preserve_line_endings: false,
             max_line_length: 0,
             max_line_action: MaxLineAction::default(),
@@ -152,12 +152,16 @@ pub enum MaxLineAction {
 pub struct PipelineStep {
     #[serde(rename = "type", default)]
     pub step_type: StepType,
+    /// Pattern to match (for non-block steps: substitute, filter, extract, validate, transform)
     #[serde(default)]
     pub pattern: String,
     #[serde(default)]
     pub replacement: Option<String>,
+    /// Unified action field - works for Filter, Block, and other step types.
+    /// For Filter steps: "keep_line", "drop_line", "keep_match", "drop_match", "deduplicate_by_prefix"
+    /// For Block steps: "keep_block", "drop_block", "collect_block", "deduplicate"
     #[serde(default)]
-    pub action: Option<FilterAction>,
+    pub action: Option<StepAction>,
     /// Transform action for Transform step type
     #[serde(default)]
     pub transform: Option<TransformAction>,
@@ -168,15 +172,20 @@ pub struct PipelineStep {
     #[serde(default)]
     pub enabled: Option<bool>,
     // === Block step fields ===
-    /// Pattern that ends the block (for Block step type)
+    /// Start pattern for Block step type (marks beginning of block)
     #[serde(default)]
-    pub until: Option<String>,
-    /// Action to apply within the block
+    pub start_pattern: Option<String>,
+    /// End pattern for Block step type (marks end of block)
     #[serde(default)]
-    pub block_action: Option<BlockAction>,
-    /// Number of context lines after trigger to include in block
+    pub end_pattern: Option<String>,
+    /// Block context configuration - can be a simple number (lines) or structured config
+    /// Examples: `block_context = 5` or `block_context = { overlap_chars = 100 }`
     #[serde(default)]
-    pub block_context: Option<usize>,
+    pub block_context: Option<BlockContextValue>,
+    // === Validation step fields ===
+    /// Action to take when validation fails: "error" (default), "warn", "skip"
+    #[serde(default)]
+    pub on_mismatch: Option<OnMismatch>,
     // === Syntax-aware processing fields (requires tree-sitter feature) ===
     /// Language for syntax-aware processing (e.g., "rust", "python", "javascript")
     /// When specified, patterns are matched only within the specified scope.
@@ -200,6 +209,26 @@ pub struct PipelineStep {
     /// Example: `exclude_scopes = ["comments", "strings"]`
     #[serde(default)]
     pub exclude_scopes: Option<Vec<String>>,
+    // === Extract step enhancements ===
+    /// Names for capture groups in extract steps.
+    /// When specified, extracted captures are labeled with these names.
+    /// Example: `capture_names = ["user", "domain"]` for pattern `(\w+)@(\w+)`
+    #[serde(default)]
+    pub capture_names: Option<Vec<String>>,
+    /// Output format for extract steps: "text", "json", "csv", "jsonl"
+    /// Default is "text" (tab-separated matches)
+    #[serde(default)]
+    pub output_format: Option<ExtractOutputFormat>,
+    /// Custom output template using capture group references.
+    /// Example: `output_template = "User: $1, Domain: $2"`
+    #[serde(default)]
+    pub output_template: Option<String>,
+    /// Only match first occurrence (default: false, match all with global flag)
+    #[serde(default)]
+    pub first_only: Option<bool>,
+    /// Deduplicate extracted values (only unique values are output)
+    #[serde(default)]
+    pub deduplicate: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -215,6 +244,80 @@ pub enum StepType {
     Block,
 }
 
+/// Unified action enum for Filter and Block steps.
+/// The action is interpreted based on the step type.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StepAction {
+    // === Filter actions ===
+    /// Keep lines that match the pattern
+    KeepLine,
+    /// Drop lines that match the pattern
+    DropLine,
+    /// Keep only the matched portions of each line
+    KeepMatch,
+    /// Remove matched portions, keeping the rest of the line
+    DropMatch,
+    /// Deduplicate lines based on prefix from first capture group.
+    /// The prefix length is inferred from the capture group in the pattern.
+    /// Example: pattern = "^(.{50}).*$" captures first 50 chars as prefix
+    DeduplicateByPrefix,
+    // === Block actions ===
+    /// Keep only lines within matching blocks
+    KeepBlock,
+    /// Drop lines within matching blocks
+    DropBlock,
+    /// Collect and output block contents together
+    CollectBlock,
+    /// Deduplicate identical blocks (output each unique block only once)
+    Deduplicate,
+    /// Mark/tag lines within matching blocks (prepend marker)
+    #[serde(rename = "mark_block")]
+    MarkBlock {
+        /// Marker to prepend to lines in the block
+        marker: String,
+    },
+    /// Apply a substitution to lines within the block
+    #[serde(rename = "substitute_in_block")]
+    SubstituteInBlock {
+        /// Pattern to match within block lines
+        pattern: String,
+        /// Replacement text
+        replacement: String,
+    },
+}
+
+/// Action to take when validation fails
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum OnMismatch {
+    /// Stop processing and return error (default)
+    #[default]
+    Error,
+    /// Log a warning but continue processing
+    Warn,
+    /// Silently skip the line
+    Skip,
+}
+
+/// Convert StepAction to a string representation for error messages
+fn step_action_to_str(action: &StepAction) -> &'static str {
+    match action {
+        StepAction::KeepLine => "keep_line",
+        StepAction::DropLine => "drop_line",
+        StepAction::KeepMatch => "keep_match",
+        StepAction::DropMatch => "drop_match",
+        StepAction::DeduplicateByPrefix => "deduplicate_by_prefix",
+        StepAction::KeepBlock => "keep_block",
+        StepAction::DropBlock => "drop_block",
+        StepAction::CollectBlock => "collect_block",
+        StepAction::Deduplicate => "deduplicate",
+        StepAction::MarkBlock { .. } => "mark_block",
+        StepAction::SubstituteInBlock { .. } => "substitute_in_block",
+    }
+}
+
+/// Legacy FilterAction for backward compatibility (internal use)
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FilterAction {
@@ -222,11 +325,27 @@ pub enum FilterAction {
     DropLine,
     KeepMatch,
     DropMatch,
+    DeduplicateByPrefix,
+}
+
+/// Output format for extract steps
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ExtractOutputFormat {
+    /// Tab-separated text output (default)
+    #[default]
+    Text,
+    /// JSON object with capture names as keys
+    Json,
+    /// JSON Lines (one JSON object per match)
+    Jsonl,
+    /// CSV format with headers from capture_names
+    Csv,
 }
 
 /// Actions for Transform step type
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum TransformAction {
     /// Convert matched text to uppercase
     Uppercase,
@@ -356,7 +475,7 @@ fn default_mask_char() -> char {
     '*'
 }
 
-/// Actions for Block step type (cross-line processing)
+/// Internal representation of block actions (converted from StepAction)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BlockAction {
@@ -364,20 +483,90 @@ pub enum BlockAction {
     KeepBlock,
     /// Drop lines within matching blocks
     DropBlock,
-    /// Mark/tag lines within matching blocks (prepend marker)
-    MarkBlock {
-        /// Marker to prepend to lines in the block
-        marker: String,
-    },
-    /// Apply a substitution to lines within the block
-    SubstituteInBlock {
-        /// Pattern to match within block lines
-        pattern: String,
-        /// Replacement text
-        replacement: String,
-    },
-    /// Collect and output block contents together (useful for log extraction)
+    /// Collect and output block contents together
     CollectBlock,
+    /// Deduplicate identical blocks
+    Deduplicate,
+    /// Mark/tag lines within matching blocks
+    MarkBlock { marker: String },
+    /// Apply a substitution to lines within the block
+    SubstituteInBlock { pattern: String, replacement: String },
+}
+
+impl BlockAction {
+    /// Convert from unified StepAction to BlockAction
+    pub fn from_step_action(action: &StepAction) -> Option<Self> {
+        match action {
+            StepAction::KeepBlock => Some(BlockAction::KeepBlock),
+            StepAction::DropBlock => Some(BlockAction::DropBlock),
+            StepAction::CollectBlock => Some(BlockAction::CollectBlock),
+            StepAction::Deduplicate => Some(BlockAction::Deduplicate),
+            StepAction::MarkBlock { marker } => Some(BlockAction::MarkBlock { marker: marker.clone() }),
+            StepAction::SubstituteInBlock { pattern, replacement } => {
+                Some(BlockAction::SubstituteInBlock {
+                    pattern: pattern.clone(),
+                    replacement: replacement.clone(),
+                })
+            }
+            _ => None, // Filter actions don't convert to block actions
+        }
+    }
+}
+
+/// Block context value - can be a simple number or structured config
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum BlockContextValue {
+    /// Simple number of context lines
+    Lines(usize),
+    /// Structured configuration with overlap settings
+    Config(BlockContextConfig),
+}
+
+impl Default for BlockContextValue {
+    fn default() -> Self {
+        BlockContextValue::Lines(0)
+    }
+}
+
+impl BlockContextValue {
+    /// Get the number of context lines
+    pub fn lines(&self) -> usize {
+        match self {
+            BlockContextValue::Lines(n) => *n,
+            BlockContextValue::Config(c) => c.lines.unwrap_or(0),
+        }
+    }
+
+    /// Get the overlap in characters (if specified)
+    pub fn overlap_chars(&self) -> Option<usize> {
+        match self {
+            BlockContextValue::Lines(_) => None,
+            BlockContextValue::Config(c) => c.overlap_chars,
+        }
+    }
+
+    /// Get the overlap in lines (if specified)
+    pub fn overlap_lines(&self) -> Option<usize> {
+        match self {
+            BlockContextValue::Lines(_) => None,
+            BlockContextValue::Config(c) => c.overlap_lines,
+        }
+    }
+}
+
+/// Configuration for block context and overlap
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct BlockContextConfig {
+    /// Number of lines of context after the trigger pattern
+    #[serde(default)]
+    pub lines: Option<usize>,
+    /// Number of characters to overlap between blocks (for chunking)
+    #[serde(default)]
+    pub overlap_chars: Option<usize>,
+    /// Number of lines to overlap between blocks
+    #[serde(default)]
+    pub overlap_lines: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -492,7 +681,7 @@ impl PipelineConfig {
             pattern: pattern.to_string(),
             replacement: replacement.map(|s| s.to_string()),
             action: if replacement.is_none() {
-                Some(FilterAction::KeepMatch)
+                Some(StepAction::KeepMatch)
             } else {
                 None
             },
@@ -500,13 +689,19 @@ impl PipelineConfig {
             flags: Some(vec![RegexFlag::Global]),
             description: None,
             enabled: Some(true),
-            until: None,
-            block_action: None,
+            start_pattern: None,
+            end_pattern: None,
             block_context: None,
+            on_mismatch: None,
             language: None,
             languages: None,
             scope: None,
             exclude_scopes: None,
+            capture_names: None,
+            output_format: None,
+            output_template: None,
+            first_only: None,
+            deduplicate: None,
         };
 
         PipelineConfig {
@@ -516,7 +711,6 @@ impl PipelineConfig {
             patterns_include: Vec::new(),
             settings,
             step: vec![step],
-            audit: AuditConfig::default(),
             bidirectional: BidirectionalConfig::default(),
             checkpoint: CheckpointConfig::default(),
             cross_file: CrossFileConfig::default(),
@@ -578,7 +772,14 @@ impl PipelineConfig {
         }
 
         for (i, step) in self.step.iter().enumerate() {
-            if step.pattern.is_empty() {
+            // For Block steps, use start_pattern; for others, use pattern
+            let effective_pattern = if matches!(step.step_type, StepType::Block) {
+                step.start_pattern.as_ref().unwrap_or(&step.pattern)
+            } else {
+                &step.pattern
+            };
+
+            if effective_pattern.is_empty() {
                 errors.push(format!("Step {}: Pattern cannot be empty", i + 1));
             }
 
@@ -667,25 +868,15 @@ impl PipelineConfig {
                 if let (Some(action1), Some(action2)) = (&step1.action, &step2.action) {
                     let contradictory = matches!(
                         (action1, action2),
-                        (FilterAction::KeepLine, FilterAction::DropLine)
-                            | (FilterAction::DropLine, FilterAction::KeepLine)
-                            | (FilterAction::KeepMatch, FilterAction::DropMatch)
-                            | (FilterAction::DropMatch, FilterAction::KeepMatch)
+                        (StepAction::KeepLine, StepAction::DropLine)
+                            | (StepAction::DropLine, StepAction::KeepLine)
+                            | (StepAction::KeepMatch, StepAction::DropMatch)
+                            | (StepAction::DropMatch, StepAction::KeepMatch)
                     );
 
                     if contradictory {
-                        let action1_str = match action1 {
-                            FilterAction::KeepLine => "keep_line",
-                            FilterAction::DropLine => "drop_line",
-                            FilterAction::KeepMatch => "keep_match",
-                            FilterAction::DropMatch => "drop_match",
-                        };
-                        let action2_str = match action2 {
-                            FilterAction::KeepLine => "keep_line",
-                            FilterAction::DropLine => "drop_line",
-                            FilterAction::KeepMatch => "keep_match",
-                            FilterAction::DropMatch => "drop_match",
-                        };
+                        let action1_str = step_action_to_str(action1);
+                        let action2_str = step_action_to_str(action2);
                         errors.push(format!(
                             "Contradictory filters: Step {} ({} on '{}') conflicts with \
                              Step {} ({} on same pattern). The second filter will have no effect.",
@@ -813,10 +1004,10 @@ impl PipelineConfig {
                 if let (Some(action1), Some(action2)) = (&step1.action, &step2.action) {
                     let contradictory = matches!(
                         (action1, action2),
-                        (FilterAction::KeepLine, FilterAction::DropLine)
-                            | (FilterAction::DropLine, FilterAction::KeepLine)
-                            | (FilterAction::KeepMatch, FilterAction::DropMatch)
-                            | (FilterAction::DropMatch, FilterAction::KeepMatch)
+                        (StepAction::KeepLine, StepAction::DropLine)
+                            | (StepAction::DropLine, StepAction::KeepLine)
+                            | (StepAction::KeepMatch, StepAction::DropMatch)
+                            | (StepAction::DropMatch, StepAction::KeepMatch)
                     );
 
                     if contradictory {
@@ -1138,14 +1329,14 @@ mod tests {
                 PipelineStep {
                     step_type: StepType::Filter,
                     pattern: "ERROR".to_string(),
-                    action: Some(FilterAction::KeepLine),
+                    action: Some(StepAction::KeepLine),
                     enabled: Some(true),
                     ..Default::default()
                 },
                 PipelineStep {
                     step_type: StepType::Filter,
                     pattern: "ERROR".to_string(),
-                    action: Some(FilterAction::DropLine),
+                    action: Some(StepAction::DropLine),
                     enabled: Some(true),
                     ..Default::default()
                 },
@@ -1168,14 +1359,14 @@ mod tests {
                 PipelineStep {
                     step_type: StepType::Filter,
                     pattern: "ERROR".to_string(),
-                    action: Some(FilterAction::KeepLine),
+                    action: Some(StepAction::KeepLine),
                     enabled: Some(true),
                     ..Default::default()
                 },
                 PipelineStep {
                     step_type: StepType::Filter,
                     pattern: "ERROR".to_string(),
-                    action: Some(FilterAction::KeepLine),
+                    action: Some(StepAction::KeepLine),
                     enabled: Some(true),
                     ..Default::default()
                 },
@@ -1282,7 +1473,7 @@ mod tests {
                     step_type: StepType::Filter,
                     pattern: "ERROR".to_string(),
                     replacement: None,
-                    action: Some(FilterAction::KeepLine),
+                    action: Some(StepAction::KeepLine),
                     transform: None,
                     flags: None,
                     description: None,
@@ -1293,7 +1484,7 @@ mod tests {
                     step_type: StepType::Filter,
                     pattern: "ERROR".to_string(),
                     replacement: None,
-                    action: Some(FilterAction::DropLine),
+                    action: Some(StepAction::DropLine),
                     transform: None,
                     flags: None,
                     description: None,
@@ -1342,7 +1533,7 @@ mod tests {
                     step_type: StepType::Filter,
                     pattern: "ERROR".to_string(),
                     replacement: None,
-                    action: Some(FilterAction::KeepLine),
+                    action: Some(StepAction::KeepLine),
                     transform: None,
                     flags: None,
                     description: None,
@@ -1353,7 +1544,7 @@ mod tests {
                     step_type: StepType::Filter,
                     pattern: "ERROR".to_string(),
                     replacement: None,
-                    action: Some(FilterAction::DropLine),
+                    action: Some(StepAction::DropLine),
                     transform: None,
                     flags: None,
                     description: None,

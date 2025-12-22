@@ -4,7 +4,7 @@
 
 use proptest::prelude::*;
 use rexpipe::pipeline::{
-    FilterAction, PipelineConfig, PipelineResult, PipelineSettings, PipelineStep, RegexFlag,
+    PipelineConfig, PipelineResult, PipelineSettings, PipelineStep, RegexFlag, StepAction,
     StepType,
 };
 use rexpipe::processor::StreamProcessor;
@@ -289,7 +289,7 @@ proptest! {
             step_type: StepType::Filter,
             pattern: "^a".to_string(),
             replacement: None,
-            action: Some(FilterAction::KeepLine),
+            action: Some(StepAction::KeepLine),
             transform: None,
             flags: None,
             description: None,
@@ -669,7 +669,7 @@ proptest! {
             step_type: StepType::Filter,
             pattern: "^a".to_string(),
             replacement: None,
-            action: Some(FilterAction::DropLine),
+            action: Some(StepAction::DropLine),
             transform: None,
             flags: None,
             description: None,

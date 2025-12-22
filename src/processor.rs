@@ -1,7 +1,8 @@
+use crate::bidirectional::{Direction, generate_reverse_pipeline};
 use crate::error::{PatternError, ValidationError};
 use crate::pipeline::{
-    BlockAction, ErrorType, FilterAction, MaxLineAction, PipelineConfig, PipelineError,
-    PipelineResult, PipelineSettings, RegexFlag, StepResult, StepType, TransformAction,
+    BlockAction, ErrorType, MaxLineAction, OnMismatch, PipelineConfig, PipelineError,
+    PipelineResult, PipelineSettings, RegexFlag, StepAction, StepResult, StepType, TransformAction,
 };
 use anyhow::{Context, Result};
 use log::{debug, trace};
@@ -199,6 +200,18 @@ pub struct StreamProcessor {
     last_output_line: u64,
     /// Track active blocks for each Block step (step_index -> is_active)
     block_states: Vec<bool>,
+    /// Track seen prefixes for deduplicate_by_prefix filter action (step_index -> seen prefixes)
+    dedup_prefix_seen: HashMap<usize, std::collections::HashSet<String>>,
+    /// Buffer for block content for block-level deduplication (step_index -> current block content)
+    dedup_block_buffer: HashMap<usize, Vec<String>>,
+    /// Set of seen block hashes for block deduplication (step_index -> seen block hashes)
+    dedup_block_seen: HashMap<usize, std::collections::HashSet<u64>>,
+    /// Buffer for block context overlap (step_index -> trailing content from previous block)
+    block_overlap_buffer: HashMap<usize, String>,
+    /// Track seen extracted values for deduplicate in extract steps (step_index -> seen values)
+    dedup_extract_seen: HashMap<usize, std::collections::HashSet<String>>,
+    /// Track whether CSV header has been written for each step (step_index -> header_written)
+    csv_header_written: HashMap<usize, bool>,
 }
 
 /// Abstraction over different regex engines.
@@ -444,13 +457,24 @@ struct CompiledStep {
     step_index: usize,
     pattern: CompiledPattern,
     replacement: Option<String>,
-    action: Option<FilterAction>,
+    /// Unified action for Filter and Block steps
+    action: Option<StepAction>,
     transform_action: Option<TransformAction>,
     step_type: StepType,
     is_global: bool,
     // Block step fields
-    until_pattern: Option<CompiledPattern>,
-    block_action: Option<BlockAction>,
+    /// End pattern for block steps (previously `until`)
+    end_pattern: Option<CompiledPattern>,
+    block_context: Option<crate::pipeline::BlockContextValue>,
+    // Validation step fields
+    /// Action to take when validation fails
+    on_mismatch: OnMismatch,
+    // Extract step enhancements
+    capture_names: Option<Vec<String>>,
+    output_format: Option<crate::pipeline::ExtractOutputFormat>,
+    output_template: Option<String>,
+    first_only: bool,
+    deduplicate: bool,
     // Syntax-aware processing fields (require tree-sitter feature)
     /// Languages this step applies to (if any of these match, the step is applied)
     #[cfg(feature = "tree-sitter")]
@@ -666,6 +690,28 @@ impl StreamProcessor {
             config.step.len()
         );
 
+        // If bidirectional reverse mode is enabled, generate reversed pipeline
+        let config = if config.bidirectional.enabled
+            && config.bidirectional.direction == Direction::Reverse
+        {
+            debug!("Bidirectional reverse mode enabled, generating reversed pipeline");
+            match generate_reverse_pipeline(&config) {
+                Ok(reversed) => {
+                    debug!("Successfully generated reversed pipeline with {} steps", reversed.step.len());
+                    reversed
+                }
+                Err(e) => {
+                    return Err(anyhow::anyhow!(
+                        "Failed to generate reversed pipeline: {}. \
+                        Only substitute and reversible transform steps can be reversed.",
+                        e
+                    ));
+                }
+            }
+        } else {
+            config
+        };
+
         if let Err(validation_errors) = config.validate() {
             debug!("Pipeline validation failed: {:?}", validation_errors);
             let error = ValidationError::Multiple {
@@ -692,6 +738,12 @@ impl StreamProcessor {
             after_context_remaining: 0,
             last_output_line: 0,
             block_states,
+            dedup_prefix_seen: HashMap::new(),
+            dedup_block_buffer: HashMap::new(),
+            dedup_block_seen: HashMap::new(),
+            block_overlap_buffer: HashMap::new(),
+            dedup_extract_seen: HashMap::new(),
+            csv_header_written: HashMap::new(),
         })
     }
 
@@ -711,12 +763,18 @@ impl StreamProcessor {
                 .map(|f| f.iter().any(|flag| matches!(flag, RegexFlag::Global)))
                 .unwrap_or(false);
 
-            let pattern = Self::build_pattern(&step.pattern, &step.flags, settings)?;
+            // For Block steps, use start_pattern; for others, use pattern
+            let pattern_str = if matches!(step.step_type, StepType::Block) {
+                step.start_pattern.as_ref().unwrap_or(&step.pattern)
+            } else {
+                &step.pattern
+            };
+            let pattern = Self::build_pattern(pattern_str, &step.flags, settings)?;
             let replacement = step.replacement.clone();
 
-            // Compile the until pattern for Block steps
-            let until_pattern = if let Some(ref until_str) = step.until {
-                Some(Self::build_pattern(until_str, &step.flags, settings)?)
+            // Compile the end pattern for Block steps
+            let end_pattern = if let Some(ref end_str) = step.end_pattern {
+                Some(Self::build_pattern(end_str, &step.flags, settings)?)
             } else {
                 None
             };
@@ -800,8 +858,14 @@ impl StreamProcessor {
                 transform_action,
                 step_type: step.step_type.clone(),
                 is_global,
-                until_pattern,
-                block_action: step.block_action.clone(),
+                end_pattern,
+                block_context: step.block_context.clone(),
+                on_mismatch: step.on_mismatch.clone().unwrap_or_default(),
+                capture_names: step.capture_names.clone(),
+                output_format: step.output_format.clone(),
+                output_template: step.output_template.clone(),
+                first_only: step.first_only.unwrap_or(false),
+                deduplicate: step.deduplicate.unwrap_or(false),
                 #[cfg(feature = "tree-sitter")]
                 languages,
                 #[cfg(feature = "tree-sitter")]
@@ -1389,12 +1453,43 @@ impl StreamProcessor {
                         step_result.add_match();
                     }
 
-                    if let Some(ref action) = compiled_step.action {
+                    // Clone action to avoid borrow conflict with self when mutating dedup state
+                    let action_clone = compiled_step.action.clone();
+
+                    if let Some(action) = action_clone {
                         should_output = match action {
-                            FilterAction::KeepLine => matches,
-                            FilterAction::DropLine => !matches,
-                            FilterAction::KeepMatch => matches,
-                            FilterAction::DropMatch => !matches,
+                            StepAction::KeepLine => matches,
+                            StepAction::DropLine => !matches,
+                            StepAction::KeepMatch => matches,
+                            StepAction::DropMatch => !matches,
+                            StepAction::DeduplicateByPrefix => {
+                                // Deduplicate by prefix: extract prefix from first capture group
+                                // Pattern like "^(.{50}).*$" captures first 50 chars as prefix
+                                let prefix = if let Some(cap) = compiled_step.pattern.captures_iter(&current_line).first() {
+                                    // Use first capture group as prefix
+                                    cap.groups.get(1)
+                                        .and_then(|g| g.clone())
+                                        .unwrap_or_else(|| current_line.clone())
+                                } else {
+                                    // If no match, use the whole line as prefix
+                                    current_line.clone()
+                                };
+
+                                // Get or create the set for this step
+                                let seen_set = self.dedup_prefix_seen
+                                    .entry(step_idx)
+                                    .or_insert_with(std::collections::HashSet::new);
+
+                                // If we've seen this prefix before, drop the line
+                                if seen_set.contains(&prefix) {
+                                    false
+                                } else {
+                                    seen_set.insert(prefix);
+                                    true
+                                }
+                            }
+                            // Block actions don't apply to Filter steps
+                            _ => matches,
                         };
 
                         if !should_output {
@@ -1403,43 +1498,231 @@ impl StreamProcessor {
                     }
                 }
                 StepType::Extract => {
-                    // Extract all matched content, joined by newlines (or separator if specified)
-                    let captures = compiled_step.pattern.captures_iter(&current_line);
-                    let matches: Vec<String> = captures
-                        .into_iter()
-                        .filter_map(|cap| cap.full_match.map(|(_, _, matched)| matched))
-                        .collect();
+                    // Extract all matched content with capture group support
+                    let captures: Vec<CaptureGroup> = compiled_step.pattern.captures_iter(&current_line);
 
-                    if !matches.is_empty() {
-                        // For global flag, join all matches; otherwise take first
-                        if compiled_step.is_global {
-                            for _ in &matches {
-                                step_result.add_match();
-                            }
-                            // Join multiple matches with the replacement string as separator, or newline if not specified
-                            let separator = compiled_step.replacement.as_deref().unwrap_or("\t");
-                            current_line = matches.join(separator);
+                    if captures.is_empty() {
+                        // No matches, keep current line as-is (or empty depending on mode)
+                    } else {
+                        // Apply first_only if specified
+                        let captures_to_process: Vec<&CaptureGroup> = if compiled_step.first_only {
+                            captures.iter().take(1).collect()
+                        } else if compiled_step.is_global {
+                            captures.iter().collect()
                         } else {
-                            current_line = matches.into_iter().next().unwrap_or_default();
+                            captures.iter().take(1).collect()
+                        };
+
+                        for _cap in &captures_to_process {
                             step_result.add_match();
                         }
+
+                        // Format the output based on output_format and capture_names
+                        use crate::pipeline::ExtractOutputFormat;
+
+                        let output = match &compiled_step.output_format {
+                            Some(ExtractOutputFormat::Json) => {
+                                // Output as JSON array of objects with capture group names
+                                let results: Vec<serde_json::Value> = captures_to_process.iter()
+                                    .map(|cap| {
+                                        let mut obj = serde_json::Map::new();
+                                        if let Some(ref names) = compiled_step.capture_names {
+                                            // Use provided names for capture groups
+                                            for (i, name) in names.iter().enumerate() {
+                                                let group_idx = i + 1; // Skip group 0 (full match)
+                                                if let Some(Some(val)) = cap.groups.get(group_idx) {
+                                                    obj.insert(name.clone(), serde_json::Value::String(val.clone()));
+                                                }
+                                            }
+                                        } else {
+                                            // Use numeric indices
+                                            for (i, group) in cap.groups.iter().enumerate() {
+                                                if let Some(val) = group {
+                                                    obj.insert(format!("group_{}", i), serde_json::Value::String(val.clone()));
+                                                }
+                                            }
+                                        }
+                                        serde_json::Value::Object(obj)
+                                    })
+                                    .collect();
+                                serde_json::to_string(&results).unwrap_or_default()
+                            }
+                            Some(ExtractOutputFormat::Jsonl) => {
+                                // Output as JSON Lines (one JSON object per match)
+                                captures_to_process.iter()
+                                    .filter_map(|cap| {
+                                        let mut obj = serde_json::Map::new();
+                                        if let Some(ref names) = compiled_step.capture_names {
+                                            for (i, name) in names.iter().enumerate() {
+                                                let group_idx = i + 1;
+                                                if let Some(Some(val)) = cap.groups.get(group_idx) {
+                                                    obj.insert(name.clone(), serde_json::Value::String(val.clone()));
+                                                }
+                                            }
+                                        } else {
+                                            for (i, group) in cap.groups.iter().enumerate() {
+                                                if let Some(val) = group {
+                                                    obj.insert(format!("group_{}", i), serde_json::Value::String(val.clone()));
+                                                }
+                                            }
+                                        }
+                                        serde_json::to_string(&serde_json::Value::Object(obj)).ok()
+                                    })
+                                    .collect::<Vec<_>>()
+                                    .join("\n")
+                            }
+                            Some(ExtractOutputFormat::Csv) => {
+                                // Output as CSV rows
+                                let mut lines = Vec::new();
+
+                                // Add header row only on first output for this step
+                                let header_written = self.csv_header_written
+                                    .entry(step_idx)
+                                    .or_insert(false);
+                                if !*header_written {
+                                    if let Some(ref names) = compiled_step.capture_names {
+                                        lines.push(names.join(","));
+                                    }
+                                    *header_written = true;
+                                }
+
+                                for cap in &captures_to_process {
+                                    let values: Vec<String> = if let Some(ref names) = compiled_step.capture_names {
+                                        names.iter().enumerate().map(|(i, _)| {
+                                            let group_idx = i + 1;
+                                            cap.groups.get(group_idx)
+                                                .and_then(|g| g.clone())
+                                                .map(|v| {
+                                                    // CSV escape: quote if contains comma, quote, or newline
+                                                    if v.contains(',') || v.contains('"') || v.contains('\n') {
+                                                        format!("\"{}\"", v.replace('"', "\"\""))
+                                                    } else {
+                                                        v
+                                                    }
+                                                })
+                                                .unwrap_or_default()
+                                        }).collect()
+                                    } else {
+                                        cap.groups.iter().skip(1).map(|g| {
+                                            g.clone()
+                                                .map(|v| {
+                                                    if v.contains(',') || v.contains('"') || v.contains('\n') {
+                                                        format!("\"{}\"", v.replace('"', "\"\""))
+                                                    } else {
+                                                        v
+                                                    }
+                                                })
+                                                .unwrap_or_default()
+                                        }).collect()
+                                    };
+                                    lines.push(values.join(","));
+                                }
+                                lines.join("\n")
+                            }
+                            Some(ExtractOutputFormat::Text) | None => {
+                                // Check for output_template
+                                if let Some(ref template) = compiled_step.output_template {
+                                    // Apply template with capture group substitution
+                                    captures_to_process.iter()
+                                        .map(|cap| {
+                                            let mut result = template.clone();
+                                            // Replace $0, $1, $2, etc. with capture groups
+                                            for (i, group) in cap.groups.iter().enumerate() {
+                                                if let Some(val) = group {
+                                                    result = result.replace(&format!("${}", i), val);
+                                                    // Also support ${name} format if capture_names provided
+                                                    if let Some(ref names) = compiled_step.capture_names {
+                                                        if i > 0 && i <= names.len() {
+                                                            result = result.replace(&format!("${{{}}}", names[i - 1]), val);
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            result
+                                        })
+                                        .collect::<Vec<_>>()
+                                        .join("\n")
+                                } else {
+                                    // Default: extract full matches, join with separator
+                                    let matches: Vec<String> = captures_to_process.iter()
+                                        .filter_map(|cap| cap.full_match.as_ref().map(|(_, _, m)| m.clone()))
+                                        .collect();
+                                    let separator = compiled_step.replacement.as_deref().unwrap_or("\t");
+                                    matches.join(separator)
+                                }
+                            }
+                        };
+
+                        // Apply cross-line deduplication if requested
+                        let final_output = if compiled_step.deduplicate {
+                            // Get or create the seen set for this step
+                            let seen_set = self.dedup_extract_seen
+                                .entry(step_idx)
+                                .or_insert_with(std::collections::HashSet::new);
+
+                            // Filter out lines we've already seen across the entire stream
+                            let lines: Vec<&str> = output.split('\n').collect();
+                            let unique: Vec<&str> = lines.into_iter()
+                                .filter(|line| {
+                                    if line.is_empty() {
+                                        true  // Always keep empty lines (formatting)
+                                    } else if seen_set.contains(*line) {
+                                        false  // Skip duplicate
+                                    } else {
+                                        seen_set.insert(line.to_string());
+                                        true  // Keep new value
+                                    }
+                                })
+                                .collect();
+
+                            if unique.is_empty() {
+                                // All values were duplicates, skip this output entirely
+                                should_output = false;
+                                String::new()
+                            } else {
+                                unique.join("\n")
+                            }
+                        } else {
+                            output
+                        };
+
+                        current_line = final_output;
                         step_result.add_transformation();
                     }
                 }
                 StepType::Validate => {
                     let is_valid = compiled_step.pattern.is_match(&current_line);
                     if !is_valid {
-                        result.add_error(
-                            PipelineError::new(
-                                compiled_step.step_index,
-                                line_number,
-                                ErrorType::PatternMatch,
-                                "Line failed validation".to_string(),
-                            )
-                            .with_context(current_line.clone()),
-                        );
-                        should_output = false;
-                        break;
+                        // Handle based on on_mismatch setting
+                        match compiled_step.on_mismatch {
+                            OnMismatch::Error => {
+                                result.add_error(
+                                    PipelineError::new(
+                                        compiled_step.step_index,
+                                        line_number,
+                                        ErrorType::PatternMatch,
+                                        "Line failed validation".to_string(),
+                                    )
+                                    .with_context(current_line.clone()),
+                                );
+                                should_output = false;
+                                break;
+                            }
+                            OnMismatch::Warn => {
+                                log::warn!(
+                                    "Step {}: Line {} failed validation: {}",
+                                    compiled_step.step_index + 1,
+                                    line_number,
+                                    current_line.trim()
+                                );
+                                // Continue processing, still output the line
+                            }
+                            OnMismatch::Skip => {
+                                // Skip the line silently
+                                should_output = false;
+                                break;
+                            }
+                        }
                     }
                 }
                 StepType::Transform => {
@@ -1466,31 +1749,80 @@ impl StreamProcessor {
                     }
                 }
                 StepType::Block => {
-                    // Cross-line state machine: track blocks between trigger and until patterns
+                    // Cross-line state machine: track blocks between start and end patterns
                     let is_in_block = self.block_states[step_idx];
 
                     // Check for block boundaries
-                    let trigger_matches = compiled_step.pattern.is_match(&current_line);
-                    let until_matches = compiled_step
-                        .until_pattern
+                    let start_matches = compiled_step.pattern.is_match(&current_line);
+                    let end_matches = compiled_step
+                        .end_pattern
                         .as_ref()
                         .map(|p| p.is_match(&current_line))
                         .unwrap_or(false);
 
+                    // Convert StepAction to BlockAction for block-specific handling
+                    let block_action_clone = compiled_step.action.as_ref()
+                        .and_then(BlockAction::from_step_action);
+                    let block_context_clone = compiled_step.block_context.clone();
+
                     // State transitions
-                    if !is_in_block && trigger_matches {
-                        // Enter block on trigger pattern
+                    let entering_block = !is_in_block && start_matches;
+                    let exiting_block = is_in_block && end_matches;
+
+                    if entering_block {
+                        // Enter block on start pattern
                         self.block_states[step_idx] = true;
                         step_result.add_match();
-                    } else if is_in_block && until_matches {
-                        // Exit block on until pattern
+
+                        // Initialize dedup buffer if this is a Deduplicate block
+                        if matches!(block_action_clone, Some(BlockAction::Deduplicate)) {
+                            self.dedup_block_buffer.insert(step_idx, Vec::new());
+                        }
+
+                        // Handle block context overlap on block entry
+                        if let Some(ref _ctx) = block_context_clone {
+                            if let Some(overlap) = self.block_overlap_buffer.remove(&step_idx) {
+                                // Prepend overlap from previous block
+                                current_line = format!("{}{}", overlap, current_line);
+                                step_result.add_transformation();
+                            }
+                        }
+                    } else if exiting_block {
+                        // Exit block on end pattern
                         self.block_states[step_idx] = false;
+
+                        // Handle block context overlap on block exit
+                        if let Some(ref ctx) = block_context_clone {
+                            use crate::pipeline::BlockContextValue;
+                            let overlap_chars = match ctx {
+                                BlockContextValue::Lines(_) => None,
+                                BlockContextValue::Config(config) => config.overlap_chars,
+                            };
+                            let overlap_lines = match ctx {
+                                BlockContextValue::Lines(_) => None,
+                                BlockContextValue::Config(config) => config.overlap_lines,
+                            };
+
+                            // Save trailing content for next block
+                            if let Some(n) = overlap_chars {
+                                // Save last N characters
+                                let chars: Vec<char> = current_line.chars().collect();
+                                let start = chars.len().saturating_sub(n);
+                                let overlap: String = chars[start..].iter().collect();
+                                self.block_overlap_buffer.insert(step_idx, overlap);
+                            } else if let Some(_n) = overlap_lines {
+                                // For line-based overlap, we'd need to track previous lines
+                                // This is more complex as it requires buffering multiple lines
+                                // For now, save the entire current line as a simple implementation
+                                self.block_overlap_buffer.insert(step_idx, current_line.clone());
+                            }
+                        }
                     }
 
-                    // Apply block action if we're inside the block (including trigger/until lines)
-                    let process_line = is_in_block || trigger_matches;
+                    // Apply block action if we're inside the block (including start/end lines)
+                    let process_line = is_in_block || start_matches;
                     if process_line {
-                        if let Some(ref action) = compiled_step.block_action {
+                        if let Some(ref action) = block_action_clone {
                             match action {
                                 BlockAction::KeepBlock => {
                                     // Lines outside blocks are dropped
@@ -1525,15 +1857,57 @@ impl StreamProcessor {
                                     // Future: implement block collection buffer
                                     step_result.add_match();
                                 }
+                                BlockAction::Deduplicate => {
+                                    // Buffer line for block-level deduplication
+                                    if let Some(buffer) = self.dedup_block_buffer.get_mut(&step_idx) {
+                                        buffer.push(current_line.clone());
+                                    }
+                                    step_result.add_match();
+
+                                    // Suppress output during buffering - will be handled on block exit
+                                    should_output = false;
+                                }
                             }
                         }
                     } else if matches!(
-                        compiled_step.block_action,
+                        block_action_clone,
                         Some(BlockAction::KeepBlock)
                     ) {
                         // KeepBlock: drop lines outside blocks
                         should_output = false;
                         break;
+                    }
+
+                    // Handle block exit for Deduplicate action
+                    if exiting_block && matches!(block_action_clone, Some(BlockAction::Deduplicate)) {
+                        // Add the until line to buffer before processing
+                        if let Some(buffer) = self.dedup_block_buffer.get_mut(&step_idx) {
+                            buffer.push(current_line.clone());
+                        }
+
+                        // Hash the block content
+                        if let Some(buffer) = self.dedup_block_buffer.remove(&step_idx) {
+                            use std::hash::{Hash, Hasher};
+                            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                            buffer.hash(&mut hasher);
+                            let block_hash = hasher.finish();
+
+                            // Check if we've seen this block before
+                            let seen_set = self.dedup_block_seen
+                                .entry(step_idx)
+                                .or_insert_with(std::collections::HashSet::new);
+
+                            if !seen_set.contains(&block_hash) {
+                                // New unique block - output all buffered lines
+                                seen_set.insert(block_hash);
+                                // Return the entire block as the current line (joined with newlines)
+                                current_line = buffer.join("\n");
+                                should_output = true;
+                            } else {
+                                // Duplicate block - suppress output
+                                should_output = false;
+                            }
+                        }
                     }
                 }
             }
@@ -2475,7 +2849,7 @@ mod tests {
                 step_type: StepType::Filter,
                 pattern: "keep".to_string(),
                 replacement: None,
-                action: Some(FilterAction::KeepLine),
+                action: Some(StepAction::KeepLine),
                 transform: None,
                 flags: None,
                 description: None,
@@ -2529,7 +2903,7 @@ mod tests {
                 step_type: StepType::Filter,
                 pattern: "MATCH".to_string(),
                 replacement: None,
-                action: Some(FilterAction::KeepLine),
+                action: Some(StepAction::KeepLine),
                 transform: None,
                 flags: None,
                 description: None,
@@ -2571,7 +2945,7 @@ mod tests {
                 step_type: StepType::Filter,
                 pattern: "MATCH".to_string(),
                 replacement: None,
-                action: Some(FilterAction::KeepLine),
+                action: Some(StepAction::KeepLine),
                 transform: None,
                 flags: None,
                 description: None,
@@ -2823,15 +3197,15 @@ mod tests {
             settings: PipelineSettings::default(),
             step: vec![PipelineStep {
                 step_type: StepType::Block,
-                pattern: r"^BEGIN$".to_string(),
+                pattern: String::new(),
+                start_pattern: Some(r"^BEGIN$".to_string()),
                 replacement: None,
-                action: None,
+                action: Some(StepAction::KeepBlock),
                 transform: None,
                 flags: None,
                 description: None,
                 enabled: Some(true),
-                until: Some(r"^END$".to_string()),
-                block_action: Some(BlockAction::KeepBlock),
+                end_pattern: Some(r"^END$".to_string()),
                 block_context: None,
                 ..Default::default()
             }],
@@ -2867,15 +3241,15 @@ mod tests {
             settings: PipelineSettings::default(),
             step: vec![PipelineStep {
                 step_type: StepType::Block,
-                pattern: r"^BEGIN$".to_string(),
+                pattern: String::new(),
+                start_pattern: Some(r"^BEGIN$".to_string()),
                 replacement: None,
-                action: None,
+                action: Some(StepAction::DropBlock),
                 transform: None,
                 flags: None,
                 description: None,
                 enabled: Some(true),
-                until: Some(r"^END$".to_string()),
-                block_action: Some(BlockAction::DropBlock),
+                end_pattern: Some(r"^END$".to_string()),
                 block_context: None,
                 ..Default::default()
             }],
@@ -2910,17 +3284,17 @@ mod tests {
             settings: PipelineSettings::default(),
             step: vec![PipelineStep {
                 step_type: StepType::Block,
-                pattern: r"^START$".to_string(),
+                pattern: String::new(),
+                start_pattern: Some(r"^START$".to_string()),
                 replacement: None,
-                action: None,
+                action: Some(StepAction::MarkBlock {
+                    marker: ">>> ".to_string(),
+                }),
                 transform: None,
                 flags: None,
                 description: None,
                 enabled: Some(true),
-                until: Some(r"^STOP$".to_string()),
-                block_action: Some(BlockAction::MarkBlock {
-                    marker: ">>> ".to_string(),
-                }),
+                end_pattern: Some(r"^STOP$".to_string()),
                 block_context: None,
                 ..Default::default()
             }],
@@ -2969,5 +3343,84 @@ mod tests {
         let result6 = mask_deterministic("1234-5678-9012", "seed", 4, 4, '*');
         assert!(result6.starts_with("1234"), "Should preserve prefix");
         assert!(result6.ends_with("9012"), "Should preserve suffix: {}", result6);
+    }
+}
+
+#[cfg(test)]
+mod on_mismatch_tests {
+    use super::*;
+    use crate::pipeline::{PipelineConfig, OnMismatch};
+
+    #[test]
+    fn test_on_mismatch_parsing() {
+        let toml = r#"
+name = "Test"
+
+[[step]]
+type = "validate"
+pattern = "^ok"
+on_mismatch = "warn"
+"#;
+        let config: PipelineConfig = toml::from_str(toml).unwrap();
+        assert_eq!(config.step[0].on_mismatch, Some(OnMismatch::Warn));
+    }
+}
+
+#[cfg(test)]
+mod on_mismatch_behavior_tests {
+    use crate::pipeline::{PipelineConfig, PipelineStep, PipelineSettings, StepType, OnMismatch};
+    use crate::processor::StreamProcessor;
+    use std::io::Cursor;
+
+    #[test]
+    fn test_on_mismatch_warn_outputs_line() {
+        let config = PipelineConfig {
+            name: Some("Test".to_string()),
+            step: vec![PipelineStep {
+                step_type: StepType::Validate,
+                pattern: "^ok".to_string(),
+                on_mismatch: Some(OnMismatch::Warn),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let mut processor = StreamProcessor::new(config).unwrap();
+        let input = Cursor::new("ok line\nbad line\nok again\n");
+        let mut output = Vec::new();
+        
+        processor.process_stream(input, &mut output).unwrap();
+        let output_str = String::from_utf8(output).unwrap();
+        
+        // With on_mismatch = warn, ALL lines should be output
+        assert!(output_str.contains("ok line"), "Should contain ok line");
+        assert!(output_str.contains("bad line"), "Should contain bad line (warn mode)");
+        assert!(output_str.contains("ok again"), "Should contain ok again");
+    }
+    
+    #[test]
+    fn test_on_mismatch_skip_drops_line() {
+        let config = PipelineConfig {
+            name: Some("Test".to_string()),
+            step: vec![PipelineStep {
+                step_type: StepType::Validate,
+                pattern: "^ok".to_string(),
+                on_mismatch: Some(OnMismatch::Skip),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let mut processor = StreamProcessor::new(config).unwrap();
+        let input = Cursor::new("ok line\nbad line\nok again\n");
+        let mut output = Vec::new();
+        
+        processor.process_stream(input, &mut output).unwrap();
+        let output_str = String::from_utf8(output).unwrap();
+        
+        // With on_mismatch = skip, only valid lines should be output
+        assert!(output_str.contains("ok line"), "Should contain ok line");
+        assert!(!output_str.contains("bad line"), "Should NOT contain bad line (skip mode)");
+        assert!(output_str.contains("ok again"), "Should contain ok again");
     }
 }

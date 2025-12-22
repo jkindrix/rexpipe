@@ -297,7 +297,7 @@ suffix = 'END$'
             step_type: rexpipe::pipeline::StepType::Filter,
             pattern: "${prefix}.*${suffix}".to_string(),
             replacement: None,
-            action: Some(rexpipe::pipeline::FilterAction::KeepLine),
+            action: Some(rexpipe::pipeline::StepAction::KeepLine),
             transform: None,
             flags: None,
             description: None,

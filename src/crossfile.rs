@@ -91,7 +91,8 @@ impl std::str::FromStr for ViolationAction {
 /// A rule defining cross-file relationships.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CrossFileRule {
-    /// Rule name for identification
+    /// Rule name for identification (optional, auto-generated if not provided)
+    #[serde(default)]
     pub name: String,
 
     /// Pattern that triggers this rule when matched
@@ -478,6 +479,38 @@ impl CrossFileConfig {
     pub fn with_rule(mut self, rule: CrossFileRule) -> Self {
         self.rules.push(rule);
         self
+    }
+
+    /// Load cross-file rules from a TOML file.
+    ///
+    /// The file format is:
+    /// ```toml
+    /// [[rule]]
+    /// name = "test-coverage"
+    /// trigger_pattern = "pub fn (\\w+)"
+    /// trigger_files = "src/*.rs"
+    /// related_files = "tests/*_test.rs"
+    /// action = "warn"
+    /// ```
+    pub fn load_rules_file(path: impl AsRef<Path>) -> Result<Self> {
+        let content = std::fs::read_to_string(path.as_ref())
+            .map_err(|e| CrossFileError::Io(e))?;
+
+        #[derive(Deserialize)]
+        struct RulesFile {
+            #[serde(default)]
+            rule: Vec<CrossFileRule>,
+        }
+
+        let rules_file: RulesFile = toml::from_str(&content)
+            .map_err(|e| CrossFileError::InvalidPattern(format!("TOML parse error: {}", e)))?;
+
+        Ok(Self {
+            enabled: true,
+            rules: rules_file.rule,
+            default_action: ViolationAction::default(),
+            atomic_by_default: false,
+        })
     }
 }
 

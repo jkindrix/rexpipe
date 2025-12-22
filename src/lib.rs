@@ -80,9 +80,7 @@
 //! - [`library`]: Pattern library loading and resolution
 //! - [`inspector`]: Interactive debugging and pattern inspection
 //! - [`plugin`]: Extensible plugin system for custom transformations
-//! - [`server`]: Streaming pipeline server for network-based processing
 //! - [`stream`]: URI-based streaming source and sink abstractions
-//! - [`audit`]: Cryptographic audit trails and provenance tracking
 //! - [`bidirectional`]: Reversible pipeline transformations
 //! - [`checkpoint`]: Incremental processing with checkpoint/resume
 //! - [`crossfile`]: Cross-file semantic relationship processing
@@ -100,11 +98,9 @@ pub mod library;
 pub mod pipeline;
 pub mod plugin;
 pub mod processor;
-pub mod server;
 pub mod stream;
 
 // Advanced feature modules
-pub mod audit;
 pub mod bidirectional;
 pub mod checkpoint;
 pub mod crossfile;
@@ -123,9 +119,6 @@ pub use files::{BinaryMode, ShutdownInterrupted, ShutdownSignal, is_binary_file}
 
 // Re-export stream types for convenience
 pub use stream::{StreamUri, StreamSource, StreamSink, create_source, create_sink};
-
-// Re-export audit types for compliance workflows
-pub use audit::{AuditConfig, AuditTrail, AuditManifest, HashAlgorithm};
 
 // Re-export bidirectional types for reversible pipelines
 pub use bidirectional::{BidirectionalConfig, Direction, MappingStore};

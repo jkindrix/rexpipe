@@ -7,6 +7,8 @@ use std::io::{self, BufReader, IsTerminal};
 use std::path::{Path, PathBuf};
 
 // Import from the library crate
+use rexpipe::checkpoint::{Checkpoint, CheckpointConfig};
+use rexpipe::crossfile::{CrossFileConfig, CrossFileManager, ViolationAction, format_check_report};
 use rexpipe::data::{DataFormat, DataValue};
 use rexpipe::error::{ConfigError, LibraryError, PatternError, RexpipeError, ValidationError};
 use rexpipe::files::{FileProcessingOptions, MultiFileProcessor, MultiFileResult};
@@ -14,7 +16,7 @@ use rexpipe::inspector::{Inspector, InspectorOptions};
 use rexpipe::json_schema;
 use rexpipe::library;
 use rexpipe::library::LibraryResolver;
-use rexpipe::pipeline::{MaxLineAction, PipelineConfig, PipelineSettings};
+use rexpipe::pipeline::{MaxLineAction, PipelineConfig, PipelineSettings, PipelineStep, StepType, TransformAction, RegexFlag};
 use rexpipe::processor::StreamProcessor;
 
 /// Exit codes for different error conditions.
@@ -209,6 +211,14 @@ EXAMPLES:
     JSON output:
         rexpipe -p '\w+@\w+\.\w+' --json < emails.txt
 
+    Extract emails from text:
+        rexpipe -p '\w+@\w+\.\w+' --extract < data.txt
+        # Outputs only matching patterns, one per line
+
+    Transform case:
+        echo "myVariableName" | rexpipe -p '\w+' --transform snake_case
+        # Output: my_variable_name
+
 CONFIGURATION FILE EXAMPLE:
     [[step]]
     type = "filter"
@@ -399,19 +409,73 @@ fn build_cli() -> Command {
                 )
                 .action(ArgAction::SetTrue),
         )
-        // === Server Mode ===
         .arg(
-            Arg::new("server")
-                .long("server")
-                .help("Start pipeline server mode for network-based processing")
+            Arg::new("extract")
+                .long("extract")
+                .help("Extract matching patterns instead of substituting")
+                .long_help(
+                    "Extract mode: output only the matched patterns, one per line. \
+                     Useful for extracting structured data like emails, URLs, IDs. \
+                     Combined with --json, outputs matches as JSON arrays."
+                )
                 .action(ArgAction::SetTrue),
         )
         .arg(
-            Arg::new("bind")
-                .long("bind")
-                .value_name("ADDRESS")
-                .help("Address to bind server to (default: 127.0.0.1:8080)")
-                .default_value("127.0.0.1:8080"),
+            Arg::new("transform")
+                .long("transform")
+                .value_name("NAME")
+                .help("Apply a named transform to matches (e.g., snake_case, camel_case)")
+                .long_help(
+                    "Apply a built-in transformation to all matched text. Available transforms:\n\n  \
+                     Case transforms:\n  \
+                     - snake_case: Convert to snake_case\n  \
+                     - camel_case: Convert to camelCase\n  \
+                     - pascal_case: Convert to PascalCase\n  \
+                     - kebab_case: Convert to kebab-case\n  \
+                     - uppercase: Convert to UPPERCASE\n  \
+                     - lowercase: Convert to lowercase\n  \
+                     - title_case: Convert to Title Case\n\n  \
+                     String manipulation:\n  \
+                     - reverse: Reverse the text\n  \
+                     - trim: Remove leading/trailing whitespace\n  \
+                     - remove_whitespace: Remove all whitespace\n  \
+                     - normalize_whitespace: Collapse runs of whitespace to single space\n  \
+                     - deduplicate: Remove duplicate lines\n  \
+                     - sort_chars: Sort characters alphabetically\n  \
+                     - char_count: Replace with character count\n  \
+                     - word_count: Replace with word count\n\n  \
+                     Encoding:\n  \
+                     - base64_encode: Encode as base64\n  \
+                     - base64_decode: Decode from base64\n  \
+                     - url_encode: URL-encode special characters\n  \
+                     - url_decode: Decode URL-encoded text"
+                ),
+        )
+        // === Syntax-Aware Processing ===
+        .arg(
+            Arg::new("scope")
+                .long("scope")
+                .value_name("SCOPE")
+                .help("Limit matches to syntax scope (code, string, comment)")
+                .long_help(
+                    "Only match patterns within the specified syntax scope. Requires tree-sitter feature.\n  \
+                     - code: Match only in code, not strings or comments\n  \
+                     - string: Match only within string literals\n  \
+                     - comment: Match only within comments\n\n\
+                     Combine with --language to specify the source language."
+                )
+                .value_parser(["code", "string", "comment"]),
+        )
+        .arg(
+            Arg::new("language")
+                .long("language")
+                .value_name("LANG")
+                .help("Source language for syntax-aware processing")
+                .long_help(
+                    "Specify the programming language for syntax-aware matching. \
+                     Used with --scope to limit matches to specific syntax contexts.\n\n\
+                     Supported languages: rust, python, javascript, typescript, go, c, cpp, java, ruby"
+                ),
         )
         // === Streaming Mode ===
         .arg(
@@ -620,24 +684,6 @@ fn build_cli() -> Command {
                 .help("Pretty print output (for JSON, XML, etc.)")
                 .action(ArgAction::SetTrue),
         )
-        // === Audit Trail ===
-        .arg(
-            Arg::new("audit")
-                .long("audit")
-                .help("Enable audit trail for compliance (GDPR, HIPAA, PCI-DSS)")
-                .long_help(
-                    "Generate cryptographic audit records for all transformations. \
-                     Creates immutable provenance records with SHA-256 hashes of input/output."
-                )
-                .action(ArgAction::SetTrue),
-        )
-        .arg(
-            Arg::new("audit-dir")
-                .long("audit-dir")
-                .value_name("DIR")
-                .help("Directory for audit output files")
-                .value_hint(ValueHint::DirPath),
-        )
         // === Bidirectional Pipelines ===
         .arg(
             Arg::new("reverse")
@@ -670,12 +716,36 @@ fn build_cli() -> Command {
                 .value_hint(ValueHint::FilePath),
         )
         .arg(
+            Arg::new("resume")
+                .long("resume")
+                .help("Resume processing from checkpoint (requires --checkpoint)")
+                .long_help(
+                    "Resume processing from the last saved checkpoint position. \
+                     Must be used with --checkpoint to specify the checkpoint file. \
+                     Only processes new content since the last checkpoint was saved."
+                )
+                .action(ArgAction::SetTrue),
+        )
+        .arg(
             Arg::new("git-diff")
                 .long("git-diff")
                 .value_name("REF")
                 .help("Only process lines changed since git ref (e.g., HEAD~1, main)")
                 .num_args(0..=1)
                 .default_missing_value("HEAD"),
+        )
+        // === Cross-file Consistency ===
+        .arg(
+            Arg::new("cross-file")
+                .long("cross-file")
+                .value_name("FILE")
+                .help("Load cross-file consistency rules from a TOML file")
+                .long_help(
+                    "Load cross-file relationship rules from a TOML configuration file. \
+                     Rules define patterns that should be consistent across related files, \
+                     such as API version strings in source and test files."
+                )
+                .value_hint(ValueHint::FilePath),
         )
         // === Pipeline Testing ===
         .arg(
@@ -937,11 +1007,6 @@ fn run_application(matches: &clap::ArgMatches) -> Result<()> {
     // Handle data query mode
     if matches.get_one::<String>("data-query").is_some() {
         return run_data_query(matches);
-    }
-
-    // Handle server mode
-    if matches.get_flag("server") {
-        return run_server_mode(matches);
     }
 
     // Handle streaming mode
@@ -1250,6 +1315,141 @@ fn run_multi_file_mode(
         return Ok(());
     }
 
+    // Handle checkpoint/resume functionality
+    let checkpoint_path = matches.get_one::<String>("checkpoint");
+    let resume_mode = matches.get_flag("resume");
+
+    let mut checkpoint = if let Some(path) = checkpoint_path {
+        let checkpoint_config = CheckpointConfig::new()
+            .enabled(true)
+            .with_checkpoint_file(path)
+            .with_auto_save(true);
+
+        if resume_mode {
+            // Load existing checkpoint
+            Checkpoint::load_or_create(&checkpoint_config)
+                .map_err(|e| anyhow!("Failed to load checkpoint: {}", e))?
+        } else {
+            // Create new checkpoint (will overwrite existing)
+            Checkpoint::new(checkpoint_config)
+        }
+    } else {
+        // No checkpoint - create disabled one
+        Checkpoint::new(CheckpointConfig::default())
+    };
+
+    // Filter files based on checkpoint if in resume mode
+    let files_to_process: Vec<PathBuf> = if resume_mode && checkpoint.is_enabled() {
+        let mut to_process = Vec::new();
+        let mut skipped = 0;
+
+        for file in &files {
+            match checkpoint.needs_processing(file) {
+                Ok(true) => to_process.push(file.clone()),
+                Ok(false) => {
+                    skipped += 1;
+                    debug!("Skipping {} (unchanged since last checkpoint)", file.display());
+                }
+                Err(e) => {
+                    debug!("Error checking checkpoint for {}: {}, will process", file.display(), e);
+                    to_process.push(file.clone());
+                }
+            }
+        }
+
+        if skipped > 0 && !quiet {
+            eprintln!("Checkpoint: skipping {} unchanged files, processing {}", skipped, to_process.len());
+        }
+
+        if to_process.is_empty() {
+            if !quiet {
+                eprintln!("Checkpoint: all files are up to date");
+            }
+            return Ok(());
+        }
+
+        to_process
+    } else {
+        files.clone()
+    };
+
+    // Handle cross-file consistency checking
+    if let Some(cross_file_path) = matches.get_one::<String>("cross-file") {
+        let cross_file_config = CrossFileConfig::load_rules_file(cross_file_path)
+            .map_err(|e| anyhow!("Failed to load cross-file rules: {}", e))?;
+
+        if !cross_file_config.rules.is_empty() {
+            let mut manager = CrossFileManager::new();
+            manager.add_rules(cross_file_config.rules.clone());
+
+            // Load all files to process
+            for file in &files_to_process {
+                if let Err(e) = manager.load_file(file) {
+                    if !quiet {
+                        eprintln!("Warning: Could not load {} for cross-file check: {}", file.display(), e);
+                    }
+                }
+            }
+
+            // Scan for triggers and check rules
+            manager.scan_triggers()
+                .map_err(|e| anyhow!("Failed to scan triggers: {}", e))?;
+
+            let results = manager.check_all()
+                .map_err(|e| anyhow!("Failed to check cross-file rules: {}", e))?;
+
+            // Report results
+            let has_violations = results.iter().any(|r| !r.passed);
+
+            if has_violations || !quiet {
+                if json_output {
+                    // Output as JSON
+                    let json_results: Vec<serde_json::Value> = results.iter().map(|r| {
+                        serde_json::json!({
+                            "rule_name": r.rule_name,
+                            "trigger_file": r.trigger_file.display().to_string(),
+                            "passed": r.passed,
+                            "violations": r.violations.iter().map(|v| {
+                                serde_json::json!({
+                                    "file": v.file.display().to_string(),
+                                    "description": v.description,
+                                    "expected_pattern": v.expected_pattern
+                                })
+                            }).collect::<Vec<_>>()
+                        })
+                    }).collect();
+                    println!("{}", serde_json::to_string_pretty(&json_results)?);
+                } else {
+                    eprintln!("{}", format_check_report(&results));
+                }
+            }
+
+            // Handle violations based on default action
+            if has_violations {
+                match cross_file_config.default_action {
+                    ViolationAction::Fail => {
+                        return Err(anyhow!("Cross-file consistency check failed"));
+                    }
+                    ViolationAction::Warn => {
+                        // Already warned above, continue processing
+                    }
+                    ViolationAction::Skip => {
+                        if !quiet {
+                            eprintln!("Cross-file violations found, skipping processing");
+                        }
+                        return Ok(());
+                    }
+                    ViolationAction::Fix => {
+                        // TODO: Implement auto-fix functionality
+                        if !quiet {
+                            eprintln!("Note: Auto-fix for cross-file violations not yet implemented");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // Check if async mode is requested
     let use_async = matches.get_flag("async");
 
@@ -1263,11 +1463,29 @@ fn run_multi_file_mode(
 
     // Process based on mode
     let result = if options.files_with_matches {
-        let matching = processor.files_with_matches(&files)?;
+        let matching = processor.files_with_matches(&files_to_process)?;
+        // Update checkpoint for processed files
+        if checkpoint.is_enabled() {
+            for file in &matching {
+                if let Ok(metadata) = std::fs::metadata(file) {
+                    checkpoint.update_file_state(file, metadata.len(), 0, metadata.len());
+                }
+            }
+            checkpoint.save().map_err(|e| anyhow!("Failed to save checkpoint: {}", e))?;
+        }
         output_file_list(&matching, quiet, json_output, "files_with_matches")?;
         return Ok(());
     } else if options.files_without_matches {
-        let non_matching = processor.files_without_matches(&files)?;
+        let non_matching = processor.files_without_matches(&files_to_process)?;
+        // Update checkpoint for processed files
+        if checkpoint.is_enabled() {
+            for file in &files_to_process {
+                if let Ok(metadata) = std::fs::metadata(file) {
+                    checkpoint.update_file_state(file, metadata.len(), 0, metadata.len());
+                }
+            }
+            checkpoint.save().map_err(|e| anyhow!("Failed to save checkpoint: {}", e))?;
+        }
         output_file_list(&non_matching, quiet, json_output, "files_without_matches")?;
         return Ok(());
     } else if options.count_only {
@@ -1277,22 +1495,50 @@ fn run_multi_file_mode(
             let result = rt
                 .block_on(
                     rexpipe::files::AsyncMultiFileProcessor::new(config.clone(), options.clone())
-                        .count_matches_async(&files),
+                        .count_matches_async(&files_to_process),
                 )
                 .map_err(|e| anyhow!(e))?;
+            // Update checkpoint for processed files
+            if checkpoint.is_enabled() {
+                for file in &files_to_process {
+                    if let Ok(metadata) = std::fs::metadata(file) {
+                        checkpoint.update_file_state(file, metadata.len(), 0, metadata.len());
+                    }
+                }
+                checkpoint.save().map_err(|e| anyhow!("Failed to save checkpoint: {}", e))?;
+            }
             output_count_results(&result, quiet, json_output)?;
             return Ok(());
         }
-        let result = processor.count_matches(&files)?;
+        let result = processor.count_matches(&files_to_process)?;
+        // Update checkpoint for processed files
+        if checkpoint.is_enabled() {
+            for file in &files_to_process {
+                if let Ok(metadata) = std::fs::metadata(file) {
+                    checkpoint.update_file_state(file, metadata.len(), 0, metadata.len());
+                }
+            }
+            checkpoint.save().map_err(|e| anyhow!("Failed to save checkpoint: {}", e))?;
+        }
         output_count_results(&result, quiet, json_output)?;
         return Ok(());
     } else if jsonl_output {
         // JSONL streaming mode: output each file result as it's processed
-        let result = processor.process_files_streaming(&files, |file_result| {
+        let result = processor.process_files_streaming(&files_to_process, |file_result| {
             if let Ok(jsonl) = json_schema::output_file_result_jsonl(file_result) {
                 println!("{}", jsonl);
             }
         })?;
+
+        // Update checkpoint for processed files
+        if checkpoint.is_enabled() {
+            for file in &files_to_process {
+                if let Ok(metadata) = std::fs::metadata(file) {
+                    checkpoint.update_file_state(file, metadata.len(), 0, metadata.len());
+                }
+            }
+            checkpoint.save().map_err(|e| anyhow!("Failed to save checkpoint: {}", e))?;
+        }
 
         // Output summary as final JSONL line
         if let Ok(summary) = json_schema::output_streaming_summary_jsonl(&result) {
@@ -1309,15 +1555,25 @@ fn run_multi_file_mode(
             let rt = tokio::runtime::Runtime::new()?;
             rt.block_on(
                 rexpipe::files::AsyncMultiFileProcessor::new(config.clone(), options.clone())
-                    .process_files_async(&files),
+                    .process_files_async(&files_to_process),
             )
             .map_err(|e| anyhow!(e))?
         } else {
-            processor.process_files(&files)?
+            processor.process_files(&files_to_process)?
         }
         #[cfg(not(feature = "async"))]
-        processor.process_files(&files)?
+        processor.process_files(&files_to_process)?
     };
+
+    // Update checkpoint for processed files (main processing path)
+    if checkpoint.is_enabled() {
+        for file in &files_to_process {
+            if let Ok(metadata) = std::fs::metadata(file) {
+                checkpoint.update_file_state(file, metadata.len(), 0, metadata.len());
+            }
+        }
+        checkpoint.save().map_err(|e| anyhow!("Failed to save checkpoint: {}", e))?;
+    }
 
     // Output results
     if !quiet {
@@ -1541,15 +1797,106 @@ fn load_pipeline_config(
             );
         }
 
+        // Handle bidirectional mode flags
+        if matches.get_flag("reverse") {
+            config.bidirectional.enabled = true;
+            config.bidirectional.direction = rexpipe::bidirectional::Direction::Reverse;
+        }
+        if let Some(mapping_file) = matches.get_one::<String>("mapping-file") {
+            config.bidirectional.enabled = true;
+            config.bidirectional.mapping_file = Some(std::path::PathBuf::from(mapping_file));
+        }
+
         Ok(config)
     } else if let Some(pattern) = matches.get_one::<String>("pattern") {
         debug!("Using inline pattern: {}", pattern);
-        let replacement = matches.get_one::<String>("replacement").map(|s| s.as_str());
-        Ok(PipelineConfig::from_inline_pattern_with_settings(
-            pattern,
+        let replacement = matches.get_one::<String>("replacement").map(|s| s.to_string());
+        let is_extract = matches.get_flag("extract");
+        let transform_name = matches.get_one::<String>("transform").cloned();
+        let scope = matches.get_one::<String>("scope").cloned();
+        let language = matches.get_one::<String>("language").cloned();
+
+        // Determine step type and configuration
+        let (step_type, action, transform) = if is_extract {
+            (StepType::Extract, None, None)
+        } else if let Some(ref name) = transform_name {
+            // Map transform name to TransformAction
+            let transform_action = match name.as_str() {
+                // Case transforms
+                "uppercase" => Some(TransformAction::Uppercase),
+                "lowercase" => Some(TransformAction::Lowercase),
+                "title_case" => Some(TransformAction::TitleCase),
+                // String manipulation
+                "reverse" => Some(TransformAction::Reverse),
+                "trim" => Some(TransformAction::Trim),
+                "remove_whitespace" => Some(TransformAction::RemoveWhitespace),
+                "normalize_whitespace" => Some(TransformAction::NormalizeWhitespace),
+                "deduplicate" => Some(TransformAction::Deduplicate),
+                "sort_chars" => Some(TransformAction::SortChars),
+                "char_count" => Some(TransformAction::CharCount),
+                "word_count" => Some(TransformAction::WordCount),
+                // Encoding transforms
+                "base64_encode" => Some(TransformAction::Base64Encode),
+                "base64_decode" => Some(TransformAction::Base64Decode),
+                "url_encode" => Some(TransformAction::UrlEncode),
+                "url_decode" => Some(TransformAction::UrlDecode),
+                // For plugin transforms (snake_case, camel_case, kebab_case, pascal_case, etc.)
+                _ => Some(TransformAction::Plugin { name: name.clone(), args: vec![] }),
+            };
+            (StepType::Transform, None, transform_action)
+        } else if replacement.is_some() {
+            (StepType::Substitute, None, None)
+        } else {
+            (StepType::Filter, Some(rexpipe::pipeline::StepAction::KeepMatch), None)
+        };
+
+        let step = PipelineStep {
+            step_type,
+            pattern: pattern.to_string(),
             replacement,
+            action,
+            transform,
+            flags: Some(vec![RegexFlag::Global]),
+            description: None,
+            enabled: Some(true),
+            start_pattern: None,
+            end_pattern: None,
+            block_context: None,
+            on_mismatch: None,
+            language,
+            languages: None,
+            scope,
+            exclude_scopes: None,
+            capture_names: None,
+            output_format: None,
+            output_template: None,
+            first_only: None,
+            deduplicate: None,
+        };
+
+        // Build bidirectional config from CLI flags
+        let mut bidirectional = rexpipe::bidirectional::BidirectionalConfig::default();
+        if matches.get_flag("reverse") {
+            bidirectional.enabled = true;
+            bidirectional.direction = rexpipe::bidirectional::Direction::Reverse;
+        }
+        if let Some(mapping_file) = matches.get_one::<String>("mapping-file") {
+            bidirectional.enabled = true;
+            bidirectional.mapping_file = Some(std::path::PathBuf::from(mapping_file));
+        }
+
+        Ok(PipelineConfig {
+            name: Some("Inline Pipeline".to_string()),
+            description: Some("Generated from command line pattern".to_string()),
+            version: Some("1.0.0".to_string()),
+            patterns_include: Vec::new(),
             settings,
-        ))
+            step: vec![step],
+            bidirectional,
+            checkpoint: Default::default(),
+            cross_file: Default::default(),
+            tests: Vec::new(),
+        })
     } else {
         Err(anyhow!(
             "Missing required input.\n\n\
@@ -1604,7 +1951,7 @@ fn validate_configuration(config: &PipelineConfig) -> Result<()> {
 /// Explain what a pipeline will do without processing data.
 /// Outputs human-readable or JSON description of each step.
 fn explain_pipeline(config: &PipelineConfig, matches: &clap::ArgMatches) -> Result<()> {
-    use rexpipe::pipeline::{StepType, FilterAction, TransformAction};
+    use rexpipe::pipeline::{StepType, StepAction, TransformAction};
 
     let json_output = should_use_json(matches);
 
@@ -1638,13 +1985,17 @@ fn explain_pipeline(config: &PipelineConfig, matches: &clap::ArgMatches) -> Resu
                     (format!("Replace matches with '{}'", repl), None)
                 }
                 StepType::Filter => {
-                    let action = step.action.as_ref().map(|a| match a {
-                        FilterAction::KeepLine => "Keep only matching lines",
-                        FilterAction::DropLine => "Remove matching lines",
-                        FilterAction::KeepMatch => "Keep only the match text",
-                        FilterAction::DropMatch => "Remove the match from line",
-                    }).unwrap_or("Filter lines");
-                    (action.to_string(), step.action.as_ref().map(|a| format!("{:?}", a).to_lowercase()))
+                    let action_desc = step.action.as_ref().map(|a| match a {
+                        StepAction::KeepLine => "Keep only matching lines".to_string(),
+                        StepAction::DropLine => "Remove matching lines".to_string(),
+                        StepAction::KeepMatch => "Keep only the match text".to_string(),
+                        StepAction::DropMatch => "Remove the match from line".to_string(),
+                        StepAction::DeduplicateByPrefix => {
+                            "Deduplicate by prefix from capture group".to_string()
+                        }
+                        _ => "Filter action".to_string(),
+                    }).unwrap_or_else(|| "Filter lines".to_string());
+                    (action_desc, step.action.as_ref().map(|a| format!("{:?}", a).to_lowercase()))
                 }
                 StepType::Extract => ("Extract matching text".to_string(), None),
                 StepType::Validate => ("Validate lines match pattern".to_string(), None),
@@ -1735,10 +2086,14 @@ fn explain_pipeline(config: &PipelineConfig, matches: &clap::ArgMatches) -> Resu
                 StepType::Filter => {
                     if let Some(action) = &step.action {
                         let action_desc = match action {
-                            FilterAction::KeepLine => "Keep only lines matching pattern",
-                            FilterAction::DropLine => "Remove lines matching pattern",
-                            FilterAction::KeepMatch => "Keep only matched text",
-                            FilterAction::DropMatch => "Remove matched text from line",
+                            StepAction::KeepLine => "Keep only lines matching pattern".to_string(),
+                            StepAction::DropLine => "Remove lines matching pattern".to_string(),
+                            StepAction::KeepMatch => "Keep only matched text".to_string(),
+                            StepAction::DropMatch => "Remove matched text from line".to_string(),
+                            StepAction::DeduplicateByPrefix => {
+                                "Deduplicate by prefix from capture group".to_string()
+                            }
+                            _ => "Action".to_string(),
                         };
                         println!("    Action: {}", action_desc);
                     }
@@ -2182,58 +2537,6 @@ fn run_pattern_discovery(matches: &clap::ArgMatches) -> Result<()> {
     Ok(())
 }
 
-/// Run pipeline server mode
-fn run_server_mode(matches: &clap::ArgMatches) -> Result<()> {
-    use rexpipe::server::{PipelineServer, ServerConfig};
-
-    let bind_address = matches
-        .get_one::<String>("bind")
-        .cloned()
-        .unwrap_or_else(|| "127.0.0.1:8080".to_string());
-
-    // Load default pipeline configuration if provided
-    let default_config = if let Some(config_path) = matches.get_one::<String>("config") {
-        Some(load_pipeline_config_from_path(config_path)?)
-    } else {
-        None
-    };
-
-    let server_config = ServerConfig {
-        bind_address: bind_address.clone(),
-        default_config,
-        ..Default::default()
-    };
-
-    info!("Starting pipeline server on {}", bind_address);
-    println!("Pipeline server starting on {}", bind_address);
-    println!();
-    println!("Protocol:");
-    println!("  1. Send JSON pipeline config on a single line (or empty for default)");
-    println!("  2. Send '---' delimiter");
-    println!("  3. Send text to process");
-    println!("  4. Send '---' delimiter or close connection");
-    println!("  5. Server responds with processed text followed by '---'");
-    println!();
-
-    let server = PipelineServer::new(server_config);
-
-    // Check for async mode
-    #[cfg(feature = "async")]
-    if matches.get_flag("async") {
-        // Run with tokio runtime
-        let rt = tokio::runtime::Runtime::new()?;
-        rt.block_on(async {
-            server.run_async().await
-        })?;
-        return Ok(());
-    }
-
-    // Synchronous mode
-    server.run()?;
-
-    Ok(())
-}
-
 /// Run continuous streaming mode with URI-based sources and sinks.
 fn run_streaming_mode(matches: &clap::ArgMatches) -> Result<()> {
     use rexpipe::stream::{StreamUri, create_source, create_sink};
@@ -2318,18 +2621,6 @@ fn run_streaming_mode(matches: &clap::ArgMatches) -> Result<()> {
     Ok(())
 }
 
-/// Load pipeline configuration from a file path.
-fn load_pipeline_config_from_path(path: &str) -> Result<PipelineConfig> {
-    let config = PipelineConfig::from_file(path)?;
-
-    // Validate configuration
-    if let Err(errors) = config.validate() {
-        return Err(anyhow!("Configuration validation failed:\n  {}", errors.join("\n  ")));
-    }
-
-    Ok(config)
-}
-
 /// Run pattern learning mode to infer regex patterns from examples.
 fn run_pattern_learning(matches: &clap::ArgMatches) -> Result<()> {
     use rexpipe::learn::PatternLearner;
@@ -2352,10 +2643,13 @@ fn run_pattern_learning(matches: &clap::ArgMatches) -> Result<()> {
 
     // If no examples provided via flags, try to read from stdin
     if learner.example_count() == 0 {
-        eprintln!("Reading examples from stdin (prefix with + for positive, - for negative):");
-        eprintln!("Example: +user@example.com");
-        eprintln!("Example: -not-an-email");
-        eprintln!("Press Ctrl+D when done.");
+        // Only show instructions if stdin is interactive (TTY)
+        if std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+            eprintln!("Reading examples from stdin (prefix with + for positive, - for negative):");
+            eprintln!("Example: +user@example.com");
+            eprintln!("Example: -not-an-email");
+            eprintln!("Press Ctrl+D when done.");
+        }
 
         let stdin = io::stdin();
         for line in stdin.lines() {
