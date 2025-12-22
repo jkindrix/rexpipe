@@ -1,9 +1,0 @@
-# Sentence Splitter
-name = "Sentence Splitter"
-description = "Splits text into one sentence per line"
-
-[[step]]
-type = "substitute"
-pattern = '([.!?])\s+'
-replacement = "$1\n"
-description = "Split on sentence endings"

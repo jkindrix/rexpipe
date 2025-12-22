@@ -1,7 +1,0 @@
-# Go Error Handling Finder
-name = "Go Error Finder"
-
-[[step]]
-type = "filter"
-pattern = 'if\s+err\s*!=\s*nil|return\s+.*err'
-action = "keep_line"

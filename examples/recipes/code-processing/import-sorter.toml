@@ -1,9 +1,0 @@
-# Import Statement Filter
-name = "Import Filter"
-description = "Extracts import/require statements from code"
-
-[[step]]
-type = "filter"
-pattern = '^(import|from|require|use|include)\s+'
-action = "keep_line"
-description = "Keep import statements"

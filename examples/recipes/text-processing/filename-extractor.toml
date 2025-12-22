@@ -1,8 +1,0 @@
-# Filename Extractor
-name = "Filename Extractor"
-
-[[step]]
-type = "filter"
-pattern = '[a-zA-Z0-9_-]+\.(txt|pdf|doc|docx|xls|xlsx|csv|json|xml|yaml|yml|md|js|ts|py|go|rs|java|c|cpp|h)'
-action = "keep_line"
-case_insensitive = true

@@ -1,9 +1,0 @@
-# Duplicate Word Remover
-name = "Duplicate Word Remover"
-description = "Removes repeated words"
-
-[[step]]
-type = "substitute"
-pattern = '\b(\w+)\s+\1\b'
-replacement = "$1"
-description = "Remove repeated words"
