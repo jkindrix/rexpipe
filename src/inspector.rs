@@ -633,7 +633,11 @@ mod tests {
         let result = inspector.inspect_stream(reader).unwrap();
 
         assert_eq!(result.total_lines, 3);
-        assert_eq!(result.line_matches.len(), 3, "All lines have digits due to 'Line N:' prefix");
+        assert_eq!(
+            result.line_matches.len(),
+            3,
+            "All lines have digits due to 'Line N:' prefix"
+        );
         assert_eq!(result.total_matches, 6, "Total: 1, 123, 2, 3, 456, 789");
     }
 

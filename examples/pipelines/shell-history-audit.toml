@@ -1,0 +1,92 @@
+name = "shell-history-audit"
+description = "Analyze shell history for security review"
+# Usage: cat ~/.bash_history | rexpipe -c shell-history-audit.toml
+# Categorizes commands and flags potentially sensitive operations
+
+# =============================================================================
+# PHASE 1: Categorize by command type
+# =============================================================================
+
+# Privilege escalation
+[[step]]
+type = "substitute"
+pattern = "^(sudo .+)$"
+replacement = "[PRIV] $1"
+
+# Package management
+[[step]]
+type = "substitute"
+pattern = "^(apt|apt-get|yum|dnf|brew|pip|npm|cargo) .+"
+replacement = "[PKG] $0"
+
+# Git operations
+[[step]]
+type = "substitute"
+pattern = "^(git .+)$"
+replacement = "[GIT] $1"
+
+# Network operations
+[[step]]
+type = "substitute"
+pattern = "^(curl|wget|ssh|scp|rsync|nc|netcat) .+"
+replacement = "[NET] $0"
+
+# File operations
+[[step]]
+type = "substitute"
+pattern = "^(rm|mv|cp|chmod|chown) .+"
+replacement = "[FILE] $0"
+
+# Docker/container operations
+[[step]]
+type = "substitute"
+pattern = "^(docker|podman|kubectl|k9s) .+"
+replacement = "[CONTAINER] $0"
+
+# =============================================================================
+# PHASE 2: Flag sensitive patterns
+# =============================================================================
+
+# Password/secret in command line (BAD!)
+[[step]]
+type = "substitute"
+pattern = "(password|passwd|secret|token|key)[=:][^\\s]+"
+replacement = "⚠️$1=<EXPOSED>"
+flags = ["global"]
+
+# Dangerous rm commands
+[[step]]
+type = "substitute"
+pattern = "^(\\[FILE\\] rm -rf? /)"
+replacement = "🚨 DANGER: $1"
+
+# Force push
+[[step]]
+type = "substitute"
+pattern = "(git push.* --force)"
+replacement = "⚠️ $1"
+
+# =============================================================================
+# PHASE 3: Redact sensitive values
+# =============================================================================
+
+# Redact potential tokens after -H or --header
+[[step]]
+type = "substitute"
+pattern = "(-H|--header)[=\\s]+['\"]?[Aa]uthorization:[^'\"\\s]+"
+replacement = "$1 'Authorization: <REDACTED>'"
+
+# Redact -u user:pass
+[[step]]
+type = "substitute"
+pattern = "-u [^:]+:[^\\s]+"
+replacement = "-u <USER>:<REDACTED>"
+
+# =============================================================================
+# PHASE 4: Filter to only categorized/flagged entries
+# =============================================================================
+
+[[step]]
+type = "filter"
+pattern = "^\\[(PRIV|PKG|GIT|NET|FILE|CONTAINER)\\]|^(⚠️|🚨)"
+action = "keep_line"

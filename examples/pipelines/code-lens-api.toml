@@ -1,0 +1,101 @@
+name = "code-lens-api"
+description = "Extract public API surface from Rust/Python/JS code"
+# Usage: cat src/*.rs | rexpipe -c code-lens-api.toml
+# Shows ONLY the public interface - what consumers of this code see
+
+# =============================================================================
+# PHASE 1: Extract public declarations (Rust)
+# =============================================================================
+
+# Public functions
+[[step]]
+type = "substitute"
+pattern = "^pub fn ([a-z_][a-z0-9_]*)\\(([^)]*)\\)\\s*(->.*)?"
+replacement = "[FN] $1($2) $3"
+
+# Public async functions
+[[step]]
+type = "substitute"
+pattern = "^pub async fn ([a-z_][a-z0-9_]*)\\(([^)]*)\\)"
+replacement = "[ASYNC] $1($2)"
+
+# Public structs
+[[step]]
+type = "substitute"
+pattern = "^pub struct ([A-Z][a-zA-Z0-9_]*)"
+replacement = "[STRUCT] $1"
+
+# Public enums
+[[step]]
+type = "substitute"
+pattern = "^pub enum ([A-Z][a-zA-Z0-9_]*)"
+replacement = "[ENUM] $1"
+
+# Public traits
+[[step]]
+type = "substitute"
+pattern = "^pub trait ([A-Z][a-zA-Z0-9_]*)"
+replacement = "[TRAIT] $1"
+
+# Public type aliases
+[[step]]
+type = "substitute"
+pattern = "^pub type ([A-Z][a-zA-Z0-9_]*)"
+replacement = "[TYPE] $1"
+
+# =============================================================================
+# PHASE 2: Extract public declarations (Python)
+# =============================================================================
+
+# Class definitions (Python convention: no underscore = public)
+[[step]]
+type = "substitute"
+pattern = "^class ([A-Z][a-zA-Z0-9_]*)\\(?"
+replacement = "[CLASS] $1"
+
+# Function definitions (no leading underscore = public)
+[[step]]
+type = "substitute"
+pattern = "^def ([a-z][a-z0-9_]*)\\(([^)]*)\\)"
+replacement = "[DEF] $1($2)"
+
+# =============================================================================
+# PHASE 3: Extract public declarations (JavaScript/TypeScript)
+# =============================================================================
+
+# Exported functions
+[[step]]
+type = "substitute"
+pattern = "^export (async )?function ([a-zA-Z_][a-zA-Z0-9_]*)\\(([^)]*)\\)"
+replacement = "[EXPORT] $2($3)"
+
+# Exported classes
+[[step]]
+type = "substitute"
+pattern = "^export class ([A-Z][a-zA-Z0-9_]*)"
+replacement = "[CLASS] $1"
+
+# Exported const/let
+[[step]]
+type = "substitute"
+pattern = "^export (const|let) ([a-zA-Z_][a-zA-Z0-9_]*)"
+replacement = "[CONST] $2"
+
+# =============================================================================
+# PHASE 4: Keep only extracted API
+# =============================================================================
+
+[[step]]
+type = "filter"
+pattern = "^\\[(FN|ASYNC|STRUCT|ENUM|TRAIT|TYPE|CLASS|DEF|EXPORT|CONST)\\]"
+action = "keep_line"
+
+# =============================================================================
+# PHASE 5: Clean up signatures
+# =============================================================================
+
+# Simplify long argument lists
+[[step]]
+type = "substitute"
+pattern = "\\([^)]{60,}\\)"
+replacement = "(...)"

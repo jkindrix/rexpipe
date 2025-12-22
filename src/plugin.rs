@@ -102,14 +102,18 @@
 
 use std::collections::HashMap;
 use std::process::{Command, Stdio};
-use std::sync::{Arc, LazyLock};
+use std::sync::{Arc, LazyLock, RwLock};
 
 /// Global plugin registry instance with built-in plugins pre-registered.
 ///
 /// This static registry is initialized once and reused for all plugin
 /// executions, avoiding the overhead of re-registering built-in plugins
 /// for every transform operation.
-static GLOBAL_REGISTRY: LazyLock<PluginRegistry> = LazyLock::new(PluginRegistry::new);
+///
+/// The registry uses RwLock to allow runtime registration of plugins
+/// via `load_plugins_to_global`.
+static GLOBAL_REGISTRY: LazyLock<RwLock<PluginRegistry>> =
+    LazyLock::new(|| RwLock::new(PluginRegistry::new()));
 
 /// Type alias for plugin transformation functions
 ///
@@ -142,23 +146,82 @@ impl PluginRegistry {
         registry
     }
 
-    /// Get a reference to the global plugin registry.
+    /// Execute a plugin from the global registry.
     ///
-    /// This is the recommended way to access built-in plugins for transform
-    /// operations. The global registry is initialized once and reused,
-    /// avoiding the overhead of re-registering plugins.
+    /// This is the recommended way to access plugins for transform operations.
+    /// The global registry is initialized once and reused.
     ///
     /// # Example
     ///
     /// ```
     /// use rexpipe::plugin::PluginRegistry;
     ///
-    /// let registry = PluginRegistry::global();
-    /// let result = registry.execute("reverse", "hello", &[]).unwrap();
+    /// let result = PluginRegistry::global_execute("reverse", "hello", &[]).unwrap();
     /// assert_eq!(result, "olleh");
     /// ```
-    pub fn global() -> &'static PluginRegistry {
-        &GLOBAL_REGISTRY
+    pub fn global_execute(name: &str, input: &str, args: &[String]) -> Result<String, String> {
+        GLOBAL_REGISTRY
+            .read()
+            .map_err(|e| format!("Failed to acquire registry lock: {}", e))?
+            .execute(name, input, args)
+    }
+
+    /// Check if a plugin exists in the global registry.
+    pub fn global_has_plugin(name: &str) -> bool {
+        GLOBAL_REGISTRY
+            .read()
+            .map(|r| r.has_plugin(name))
+            .unwrap_or(false)
+    }
+
+    /// List all plugins in the global registry.
+    pub fn global_list_plugins() -> Vec<String> {
+        GLOBAL_REGISTRY
+            .read()
+            .map(|r| r.list_plugins().iter().map(|s| s.to_string()).collect())
+            .unwrap_or_default()
+    }
+
+    /// Load plugins from a directory into the global registry.
+    ///
+    /// This allows adding script-based plugins at runtime that will be
+    /// available to all transform operations.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use rexpipe::plugin::PluginRegistry;
+    /// use std::path::Path;
+    ///
+    /// let count = PluginRegistry::load_plugins_to_global(Path::new("./plugins")).unwrap();
+    /// println!("Loaded {} plugins", count);
+    /// ```
+    pub fn load_plugins_to_global(dir: &std::path::Path) -> Result<usize, String> {
+        GLOBAL_REGISTRY
+            .write()
+            .map_err(|e| format!("Failed to acquire registry lock: {}", e))?
+            .load_plugins_from_dir(dir)
+    }
+
+    /// Load plugins from all default directories into the global registry.
+    ///
+    /// Scans default plugin directories and loads any found plugins.
+    pub fn load_default_plugins_to_global() -> usize {
+        if let Ok(mut registry) = GLOBAL_REGISTRY.write() {
+            registry.load_default_plugins()
+        } else {
+            0
+        }
+    }
+
+    /// Get a reference to the global plugin registry (deprecated).
+    ///
+    /// Use `global_execute`, `global_has_plugin`, or `global_list_plugins` instead.
+    #[deprecated(since = "2.0.0", note = "Use global_execute() instead")]
+    pub fn global() -> std::sync::RwLockReadGuard<'static, PluginRegistry> {
+        GLOBAL_REGISTRY
+            .read()
+            .expect("Plugin registry lock poisoned")
     }
 
     /// Register built-in plugin functions
@@ -374,9 +437,13 @@ impl PluginRegistry {
             }
 
             // Chromatic scale using sharps
-            const NOTES_SHARP: [&str; 12] = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+            const NOTES_SHARP: [&str; 12] = [
+                "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
+            ];
             // Chromatic scale using flats
-            const NOTES_FLAT: [&str; 12] = ["C", "Db", "D", "Eb", "E", "F", "Gb", "G", "Ab", "A", "Bb", "B"];
+            const NOTES_FLAT: [&str; 12] = [
+                "C", "Db", "D", "Eb", "E", "F", "Gb", "G", "Ab", "A", "Bb", "B",
+            ];
 
             // Parse the chord: extract root note (with optional accidental) and suffix
             let chars: Vec<char> = s.chars().collect();
@@ -420,7 +487,9 @@ impl PluginRegistry {
             let current_idx = current_idx.or_else(|| {
                 // Try the other scale if not found
                 let other_notes = if use_flats { &NOTES_SHARP } else { &NOTES_FLAT };
-                other_notes.iter().position(|&n| n.eq_ignore_ascii_case(&root))
+                other_notes
+                    .iter()
+                    .position(|&n| n.eq_ignore_ascii_case(&root))
             });
 
             match current_idx {
@@ -713,6 +782,160 @@ impl PluginRegistry {
             }
         }
     }
+
+    /// Load script-based plugins from a directory.
+    ///
+    /// Scans the directory for executable scripts and registers them as plugins.
+    /// Plugin names are derived from filenames (without extension).
+    ///
+    /// # Supported script types
+    ///
+    /// - Shell scripts (.sh)
+    /// - Python scripts (.py)
+    /// - Ruby scripts (.rb)
+    /// - Perl scripts (.pl)
+    /// - Any executable file
+    ///
+    /// # Arguments
+    ///
+    /// * `dir` - Path to the plugins directory
+    ///
+    /// # Returns
+    ///
+    /// Number of plugins loaded, or an error
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use rexpipe::plugin::PluginRegistry;
+    /// use std::path::Path;
+    ///
+    /// let mut registry = PluginRegistry::new();
+    /// let count = registry.load_plugins_from_dir(Path::new("~/.config/rexpipe/plugins")).unwrap();
+    /// println!("Loaded {} plugins", count);
+    /// ```
+    pub fn load_plugins_from_dir(&mut self, dir: &std::path::Path) -> Result<usize, String> {
+        if !dir.exists() {
+            return Ok(0); // Silently skip non-existent directories
+        }
+
+        if !dir.is_dir() {
+            return Err(format!("{} is not a directory", dir.display()));
+        }
+
+        let entries = std::fs::read_dir(dir)
+            .map_err(|e| format!("Failed to read plugins directory {}: {}", dir.display(), e))?;
+
+        let mut count = 0;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file() {
+                if let Some(name) = self.register_script_plugin(&path) {
+                    log::debug!("Loaded plugin '{}' from {}", name, path.display());
+                    count += 1;
+                }
+            }
+        }
+
+        Ok(count)
+    }
+
+    /// Register a script file as a plugin.
+    ///
+    /// Returns the plugin name if successful, None otherwise.
+    fn register_script_plugin(&mut self, path: &std::path::Path) -> Option<String> {
+        let file_name = path.file_stem()?.to_str()?.to_string();
+        let extension = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|s| s.to_string());
+
+        // Determine the interpreter based on extension
+        let interpreter: Option<&'static str> = match extension.as_deref() {
+            Some("sh") => Some("sh"),
+            Some("py") => Some("python3"),
+            Some("rb") => Some("ruby"),
+            Some("pl") => Some("perl"),
+            _ => None, // Assume executable
+        };
+
+        let plugin_name = file_name.clone();
+        let script_path = path.to_path_buf();
+
+        // Create the plugin function
+        self.register(&plugin_name, move |input, args| {
+            let command = if let Some(interp) = interpreter {
+                format!("{} {}", interp, script_path.display())
+            } else {
+                script_path.display().to_string()
+            };
+
+            // Append args to command
+            let full_command = if args.is_empty() {
+                command
+            } else {
+                format!("{} {}", command, args.join(" "))
+            };
+
+            match Self::execute_shell(&full_command, input) {
+                Ok(output) => output,
+                Err(e) => {
+                    eprintln!("Plugin '{}' failed: {}", file_name, e);
+                    input.to_string() // Return unchanged on error
+                }
+            }
+        });
+
+        Some(plugin_name)
+    }
+
+    /// Get the default plugin directories.
+    ///
+    /// Returns paths to search for plugins, in order of priority:
+    /// 1. `./plugins/` (current directory)
+    /// 2. `~/.config/rexpipe/plugins/`
+    /// 3. `/usr/local/share/rexpipe/plugins/` (Unix)
+    /// 4. `$REXPIPE_PLUGIN_DIR` (if set)
+    pub fn default_plugin_dirs() -> Vec<std::path::PathBuf> {
+        let mut dirs = vec![];
+
+        // Current directory plugins
+        dirs.push(std::path::PathBuf::from("./plugins"));
+
+        // User config directory
+        if let Some(config_dir) = dirs::config_dir() {
+            dirs.push(config_dir.join("rexpipe").join("plugins"));
+        }
+
+        // System directory (Unix-like)
+        #[cfg(unix)]
+        dirs.push(std::path::PathBuf::from("/usr/local/share/rexpipe/plugins"));
+
+        // Environment variable override
+        if let Ok(env_dir) = std::env::var("REXPIPE_PLUGIN_DIR") {
+            dirs.push(std::path::PathBuf::from(env_dir));
+        }
+
+        dirs
+    }
+
+    /// Load plugins from all default directories.
+    ///
+    /// Scans default plugin directories and loads any found plugins.
+    /// Silently skips directories that don't exist.
+    ///
+    /// # Returns
+    ///
+    /// Total number of plugins loaded
+    pub fn load_default_plugins(&mut self) -> usize {
+        let mut total = 0;
+        for dir in Self::default_plugin_dirs() {
+            if let Ok(count) = self.load_plugins_from_dir(&dir) {
+                total += count;
+            }
+        }
+        total
+    }
 }
 
 impl std::fmt::Debug for PluginRegistry {
@@ -742,7 +965,10 @@ mod tests {
     #[test]
     fn test_builtin_reverse_unicode() {
         let registry = PluginRegistry::new();
-        assert_eq!(registry.execute("reverse", "日本語", &[]).unwrap(), "語本日");
+        assert_eq!(
+            registry.execute("reverse", "日本語", &[]).unwrap(),
+            "語本日"
+        );
     }
 
     #[test]
@@ -1019,19 +1245,13 @@ mod tests {
     #[test]
     fn test_builtin_hex_encode() {
         let registry = PluginRegistry::new();
-        assert_eq!(
-            registry.execute("hex_encode", "AB", &[]).unwrap(),
-            "4142"
-        );
+        assert_eq!(registry.execute("hex_encode", "AB", &[]).unwrap(), "4142");
     }
 
     #[test]
     fn test_builtin_hex_decode() {
         let registry = PluginRegistry::new();
-        assert_eq!(
-            registry.execute("hex_decode", "4142", &[]).unwrap(),
-            "AB"
-        );
+        assert_eq!(registry.execute("hex_decode", "4142", &[]).unwrap(), "AB");
     }
 
     #[test]
@@ -1272,10 +1492,7 @@ mod tests {
         let registry = PluginRegistry::new();
         let cloned = registry.clone();
         assert!(cloned.has_plugin("reverse"));
-        assert_eq!(
-            registry.list_plugins().len(),
-            cloned.list_plugins().len()
-        );
+        assert_eq!(registry.list_plugins().len(), cloned.list_plugins().len());
     }
 
     #[test]
@@ -1393,7 +1610,9 @@ mod tests {
         let registry = PluginRegistry::new();
         // C up 2 semitones = D
         assert_eq!(
-            registry.execute("transpose", "C", &["2".to_string()]).unwrap(),
+            registry
+                .execute("transpose", "C", &["2".to_string()])
+                .unwrap(),
             "D"
         );
     }
@@ -1403,7 +1622,9 @@ mod tests {
         let registry = PluginRegistry::new();
         // Am up 5 semitones = Dm
         assert_eq!(
-            registry.execute("transpose", "Am", &["5".to_string()]).unwrap(),
+            registry
+                .execute("transpose", "Am", &["5".to_string()])
+                .unwrap(),
             "Dm"
         );
     }
@@ -1413,7 +1634,9 @@ mod tests {
         let registry = PluginRegistry::new();
         // Cmaj7 up 4 semitones = Emaj7
         assert_eq!(
-            registry.execute("transpose", "Cmaj7", &["4".to_string()]).unwrap(),
+            registry
+                .execute("transpose", "Cmaj7", &["4".to_string()])
+                .unwrap(),
             "Emaj7"
         );
     }
@@ -1423,7 +1646,9 @@ mod tests {
         let registry = PluginRegistry::new();
         // F# up 2 semitones = G#
         assert_eq!(
-            registry.execute("transpose", "F#", &["2".to_string()]).unwrap(),
+            registry
+                .execute("transpose", "F#", &["2".to_string()])
+                .unwrap(),
             "G#"
         );
     }
@@ -1433,7 +1658,9 @@ mod tests {
         let registry = PluginRegistry::new();
         // Bb up 2 semitones = C
         assert_eq!(
-            registry.execute("transpose", "Bb", &["2".to_string()]).unwrap(),
+            registry
+                .execute("transpose", "Bb", &["2".to_string()])
+                .unwrap(),
             "C"
         );
     }
@@ -1443,7 +1670,9 @@ mod tests {
         let registry = PluginRegistry::new();
         // D down 2 semitones = C
         assert_eq!(
-            registry.execute("transpose", "D", &["-2".to_string()]).unwrap(),
+            registry
+                .execute("transpose", "D", &["-2".to_string()])
+                .unwrap(),
             "C"
         );
     }
@@ -1453,7 +1682,9 @@ mod tests {
         let registry = PluginRegistry::new();
         // B up 2 semitones = C#
         assert_eq!(
-            registry.execute("transpose", "B", &["2".to_string()]).unwrap(),
+            registry
+                .execute("transpose", "B", &["2".to_string()])
+                .unwrap(),
             "C#"
         );
     }
@@ -1463,7 +1694,9 @@ mod tests {
         let registry = PluginRegistry::new();
         // No change
         assert_eq!(
-            registry.execute("transpose", "Am7", &["0".to_string()]).unwrap(),
+            registry
+                .execute("transpose", "Am7", &["0".to_string()])
+                .unwrap(),
             "Am7"
         );
     }
@@ -1472,9 +1705,6 @@ mod tests {
     fn test_transpose_no_args() {
         let registry = PluginRegistry::new();
         // Default to 0 semitones (no change)
-        assert_eq!(
-            registry.execute("transpose", "C", &[]).unwrap(),
-            "C"
-        );
+        assert_eq!(registry.execute("transpose", "C", &[]).unwrap(), "C");
     }
 }

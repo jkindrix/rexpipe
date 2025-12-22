@@ -7,7 +7,7 @@ use assert_cmd::Command;
 use predicates::prelude::*;
 use std::fs::File;
 use std::io::Write;
-use tempfile::{tempdir, NamedTempFile};
+use tempfile::{NamedTempFile, tempdir};
 
 /// Get a Command for the rexpipe binary
 fn rexpipe() -> Command {
@@ -248,7 +248,11 @@ replacement = "NUM"
     .unwrap();
 
     rexpipe()
-        .args(["--validate-config", "-c", config_file.path().to_str().unwrap()])
+        .args([
+            "--validate-config",
+            "-c",
+            config_file.path().to_str().unwrap(),
+        ])
         .assert()
         .success()
         .stdout(predicate::str::contains("is valid"));
@@ -270,7 +274,11 @@ replacement = "will fail"
     .unwrap();
 
     rexpipe()
-        .args(["--validate-config", "-c", config_file.path().to_str().unwrap()])
+        .args([
+            "--validate-config",
+            "-c",
+            config_file.path().to_str().unwrap(),
+        ])
         .assert()
         .failure()
         .stdout(predicate::str::contains("is invalid").or(predicate::str::contains("error")));
@@ -340,7 +348,10 @@ fn test_dry_run_no_modification() {
         .success();
 
     let content_after = std::fs::read_to_string(temp_file.path()).unwrap();
-    assert_eq!(content_before, content_after, "File should not be modified in dry-run mode");
+    assert_eq!(
+        content_before, content_after,
+        "File should not be modified in dry-run mode"
+    );
 }
 
 // === Apply Flag Tests ===
@@ -359,10 +370,15 @@ fn test_inplace_without_apply_shows_preview() {
         .assert()
         // Should succeed but not modify file
         .success()
-        .stderr(predicate::str::contains("In-place editing requires --apply"));
+        .stderr(predicate::str::contains(
+            "In-place editing requires --apply",
+        ));
 
     let content_after = std::fs::read_to_string(temp_file.path()).unwrap();
-    assert_eq!(content_before, content_after, "File should not be modified without --apply");
+    assert_eq!(
+        content_before, content_after,
+        "File should not be modified without --apply"
+    );
 }
 
 #[test]
@@ -377,7 +393,10 @@ fn test_inplace_with_apply_modifies_file() {
         .success();
 
     let content_after = std::fs::read_to_string(temp_file.path()).unwrap();
-    assert!(content_after.contains("hello NUM world"), "File should be modified with --apply");
+    assert!(
+        content_after.contains("hello NUM world"),
+        "File should be modified with --apply"
+    );
 }
 
 #[test]
@@ -394,7 +413,10 @@ fn test_apply_flag_with_dry_run_still_previews() {
         .success();
 
     let content_after = std::fs::read_to_string(temp_file.path()).unwrap();
-    assert_eq!(content_before, content_after, "File should not be modified with --dry-run");
+    assert_eq!(
+        content_before, content_after,
+        "File should not be modified with --dry-run"
+    );
 }
 
 // === Context Lines Tests ===

@@ -1,0 +1,81 @@
+name = "todo-extract"
+description = "Extract TODO/FIXME/HACK comments from source code"
+# Usage: cat src/*.rs | rexpipe -c todo-extract.toml
+# Or:    find . -name "*.py" -exec cat {} \; | rexpipe -c todo-extract.toml
+
+# =============================================================================
+# PHASE 1: Keep only lines with actionable comments
+# =============================================================================
+
+# Keep TODO comments
+[[step]]
+type = "filter"
+pattern = "(TODO|FIXME|HACK|XXX|BUG|OPTIMIZE|REFACTOR)[:;\\s]"
+action = "keep_line"
+
+# =============================================================================
+# PHASE 2: Categorize by type
+# =============================================================================
+
+[[step]]
+type = "substitute"
+pattern = "^.*\\b(TODO)\\b[:\\s]*(.*)$"
+replacement = "[TODO]     $2"
+
+[[step]]
+type = "substitute"
+pattern = "^.*\\b(FIXME)\\b[:\\s]*(.*)$"
+replacement = "[FIXME]    $2"
+
+[[step]]
+type = "substitute"
+pattern = "^.*\\b(HACK)\\b[:\\s]*(.*)$"
+replacement = "[HACK]     $2"
+
+[[step]]
+type = "substitute"
+pattern = "^.*\\b(XXX)\\b[:\\s]*(.*)$"
+replacement = "[XXX]      $2"
+
+[[step]]
+type = "substitute"
+pattern = "^.*\\b(BUG)\\b[:\\s]*(.*)$"
+replacement = "[BUG]      $2"
+
+[[step]]
+type = "substitute"
+pattern = "^.*\\b(OPTIMIZE)\\b[:\\s]*(.*)$"
+replacement = "[OPTIMIZE] $2"
+
+[[step]]
+type = "substitute"
+pattern = "^.*\\b(REFACTOR)\\b[:\\s]*(.*)$"
+replacement = "[REFACTOR] $2"
+
+# =============================================================================
+# PHASE 3: Clean up
+# =============================================================================
+
+# Remove comment markers
+[[step]]
+type = "substitute"
+pattern = "^(\\[[A-Z]+\\]\\s+)[/#*]+\\s*"
+replacement = "$1"
+
+# Remove trailing comment markers
+[[step]]
+type = "substitute"
+pattern = "\\s*[*]+/\\s*$"
+replacement = ""
+
+# Trim whitespace
+[[step]]
+type = "substitute"
+pattern = "\\s+$"
+replacement = ""
+
+# Remove empty results
+[[step]]
+type = "filter"
+pattern = "^\\[[A-Z]+\\]\\s*$"
+action = "drop_line"

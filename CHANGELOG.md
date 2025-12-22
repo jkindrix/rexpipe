@@ -5,6 +5,8 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
 ## [2.0.0] - 2024-12-21
 
 ### Changed
@@ -22,30 +24,32 @@ scripting, pipelines, and programmatic use.
   is shown instead. This prevents accidental file modifications by scripts.
 - **Structured error output**: `--error-format json` provides machine-parseable
   errors with categories, exit codes, and suggestions.
+- **Security**: Shell transforms now disabled by default
+  - Requires `--allow-shell` flag to enable shell command execution
+  - Prevents accidental command injection from untrusted configs
+- Version now dynamically read from Cargo.toml
 
 #### New Features
 - `--explain`: Describe what a pipeline will do without processing data
-  - Lists each step, patterns, and transformations
-  - JSON output with `--json` flag for scripting
 - `--verify`: Output verification summary after processing
-  - Confirms lines processed, matches found, transformations applied
-  - JSON output with `--json` flag for programmatic verification
 - `--apply`: Explicitly confirm in-place modifications
-  - Required for `-i` in non-interactive mode
-  - Prevents accidental file changes
-- `--text`: Force plain text output when piping (override JSON default)
+- `--text`: Force plain text output when piping
+- `--validate-config`: Validate pipeline configuration without processing
+- `--man`: Generate man page to stdout
 
-### Removed
+### Added
 
-**Focus on Core Primitives** - Removed ~2,500 lines of non-essential code:
-
-- **Natural Language Interface** (`natural.rs`): Unnecessary complexity
-- **TUI Dashboard** (`tui.rs`): Out of scope for a CLI pipeline tool
-- **Python Bindings** (`python.rs`): Premature optimization - can add later if needed
-- **Apache Kafka Integration**: Broken functionality that distracted from core value
-  - Removed Kafka source/sink from stream module
-  - Removed `kafka` feature flag and rdkafka dependency
-- **TUI Feature**: Removed ratatui and crossterm dependencies
+- **CLI Integration Tests**: Comprehensive test suite for binary behavior
+  - 37 tests covering substitution, filtering, JSON output, exit codes, file processing
+  - Tests for shell completions, config validation, dry-run, context lines, man page
+  - Platform path tests (spaces, special characters, nested directories)
+  - Shell security warning tests
+- **Fuzz Testing in CI**: Automated fuzz testing for config, pattern, and pipeline parsing
+- **Feature Test Matrix**: CI tests for pcre, async, tree-sitter, fpe features
+- **Shell Command Validation**: Security analysis for shell transforms with warnings
+- **Rate Limiting**: Pattern learning now has configurable limits (max_examples, timeout)
+- **FPE Security Documentation**: Best practices for key management
+- **Benchmarking Documentation**: Guide for profiling and performance testing
 
 ### Advanced Features
 
@@ -85,30 +89,21 @@ scripting, pipelines, and programmatic use.
 - **Streaming Pipeline Server**: `--server` mode for network-based processing
 - **Continuous Streaming Mode**: `--stream` with URI-based sources and sinks
 
+### Removed
+
+**Focus on Core Primitives** - Removed ~2,500 lines of non-essential code:
+
+- **Natural Language Interface** (`natural.rs`): Unnecessary complexity
+- **TUI Dashboard** (`tui.rs`): Out of scope for a CLI pipeline tool
+- **Python Bindings** (`python.rs`): Premature optimization
+- **Apache Kafka Integration**: Broken functionality
+- **TUI Feature**: Removed ratatui and crossterm dependencies
+
 ### Technical Notes
-- All 256 tests continue to pass
+- 421 tests passing (250 unit + 66 integration + 27 property + 37 CLI + 41 doc tests)
 - Zero clippy warnings
 - Schema version 1.0 included in all JSON responses for forward compatibility
-- Existing core functionality (streaming, pipelines, patterns, inspection) unchanged
-
-## [Unreleased]
-
-### Added
-- **CLI Integration Tests**: Comprehensive test suite for binary behavior
-  - 26 tests covering substitution, filtering, JSON output, exit codes, file processing
-  - Tests for shell completions, config validation, dry-run, context lines, man page
-- `--validate-config` command for pipeline configuration validation
-  - Syntax checking with detailed error messages
-  - Pattern validation with suggestions for fixes
-- `--man` flag for generating man page to stdout
-
-### Changed
-- **Security**: Shell transforms now disabled by default
-  - Requires `--allow-shell` flag to enable shell command execution
-  - Prevents accidental command injection from untrusted configs
-- **CI**: Added feature-specific test matrix (pcre, async, tree-sitter, fpe)
-- Fixed benchmark file to use updated pipeline types (`StepAction` instead of `FilterAction`)
-- Version now dynamically read from Cargo.toml (fixes version mismatch)
+- Release profile optimized (LTO, strip, single codegen unit)
 
 ## [1.1.0] - 2024-12-15
 
@@ -164,8 +159,8 @@ scripting, pipelines, and programmatic use.
 - **Inspection Mode**: Interactive debugging with match visualization
 - **Performance Metrics**: Processing statistics and throughput reporting
 
-[2.0.0]: https://github.com/jkindrix/rexpipe/compare/v1.1.0...v2.0.0
 [Unreleased]: https://github.com/jkindrix/rexpipe/compare/v2.0.0...HEAD
+[2.0.0]: https://github.com/jkindrix/rexpipe/compare/v1.1.0...v2.0.0
 [1.1.0]: https://github.com/jkindrix/rexpipe/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/jkindrix/rexpipe/compare/v0.1.0...v1.0.0
 [0.1.0]: https://github.com/jkindrix/rexpipe/releases/tag/v0.1.0

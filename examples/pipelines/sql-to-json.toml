@@ -1,0 +1,109 @@
+name = "sql-to-json"
+description = "Transform SQL query results (psql/mysql format) to JSON lines"
+# Usage: psql -c "SELECT * FROM users" | rexpipe -c sql-to-json.toml
+# Handles: PostgreSQL, MySQL, SQLite table output formats
+
+# =============================================================================
+# PHASE 1: Remove table formatting
+# =============================================================================
+
+# Remove PostgreSQL header separators (+---+---+)
+[[step]]
+type = "filter"
+pattern = "^[+|]-+[+|]-*[+|]?$"
+action = "drop_line"
+
+# Remove MySQL header separators
+[[step]]
+type = "filter"
+pattern = "^\\+-+\\+$"
+action = "drop_line"
+
+# Remove row count footers "(X rows)"
+[[step]]
+type = "filter"
+pattern = "^\\(\\d+ rows?\\)$"
+action = "drop_line"
+
+# Remove empty lines
+[[step]]
+type = "filter"
+pattern = "^\\s*$"
+action = "drop_line"
+
+# =============================================================================
+# PHASE 2: Transform to JSON-like format
+# =============================================================================
+
+# Remove leading/trailing pipes and whitespace
+[[step]]
+type = "substitute"
+pattern = "^\\s*\\|\\s*"
+replacement = ""
+
+[[step]]
+type = "substitute"
+pattern = "\\s*\\|\\s*$"
+replacement = ""
+
+# Split columns by pipe into comma-separated
+[[step]]
+type = "substitute"
+pattern = "\\s*\\|\\s*"
+replacement = "\", \""
+flags = ["global"]
+
+# Wrap in JSON array format
+[[step]]
+type = "substitute"
+pattern = "^(.+)$"
+replacement = "[\"$1\"]"
+
+# =============================================================================
+# PHASE 3: Clean up values
+# =============================================================================
+
+# Handle NULL values
+[[step]]
+type = "substitute"
+pattern = "\"NULL\""
+replacement = "null"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+pattern = "\"<null>\""
+replacement = "null"
+flags = ["global"]
+
+# Handle empty strings
+[[step]]
+type = "substitute"
+pattern = "\"\\s*\""
+replacement = "\"\""
+flags = ["global"]
+
+# Trim whitespace from values
+[[step]]
+type = "substitute"
+pattern = "\"\\s+([^\"]+)\\s+\""
+replacement = "\"$1\""
+flags = ["global"]
+
+# =============================================================================
+# PHASE 4: Type detection (basic)
+# =============================================================================
+
+# Convert numeric strings to numbers
+[[step]]
+type = "substitute"
+pattern = "\"(-?\\d+\\.?\\d*)\"([,\\]])"
+replacement = "$1$2"
+flags = ["global"]
+
+# Convert boolean strings
+[[step]]
+type = "substitute"
+pattern = "\"(true|false|t|f)\"([,\\]])"
+replacement = "$1$2"
+flags = ["global"]

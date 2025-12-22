@@ -1,0 +1,44 @@
+name = "env-to-docker"
+description = "Transform .env file to Docker/Kubernetes format"
+# Usage: cat .env | rexpipe -c env-to-docker.toml
+
+# =============================================================================
+# PHASE 1: Clean and normalize
+# =============================================================================
+
+# Remove comments
+[[step]]
+type = "filter"
+pattern = "^\\s*#"
+action = "drop_line"
+
+# Remove empty lines
+[[step]]
+type = "filter"
+pattern = "^\\s*$"
+action = "drop_line"
+
+# Remove surrounding quotes from values
+[[step]]
+type = "substitute"
+pattern = "^([A-Z_][A-Z0-9_]*)=[\"']([^\"']*)[\"']$"
+replacement = "$1=$2"
+
+# =============================================================================
+# PHASE 2: Convert to Docker --env format
+# =============================================================================
+
+# Wrap in -e flag format
+[[step]]
+type = "substitute"
+pattern = "^([A-Z_][A-Z0-9_]*)=(.*)$"
+replacement = "  -e $1=\"$2\" \\"
+
+# =============================================================================
+# Alternative: Kubernetes ConfigMap format (uncomment to use)
+# =============================================================================
+
+# [[step]]
+# type = "substitute"
+# pattern = "^([A-Z_][A-Z0-9_]*)=(.*)$"
+# replacement = "  $1: \"$2\""

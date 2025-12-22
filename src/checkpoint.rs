@@ -66,7 +66,7 @@ pub enum CheckpointError {
 pub type Result<T> = std::result::Result<T, CheckpointError>;
 
 /// Configuration for checkpoint functionality.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub struct CheckpointConfig {
     /// Enable checkpointing
     #[serde(default)]
@@ -273,9 +273,8 @@ impl Checkpoint {
             CheckpointError::LoadError(format!("{}: {}", path.as_ref().display(), e))
         })?;
 
-        let state: CheckpointState = serde_json::from_str(&content).map_err(|e| {
-            CheckpointError::LoadError(format!("Invalid checkpoint JSON: {}", e))
-        })?;
+        let state: CheckpointState = serde_json::from_str(&content)
+            .map_err(|e| CheckpointError::LoadError(format!("Invalid checkpoint JSON: {}", e)))?;
 
         Ok(Self {
             config,
@@ -367,9 +366,11 @@ impl Checkpoint {
             .unwrap_or_default()
             .as_secs();
 
-        let state = self.state.files.entry(path.clone()).or_insert_with(|| {
-            FileState::new(path)
-        });
+        let state = self
+            .state
+            .files
+            .entry(path.clone())
+            .or_insert_with(|| FileState::new(path));
 
         state.byte_offset = byte_offset;
         state.line_number = line_number;
@@ -645,10 +646,7 @@ fn parse_hunk_header(header: &str) -> Option<LineRange> {
             let nums: Vec<&str> = stripped.split(',').collect();
             if let Some(start_str) = nums.first() {
                 if let Ok(start) = start_str.parse::<u64>() {
-                    let count = nums
-                        .get(1)
-                        .and_then(|s| s.parse::<u64>().ok())
-                        .unwrap_or(1);
+                    let count = nums.get(1).and_then(|s| s.parse::<u64>().ok()).unwrap_or(1);
                     return Some(LineRange::new(start, start + count.saturating_sub(1)));
                 }
             }
@@ -687,10 +685,7 @@ impl IncrementalReader {
     }
 
     /// Open with specific line ranges to process (for git diff mode).
-    pub fn open_with_ranges(
-        path: impl AsRef<Path>,
-        ranges: Vec<LineRange>,
-    ) -> Result<Self> {
+    pub fn open_with_ranges(path: impl AsRef<Path>, ranges: Vec<LineRange>) -> Result<Self> {
         let path = path.as_ref();
         let file = File::open(path)?;
 
@@ -758,7 +753,10 @@ mod tests {
             .with_auto_save(true);
 
         assert!(config.enabled);
-        assert_eq!(config.checkpoint_file, Some(PathBuf::from("/tmp/checkpoint.json")));
+        assert_eq!(
+            config.checkpoint_file,
+            Some(PathBuf::from("/tmp/checkpoint.json"))
+        );
         assert!(config.auto_save);
     }
 

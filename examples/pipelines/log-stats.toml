@@ -1,0 +1,73 @@
+name = "log-stats"
+description = "Analyze logs and produce statistics summary"
+# Usage: cat app.log | rexpipe -c log-stats.toml
+# Demonstrates: finalize section with counters for aggregation
+
+# =============================================================================
+# PROCESSING STEPS
+# =============================================================================
+
+# Pass through all lines (processing happens, finalize counts)
+[[step]]
+type = "filter"
+pattern = "."
+action = "keep_line"
+
+# =============================================================================
+# FINALIZE: Produce summary statistics
+# =============================================================================
+
+[finalize]
+# Suppress normal output - only show the summary
+suppress_output = true
+
+# Template with counter placeholders
+template = """
+=== Log Analysis Summary ===
+
+Log Levels:
+  Errors:   ${count:errors}
+  Warnings: ${count:warnings}
+  Info:     ${count:info}
+  Debug:    ${count:debug}
+
+Unique Sources:
+  IPs:      ${count:unique_ips}
+  Users:    ${count:unique_users}
+
+Totals:
+  Lines processed: ${lines}
+"""
+
+# Counter definitions
+[[finalize.counters]]
+name = "errors"
+pattern = "(ERROR|FATAL|CRITICAL)"
+description = "Count error-level log entries"
+
+[[finalize.counters]]
+name = "warnings"
+pattern = "(WARN|WARNING)"
+description = "Count warning-level log entries"
+
+[[finalize.counters]]
+name = "info"
+pattern = "\\bINFO\\b"
+description = "Count info-level log entries"
+
+[[finalize.counters]]
+name = "debug"
+pattern = "\\bDEBUG\\b"
+description = "Count debug-level log entries"
+
+[[finalize.counters]]
+name = "unique_ips"
+pattern = "(\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3})"
+deduplicate = true
+description = "Count unique IP addresses"
+
+[[finalize.counters]]
+name = "unique_users"
+pattern = "user[=:]\\s*([a-zA-Z0-9_-]+)"
+deduplicate = true
+description = "Count unique user identifiers"

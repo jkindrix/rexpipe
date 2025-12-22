@@ -1,0 +1,78 @@
+name = "git-changelog"
+description = "Transform git log into formatted changelog"
+# Usage: git log --oneline --no-merges | rexpipe -c git-changelog.toml
+
+# =============================================================================
+# PHASE 1: Parse conventional commit prefixes
+# =============================================================================
+
+# Tag features
+[[step]]
+type = "substitute"
+pattern = "^([0-9a-f]+) feat(\\([^)]+\\))?!?: (.+)$"
+replacement = "[FEATURE] $1 $3"
+
+# Tag fixes
+[[step]]
+type = "substitute"
+pattern = "^([0-9a-f]+) fix(\\([^)]+\\))?!?: (.+)$"
+replacement = "[FIX] $1 $3"
+
+# Tag refactors
+[[step]]
+type = "substitute"
+pattern = "^([0-9a-f]+) refactor(\\([^)]+\\))?!?: (.+)$"
+replacement = "[REFACTOR] $1 $3"
+
+# Tag docs
+[[step]]
+type = "substitute"
+pattern = "^([0-9a-f]+) docs?(\\([^)]+\\))?!?: (.+)$"
+replacement = "[DOCS] $1 $3"
+
+# Tag tests
+[[step]]
+type = "substitute"
+pattern = "^([0-9a-f]+) tests?(\\([^)]+\\))?!?: (.+)$"
+replacement = "[TEST] $1 $3"
+
+# Tag chores/maintenance
+[[step]]
+type = "substitute"
+pattern = "^([0-9a-f]+) chore(\\([^)]+\\))?!?: (.+)$"
+replacement = "[CHORE] $1 $3"
+
+# Tag performance
+[[step]]
+type = "substitute"
+pattern = "^([0-9a-f]+) perf(\\([^)]+\\))?!?: (.+)$"
+replacement = "[PERF] $1 $3"
+
+# Tag breaking changes (has !)
+[[step]]
+type = "substitute"
+pattern = "^([0-9a-f]+) (\\w+)(\\([^)]+\\))?!: (.+)$"
+replacement = "[BREAKING] $1 $4"
+
+# Tag remaining commits as OTHER (ones that didn't match conventional format)
+[[step]]
+type = "substitute"
+pattern = "^([0-9a-f]+) ([^\\[].*)$"
+replacement = "[OTHER] $1 $2"
+
+# =============================================================================
+# PHASE 2: Format for readability
+# =============================================================================
+
+# Convert hash to short link format
+[[step]]
+type = "substitute"
+pattern = "^\\[(\\w+)\\] ([a-f0-9]+) "
+replacement = "- **[$1]** `$2` "
+
+# Clean up duplicate spaces
+[[step]]
+type = "substitute"
+pattern = "  +"
+replacement = " "
+flags = ["global"]

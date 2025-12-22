@@ -1,0 +1,45 @@
+name = "error-frequency"
+description = "Extract unique error types - use 'sort | uniq -c' for counts"
+# Usage: cat app.log | rexpipe -c error-frequency.toml | sort | uniq -c | sort -rn
+# Demonstrates: rexpipe extracts + deduplicates, Unix tools aggregate
+
+# =============================================================================
+# PHASE 1: Keep only error lines
+# =============================================================================
+
+[[step]]
+type = "filter"
+pattern = "(ERROR|Error|error|FATAL|Fatal|fatal|WARN|Warning|warning)"
+action = "keep_line"
+
+# =============================================================================
+# PHASE 2: Normalize error format
+# =============================================================================
+
+# Remove timestamps
+[[step]]
+type = "substitute"
+pattern = "^\\d{4}[-/]\\d{2}[-/]\\d{2}[T ]\\d{2}:\\d{2}:\\d{2}[^\\s]*\\s*"
+replacement = ""
+
+# Remove log prefixes
+[[step]]
+type = "substitute"
+pattern = "^\\[[^\\]]+\\]\\s*"
+replacement = ""
+
+# =============================================================================
+# PHASE 3: Extract error type signature
+# =============================================================================
+
+# Extract the first meaningful phrase (error type)
+[[step]]
+type = "substitute"
+pattern = "^(ERROR|FATAL|WARN|Error|Fatal|Warning)[:,]?\\s*(.{0,60}).*$"
+replacement = "$1: $2"
+
+# Trim trailing partial words at 60 chars
+[[step]]
+type = "substitute"
+pattern = "\\s+\\S{0,10}$"
+replacement = ""

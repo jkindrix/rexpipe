@@ -42,13 +42,15 @@ impl FromStr for Language {
             "go" | "golang" => Ok(Language::Go),
             "json" => Ok(Language::Json),
             "yaml" | "yml" => Ok(Language::Yaml),
-            _ => Err(format!("Unknown language: '{}'. Supported: rust, python, javascript, typescript, go, json, yaml", s)),
+            _ => Err(format!(
+                "Unknown language: '{}'. Supported: rust, python, javascript, typescript, go, json, yaml",
+                s
+            )),
         }
     }
 }
 
 impl Language {
-
     /// Get the tree-sitter language for this language.
     #[cfg(feature = "tree-sitter")]
     pub fn tree_sitter_language(&self) -> tree_sitter::Language {
@@ -73,7 +75,11 @@ impl Language {
             }
             Language::Go => &["raw_string_literal", "interpreted_string_literal"],
             Language::Json => &["string", "string_content"],
-            Language::Yaml => &["string_scalar", "double_quote_scalar", "single_quote_scalar"],
+            Language::Yaml => &[
+                "string_scalar",
+                "double_quote_scalar",
+                "single_quote_scalar",
+            ],
         }
     }
 
@@ -94,9 +100,11 @@ impl Language {
         match self {
             Language::Rust => &["function_item", "impl_item"],
             Language::Python => &["function_definition", "async_function_definition"],
-            Language::JavaScript | Language::TypeScript => {
-                &["function_declaration", "arrow_function", "method_definition"]
-            }
+            Language::JavaScript | Language::TypeScript => &[
+                "function_declaration",
+                "arrow_function",
+                "method_definition",
+            ],
             Language::Go => &["function_declaration", "method_declaration"],
             Language::Json => &[],
             Language::Yaml => &[],
@@ -143,9 +151,12 @@ impl Language {
             ],
             Language::Python => &["type", "subscript", "attribute"],
             Language::JavaScript => &[],
-            Language::TypeScript => {
-                &["type_annotation", "type_identifier", "generic_type", "type_alias_declaration"]
-            }
+            Language::TypeScript => &[
+                "type_annotation",
+                "type_identifier",
+                "generic_type",
+                "type_alias_declaration",
+            ],
             Language::Go => &["type_identifier", "type_spec", "type_declaration"],
             Language::Json => &[],
             Language::Yaml => &[],
@@ -157,9 +168,7 @@ impl Language {
         match self {
             Language::Rust => &["identifier", "field_identifier", "type_identifier"],
             Language::Python => &["identifier"],
-            Language::JavaScript | Language::TypeScript => {
-                &["identifier", "property_identifier"]
-            }
+            Language::JavaScript | Language::TypeScript => &["identifier", "property_identifier"],
             Language::Go => &["identifier", "field_identifier", "type_identifier"],
             Language::Json => &["string"],
             Language::Yaml => &["flow_node", "block_scalar"],
@@ -327,7 +336,10 @@ impl FromStr for ScopeFilter {
             "macros" | "macro" => Ok(ScopeFilter::Macros),
             "control_flow" | "control" | "flow" => Ok(ScopeFilter::ControlFlow),
             "tests" | "test" | "specs" | "spec" => Ok(ScopeFilter::Tests),
-            _ => Err(format!("Unknown scope: '{}'. Supported: all, code, strings, comments, functions, function_calls, imports, types, identifiers, macros, control_flow, tests", s)),
+            _ => Err(format!(
+                "Unknown scope: '{}'. Supported: all, code, strings, comments, functions, function_calls, imports, types, identifiers, macros, control_flow, tests",
+                s
+            )),
         }
     }
 }
@@ -377,11 +389,7 @@ impl SyntaxAnalyzer {
     }
 
     /// Find all ranges that match the given scope filter.
-    pub fn find_scope_ranges(
-        &mut self,
-        source: &str,
-        filter: &ScopeFilter,
-    ) -> Vec<ByteRange> {
+    pub fn find_scope_ranges(&mut self, source: &str, filter: &ScopeFilter) -> Vec<ByteRange> {
         let tree = match self.parse(source) {
             Some(t) => t,
             None => return vec![ByteRange::new(0, source.len())], // Fall back to full range
@@ -390,15 +398,33 @@ impl SyntaxAnalyzer {
         match filter {
             ScopeFilter::All => vec![ByteRange::new(0, source.len())],
             ScopeFilter::Code => self.find_code_ranges(&tree, source),
-            ScopeFilter::Strings => self.find_node_type_ranges(&tree, self.language.string_node_types()),
-            ScopeFilter::Comments => self.find_node_type_ranges(&tree, self.language.comment_node_types()),
-            ScopeFilter::Functions => self.find_node_type_ranges(&tree, self.language.function_node_types()),
-            ScopeFilter::FunctionCalls => self.find_node_type_ranges(&tree, self.language.function_call_node_types()),
-            ScopeFilter::Imports => self.find_node_type_ranges(&tree, self.language.import_node_types()),
-            ScopeFilter::Types => self.find_node_type_ranges(&tree, self.language.type_node_types()),
-            ScopeFilter::Identifiers => self.find_node_type_ranges(&tree, self.language.identifier_node_types()),
-            ScopeFilter::Macros => self.find_node_type_ranges(&tree, self.language.macro_node_types()),
-            ScopeFilter::ControlFlow => self.find_node_type_ranges(&tree, self.language.control_flow_node_types()),
+            ScopeFilter::Strings => {
+                self.find_node_type_ranges(&tree, self.language.string_node_types())
+            }
+            ScopeFilter::Comments => {
+                self.find_node_type_ranges(&tree, self.language.comment_node_types())
+            }
+            ScopeFilter::Functions => {
+                self.find_node_type_ranges(&tree, self.language.function_node_types())
+            }
+            ScopeFilter::FunctionCalls => {
+                self.find_node_type_ranges(&tree, self.language.function_call_node_types())
+            }
+            ScopeFilter::Imports => {
+                self.find_node_type_ranges(&tree, self.language.import_node_types())
+            }
+            ScopeFilter::Types => {
+                self.find_node_type_ranges(&tree, self.language.type_node_types())
+            }
+            ScopeFilter::Identifiers => {
+                self.find_node_type_ranges(&tree, self.language.identifier_node_types())
+            }
+            ScopeFilter::Macros => {
+                self.find_node_type_ranges(&tree, self.language.macro_node_types())
+            }
+            ScopeFilter::ControlFlow => {
+                self.find_node_type_ranges(&tree, self.language.control_flow_node_types())
+            }
             ScopeFilter::Tests => self.find_test_ranges(&tree, source),
             ScopeFilter::Include(types) => {
                 let types_vec: Vec<&str> = types.iter().map(|s| s.as_str()).collect();
@@ -659,7 +685,10 @@ impl SyntaxAnalyzer {
         for m in pattern.find_iter(source) {
             let match_range = ByteRange::new(m.start(), m.end());
             // Check if the match falls entirely within a scoped range
-            if scope_ranges.iter().any(|r| r.start <= match_range.start && r.end >= match_range.end) {
+            if scope_ranges
+                .iter()
+                .any(|r| r.start <= match_range.start && r.end >= match_range.end)
+            {
                 results.push(match_range);
             }
         }
@@ -681,7 +710,10 @@ impl SyntaxAnalyzer {
         let mut matches: Vec<(usize, usize)> = Vec::new();
         for m in pattern.find_iter(source) {
             let match_range = ByteRange::new(m.start(), m.end());
-            if scope_ranges.iter().any(|r| r.start <= match_range.start && r.end >= match_range.end) {
+            if scope_ranges
+                .iter()
+                .any(|r| r.start <= match_range.start && r.end >= match_range.end)
+            {
                 matches.push((m.start(), m.end()));
             }
         }
@@ -715,11 +747,23 @@ mod tests {
     fn test_scope_filter_from_str() {
         assert_eq!("all".parse::<ScopeFilter>().ok(), Some(ScopeFilter::All));
         assert_eq!("code".parse::<ScopeFilter>().ok(), Some(ScopeFilter::Code));
-        assert_eq!("strings".parse::<ScopeFilter>().ok(), Some(ScopeFilter::Strings));
-        assert_eq!("comments".parse::<ScopeFilter>().ok(), Some(ScopeFilter::Comments));
-        assert_eq!("tests".parse::<ScopeFilter>().ok(), Some(ScopeFilter::Tests));
+        assert_eq!(
+            "strings".parse::<ScopeFilter>().ok(),
+            Some(ScopeFilter::Strings)
+        );
+        assert_eq!(
+            "comments".parse::<ScopeFilter>().ok(),
+            Some(ScopeFilter::Comments)
+        );
+        assert_eq!(
+            "tests".parse::<ScopeFilter>().ok(),
+            Some(ScopeFilter::Tests)
+        );
         assert_eq!("test".parse::<ScopeFilter>().ok(), Some(ScopeFilter::Tests));
-        assert_eq!("specs".parse::<ScopeFilter>().ok(), Some(ScopeFilter::Tests));
+        assert_eq!(
+            "specs".parse::<ScopeFilter>().ok(),
+            Some(ScopeFilter::Tests)
+        );
     }
 
     #[test]
@@ -735,11 +779,18 @@ fn main() {
 
         // "hello" is in a string, so code scope should not match it
         let code_matches = analyzer.scoped_match(source, &pattern, &ScopeFilter::Code);
-        assert!(code_matches.is_empty(), "Should not match 'hello' in code scope");
+        assert!(
+            code_matches.is_empty(),
+            "Should not match 'hello' in code scope"
+        );
 
         // But string scope should match it
         let string_matches = analyzer.scoped_match(source, &pattern, &ScopeFilter::Strings);
-        assert_eq!(string_matches.len(), 1, "Should match 'hello' in string scope");
+        assert_eq!(
+            string_matches.len(),
+            1,
+            "Should match 'hello' in string scope"
+        );
     }
 
     #[test]
@@ -757,11 +808,20 @@ fn old_function() {
         let result = analyzer.scoped_replace(source, &pattern, "new_function", &ScopeFilter::Code);
 
         // Function name should be replaced
-        assert!(result.contains("fn new_function()"), "Function name should be replaced");
+        assert!(
+            result.contains("fn new_function()"),
+            "Function name should be replaced"
+        );
         // Comment should be unchanged
-        assert!(result.contains("// old_function"), "Comment should be unchanged");
+        assert!(
+            result.contains("// old_function"),
+            "Comment should be unchanged"
+        );
         // String should be unchanged
-        assert!(result.contains("\"old_function\""), "String should be unchanged");
+        assert!(
+            result.contains("\"old_function\""),
+            "String should be unchanged"
+        );
     }
 
     #[test]
@@ -790,7 +850,11 @@ mod tests {
 
         // Tests scope should only match assert inside test functions
         let test_matches = analyzer.scoped_match(source, &pattern, &ScopeFilter::Tests);
-        assert_eq!(test_matches.len(), 2, "Should match 'assert' in test functions");
+        assert_eq!(
+            test_matches.len(),
+            2,
+            "Should match 'assert' in test functions"
+        );
     }
 
     #[test]
@@ -811,7 +875,11 @@ class TestSuite:
 
         // Tests scope should match assert in test_ functions and Test classes
         let test_matches = analyzer.scoped_match(source, &pattern, &ScopeFilter::Tests);
-        assert_eq!(test_matches.len(), 2, "Should match 'assert' in test functions and Test classes");
+        assert_eq!(
+            test_matches.len(),
+            2,
+            "Should match 'assert' in test functions and Test classes"
+        );
     }
 
     #[test]
@@ -836,7 +904,10 @@ test("standalone test", () => {
 
         // Tests scope should match expect inside describe/it/test blocks
         let test_matches = analyzer.scoped_match(source, &pattern, &ScopeFilter::Tests);
-        assert!(test_matches.len() >= 2, "Should match 'expect' in test blocks");
+        assert!(
+            test_matches.len() >= 2,
+            "Should match 'expect' in test blocks"
+        );
     }
 
     #[test]
@@ -865,6 +936,10 @@ func BenchmarkSpeed(b *testing.B) {
 
         // Tests scope should match testing.T in Test functions
         let test_matches = analyzer.scoped_match(source, &pattern, &ScopeFilter::Tests);
-        assert_eq!(test_matches.len(), 2, "Should match 'testing' in Test and Benchmark functions");
+        assert_eq!(
+            test_matches.len(),
+            2,
+            "Should match 'testing' in Test and Benchmark functions"
+        );
     }
 }

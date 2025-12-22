@@ -47,6 +47,8 @@ tree-sitter-typescript = { version = "0.23", optional = true }
 tree-sitter-go = { version = "0.23", optional = true }
 tree-sitter-json = { version = "0.24", optional = true }
 tree-sitter-yaml = { version = "0.7", optional = true }
+ureq = { version = "2.12", optional = true }
+notify = { version = "6.1", optional = true }
 
 [dev-dependencies]
 tempfile = "3.14"
@@ -71,6 +73,8 @@ tree-sitter = [
     "dep:tree-sitter-json",
     "dep:tree-sitter-yaml",
 ]
+remote = ["ureq"]
+watch = ["notify"]
 
 [[bin]]
 name = "rexpipe"

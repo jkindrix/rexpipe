@@ -1,0 +1,32 @@
+# Build artifacts
+target/
+*.rs.bk
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Documentation
+docs/
+*.md
+!README.md
+
+# CI/CD
+.github/
+
+# Packaging
+packaging/
+
+# Temporary files
+.tmp/
+*.log
+
+# Development files
+.env*
+*.bak

@@ -1,0 +1,22 @@
+#!/usr/bin/make -f
+
+%:
+	dh $@
+
+override_dh_auto_build:
+	cargo build --release
+
+override_dh_auto_install:
+	install -Dm755 target/release/rexpipe debian/rexpipe/usr/bin/rexpipe
+	# Generate completions
+	./target/release/rexpipe --completions bash > debian/rexpipe/usr/share/bash-completion/completions/rexpipe
+	./target/release/rexpipe --completions zsh > debian/rexpipe/usr/share/zsh/vendor-completions/_rexpipe
+	./target/release/rexpipe --completions fish > debian/rexpipe/usr/share/fish/vendor_completions.d/rexpipe.fish
+	# Generate man page
+	./target/release/rexpipe --man > debian/rexpipe/usr/share/man/man1/rexpipe.1
+
+override_dh_auto_test:
+	cargo test --release
+
+override_dh_auto_clean:
+	cargo clean

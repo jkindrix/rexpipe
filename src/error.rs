@@ -53,7 +53,9 @@ impl RexpipeError {
             RexpipeError::Pattern(e) => e.suggestion(),
             RexpipeError::Library(e) => e.suggestion(),
             RexpipeError::Validation(e) => e.suggestion(),
-            RexpipeError::Io(_) => Some("Check that the file exists and you have permission to read it"),
+            RexpipeError::Io(_) => {
+                Some("Check that the file exists and you have permission to read it")
+            }
             RexpipeError::Processing(_) => None,
         }
     }
@@ -63,11 +65,15 @@ impl RexpipeError {
 #[derive(Error, Debug)]
 pub enum ConfigError {
     /// Configuration file not found
-    #[error("Configuration file not found: {path}\n\n  Hint: Check that the path is correct and the file exists.\n  Try: ls -la {path}")]
+    #[error(
+        "Configuration file not found: {path}\n\n  Hint: Check that the path is correct and the file exists.\n  Try: ls -la {path}"
+    )]
     NotFound { path: PathBuf },
 
     /// Failed to read configuration file
-    #[error("Failed to read configuration file '{path}': {source}\n\n  Hint: Check file permissions with: ls -la {path}")]
+    #[error(
+        "Failed to read configuration file '{path}': {source}\n\n  Hint: Check file permissions with: ls -la {path}"
+    )]
     ReadError {
         path: PathBuf,
         #[source]
@@ -75,7 +81,9 @@ pub enum ConfigError {
     },
 
     /// Failed to parse TOML configuration
-    #[error("Failed to parse configuration '{path}':\n  {message}\n\n  Hint: Validate your TOML syntax at https://www.toml-lint.com/\n  Common issues: missing quotes around strings, incorrect indentation, typos in key names")]
+    #[error(
+        "Failed to parse configuration '{path}':\n  {message}\n\n  Hint: Validate your TOML syntax at https://www.toml-lint.com/\n  Common issues: missing quotes around strings, incorrect indentation, typos in key names"
+    )]
     ParseError { path: PathBuf, message: String },
 
     /// Invalid configuration structure
@@ -83,11 +91,10 @@ pub enum ConfigError {
     Invalid { message: String, hint: String },
 
     /// Missing required field
-    #[error("Missing required field '{field}' in configuration\n\n  Hint: Add '{field} = <value>' to your config file\n  Example: {example}")]
-    MissingField {
-        field: String,
-        example: String,
-    },
+    #[error(
+        "Missing required field '{field}' in configuration\n\n  Hint: Add '{field} = <value>' to your config file\n  Example: {example}"
+    )]
+    MissingField { field: String, example: String },
 }
 
 impl ConfigError {
@@ -96,9 +103,13 @@ impl ConfigError {
         match self {
             ConfigError::NotFound { .. } => Some("Verify the file path is correct"),
             ConfigError::ReadError { .. } => Some("Check file permissions"),
-            ConfigError::ParseError { .. } => Some("Validate TOML syntax at https://www.toml-lint.com/"),
+            ConfigError::ParseError { .. } => {
+                Some("Validate TOML syntax at https://www.toml-lint.com/")
+            }
             ConfigError::Invalid { .. } => Some("Review the configuration structure"),
-            ConfigError::MissingField { .. } => Some("Add the required field to your configuration"),
+            ConfigError::MissingField { .. } => {
+                Some("Add the required field to your configuration")
+            }
         }
     }
 
@@ -131,18 +142,21 @@ pub enum PatternError {
     },
 
     /// PCRE mode requested but feature not enabled
-    #[error("PCRE mode requested but the 'pcre' feature is not enabled.\n\n  Hint: Rebuild with: cargo build --features pcre\n  Or install with: cargo install rexpipe --features pcre\n\n  PCRE mode is needed for lookahead (?=), lookbehind (?<=), and other advanced features.")]
+    #[error(
+        "PCRE mode requested but the 'pcre' feature is not enabled.\n\n  Hint: Rebuild with: cargo build --features pcre\n  Or install with: cargo install rexpipe --features pcre\n\n  PCRE mode is needed for lookahead (?=), lookbehind (?<=), and other advanced features."
+    )]
     PcreNotEnabled,
 
     /// Pattern reference not found in library
-    #[error("Unknown pattern reference '${{{name}}}'\n\n  Hint: This pattern was not found in any loaded library.\n  Available patterns: {available}\n\n  To fix:\n  1. Check spelling of the pattern name\n  2. Ensure the library file is loaded with --library or in your config\n  3. Use --list-patterns <library.toml> to see available patterns")]
-    UnknownReference {
-        name: String,
-        available: String,
-    },
+    #[error(
+        "Unknown pattern reference '${{{name}}}'\n\n  Hint: This pattern was not found in any loaded library.\n  Available patterns: {available}\n\n  To fix:\n  1. Check spelling of the pattern name\n  2. Ensure the library file is loaded with --library or in your config\n  3. Use --list-patterns <library.toml> to see available patterns"
+    )]
+    UnknownReference { name: String, available: String },
 
     /// Potential ReDoS vulnerability detected
-    #[error("Pattern may be vulnerable to ReDoS (catastrophic backtracking)\n  Pattern: {pattern}\n  Risk: {risk_description}\n\n  Hint: {hint}\n\n  To proceed anyway, remove --strict flag (not recommended for untrusted input)")]
+    #[error(
+        "Pattern may be vulnerable to ReDoS (catastrophic backtracking)\n  Pattern: {pattern}\n  Risk: {risk_description}\n\n  Hint: {hint}\n\n  To proceed anyway, remove --strict flag (not recommended for untrusted input)"
+    )]
     PotentialRedos {
         pattern: String,
         risk_description: String,
@@ -150,11 +164,15 @@ pub enum PatternError {
     },
 
     /// Empty pattern
-    #[error("Empty pattern provided\n\n  Hint: Provide a valid regex pattern with -p or in your config file\n  Example: rexpipe -p '\\d+' -r 'NUMBER' < input.txt")]
+    #[error(
+        "Empty pattern provided\n\n  Hint: Provide a valid regex pattern with -p or in your config file\n  Example: rexpipe -p '\\d+' -r 'NUMBER' < input.txt"
+    )]
     EmptyPattern,
 
     /// Pattern too complex
-    #[error("Pattern is too complex (exceeds compilation limits)\n  Pattern: {pattern}\n\n  Hint: Simplify the pattern or break it into multiple steps\n  Consider using fixed-string mode (-F) if you don't need regex features")]
+    #[error(
+        "Pattern is too complex (exceeds compilation limits)\n  Pattern: {pattern}\n\n  Hint: Simplify the pattern or break it into multiple steps\n  Consider using fixed-string mode (-F) if you don't need regex features"
+    )]
     TooComplex { pattern: String },
 }
 
@@ -162,12 +180,20 @@ impl PatternError {
     /// Get a suggestion for how to fix this error.
     pub fn suggestion(&self) -> Option<&'static str> {
         match self {
-            PatternError::InvalidRegex { .. } => Some("Check regex syntax at https://regex101.com/"),
+            PatternError::InvalidRegex { .. } => {
+                Some("Check regex syntax at https://regex101.com/")
+            }
             PatternError::PcreNotEnabled => Some("Rebuild with --features pcre"),
-            PatternError::UnknownReference { .. } => Some("Use --list-patterns to see available patterns"),
-            PatternError::PotentialRedos { .. } => Some("Simplify the pattern to avoid nested quantifiers"),
+            PatternError::UnknownReference { .. } => {
+                Some("Use --list-patterns to see available patterns")
+            }
+            PatternError::PotentialRedos { .. } => {
+                Some("Simplify the pattern to avoid nested quantifiers")
+            }
             PatternError::EmptyPattern => Some("Provide a pattern with -p flag"),
-            PatternError::TooComplex { .. } => Some("Simplify the pattern or use -F for fixed strings"),
+            PatternError::TooComplex { .. } => {
+                Some("Simplify the pattern or use -F for fixed strings")
+            }
         }
     }
 
@@ -190,7 +216,11 @@ impl PatternError {
         } else if available.len() <= 10 {
             available.join(", ")
         } else {
-            format!("{}, ... ({} more)", available[..10].join(", "), available.len() - 10)
+            format!(
+                "{}, ... ({} more)",
+                available[..10].join(", "),
+                available.len() - 10
+            )
         };
         PatternError::UnknownReference {
             name: name.into(),
@@ -222,13 +252,16 @@ impl PatternError {
 
         if msg_lower.contains("unclosed") || msg_lower.contains("unmatched") {
             if pattern.contains('(') && !pattern.contains(')') {
-                return "Missing closing parenthesis ')'. Check that all groups are closed.".to_string();
+                return "Missing closing parenthesis ')'. Check that all groups are closed."
+                    .to_string();
             }
             if pattern.contains('[') && !pattern.contains(']') {
-                return "Missing closing bracket ']'. Check that all character classes are closed.".to_string();
+                return "Missing closing bracket ']'. Check that all character classes are closed."
+                    .to_string();
             }
             if pattern.contains('{') && !pattern.contains('}') {
-                return "Missing closing brace '}'. Check that all quantifiers are closed.".to_string();
+                return "Missing closing brace '}'. Check that all quantifiers are closed."
+                    .to_string();
             }
             return "Check for unclosed parentheses, brackets, or braces.".to_string();
         }
@@ -241,16 +274,20 @@ impl PatternError {
             return "Quantifiers (+, *, ?, {n}) must follow something to repeat.\n  Wrong: +abc  Right: a+bc".to_string();
         }
 
-        if msg_lower.contains("look") && (msg_lower.contains("ahead") || msg_lower.contains("behind")) {
+        if msg_lower.contains("look")
+            && (msg_lower.contains("ahead") || msg_lower.contains("behind"))
+        {
             return "Lookahead/lookbehind requires PCRE mode. Use -P or --pcre flag.".to_string();
         }
 
         if msg_lower.contains("empty") {
-            return "Empty patterns or groups are not allowed. Provide content to match.".to_string();
+            return "Empty patterns or groups are not allowed. Provide content to match."
+                .to_string();
         }
 
         if msg_lower.contains("invalid") && msg_lower.contains("group") {
-            return "Check group syntax: (?:...) for non-capturing, (?<name>...) for named groups.".to_string();
+            return "Check group syntax: (?:...) for non-capturing, (?<name>...) for named groups."
+                .to_string();
         }
 
         // Default hint
@@ -276,14 +313,18 @@ impl From<fancy_regex::Error> for PatternError {
 #[derive(Error, Debug)]
 pub enum LibraryError {
     /// Library file not found
-    #[error("Pattern library not found: '{name}'\n  Searched in:\n{searched_paths}\n\n  Hint: Create a library file or check the path.\n  Example library:\n    [patterns]\n    email = '[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{{2,}}'")]
+    #[error(
+        "Pattern library not found: '{name}'\n  Searched in:\n{searched_paths}\n\n  Hint: Create a library file or check the path.\n  Example library:\n    [patterns]\n    email = '[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{{2,}}'"
+    )]
     NotFound {
         name: String,
         searched_paths: String,
     },
 
     /// Failed to read library file
-    #[error("Failed to read library '{path}': {source}\n\n  Hint: Check file permissions and ensure the file is readable.")]
+    #[error(
+        "Failed to read library '{path}': {source}\n\n  Hint: Check file permissions and ensure the file is readable."
+    )]
     ReadError {
         path: PathBuf,
         #[source]
@@ -291,15 +332,21 @@ pub enum LibraryError {
     },
 
     /// Failed to parse library TOML
-    #[error("Failed to parse library '{path}':\n  {message}\n\n  Hint: Validate TOML syntax. Library files must have a [patterns] section.\n  Example:\n    [patterns]\n    my_pattern = 'regex_here'")]
+    #[error(
+        "Failed to parse library '{path}':\n  {message}\n\n  Hint: Validate TOML syntax. Library files must have a [patterns] section.\n  Example:\n    [patterns]\n    my_pattern = 'regex_here'"
+    )]
     ParseError { path: PathBuf, message: String },
 
     /// Circular include detected
-    #[error("Circular pattern library include detected:\n  {cycle}\n\n  Hint: Remove the circular reference. Libraries cannot include themselves directly or indirectly.")]
+    #[error(
+        "Circular pattern library include detected:\n  {cycle}\n\n  Hint: Remove the circular reference. Libraries cannot include themselves directly or indirectly."
+    )]
     CircularInclude { cycle: String },
 
     /// Invalid pattern in library
-    #[error("Invalid pattern(s) in library '{library}':\n{errors}\n\n  Hint: Test each pattern individually to find the error.\n  Use: rexpipe --validate-library {library}")]
+    #[error(
+        "Invalid pattern(s) in library '{library}':\n{errors}\n\n  Hint: Test each pattern individually to find the error.\n  Use: rexpipe --validate-library {library}"
+    )]
     InvalidPatterns { library: String, errors: String },
 }
 
@@ -311,7 +358,9 @@ impl LibraryError {
             LibraryError::ReadError { .. } => Some("Check file permissions"),
             LibraryError::ParseError { .. } => Some("Validate TOML syntax"),
             LibraryError::CircularInclude { .. } => Some("Remove the circular include reference"),
-            LibraryError::InvalidPatterns { .. } => Some("Use --validate-library to check patterns"),
+            LibraryError::InvalidPatterns { .. } => {
+                Some("Use --validate-library to check patterns")
+            }
         }
     }
 
@@ -337,7 +386,9 @@ impl LibraryError {
 #[derive(Error, Debug)]
 pub enum ValidationError {
     /// Pipeline has no steps
-    #[error("Pipeline must contain at least one step\n\n  Hint: Add at least one [[step]] section to your config, or use -p to specify an inline pattern.\n  Example config:\n    [[step]]\n    type = \"substitute\"\n    pattern = \"old\"\n    replacement = \"new\"")]
+    #[error(
+        "Pipeline must contain at least one step\n\n  Hint: Add at least one [[step]] section to your config, or use -p to specify an inline pattern.\n  Example config:\n    [[step]]\n    type = \"substitute\"\n    pattern = \"old\"\n    replacement = \"new\""
+    )]
     EmptyPipeline,
 
     /// Step validation error
@@ -353,7 +404,9 @@ pub enum ValidationError {
     Multiple { count: usize, errors: String },
 
     /// Contradictory filter configuration
-    #[error("Contradictory filter configuration in steps {step1} and {step2}:\n  Step {step1}: {action1} lines matching '{pattern}'\n  Step {step2}: {action2} lines matching the same pattern\n\n  Hint: These steps conflict. The second step will have no effect.\n  Remove one of the steps or use different patterns.")]
+    #[error(
+        "Contradictory filter configuration in steps {step1} and {step2}:\n  Step {step1}: {action1} lines matching '{pattern}'\n  Step {step2}: {action2} lines matching the same pattern\n\n  Hint: These steps conflict. The second step will have no effect.\n  Remove one of the steps or use different patterns."
+    )]
     ContradictoryFilters {
         step1: usize,
         step2: usize,
@@ -363,11 +416,15 @@ pub enum ValidationError {
     },
 
     /// Invalid step type
-    #[error("Unknown step type '{step_type}' in step {step}\n\n  Hint: Valid step types are: substitute, filter, extract, validate, transform\n  Example:\n    [[step]]\n    type = \"substitute\"")]
+    #[error(
+        "Unknown step type '{step_type}' in step {step}\n\n  Hint: Valid step types are: substitute, filter, extract, validate, transform\n  Example:\n    [[step]]\n    type = \"substitute\""
+    )]
     InvalidStepType { step: usize, step_type: String },
 
     /// Missing required field in step
-    #[error("Step {step} is missing required field '{field}'\n\n  Hint: {hint}\n  Example:\n{example}")]
+    #[error(
+        "Step {step} is missing required field '{field}'\n\n  Hint: {hint}\n  Example:\n{example}"
+    )]
     MissingStepField {
         step: usize,
         field: String,
@@ -452,9 +509,11 @@ impl From<toml::de::Error> for ConfigError {
             hint: if message.contains("missing field") {
                 "Check that all required fields are present in your configuration.".to_string()
             } else if message.contains("unknown field") {
-                "Check for typos in field names. Use --export toml to see valid structure.".to_string()
+                "Check for typos in field names. Use --export toml to see valid structure."
+                    .to_string()
             } else if message.contains("invalid type") {
-                "Check that values have the correct type (string, number, boolean, etc.)".to_string()
+                "Check that values have the correct type (string, number, boolean, etc.)"
+                    .to_string()
             } else {
                 "Validate your TOML at https://www.toml-lint.com/".to_string()
             },
@@ -489,7 +548,11 @@ mod tests {
         let err = PatternError::invalid_regex("\\d", "invalid escape");
         match err {
             PatternError::InvalidRegex { hint, .. } => {
-                assert!(hint.contains("backslash") || hint.contains("escape") || hint.contains("regex101"));
+                assert!(
+                    hint.contains("backslash")
+                        || hint.contains("escape")
+                        || hint.contains("regex101")
+                );
             }
             _ => panic!("Expected InvalidRegex"),
         }
@@ -585,7 +648,10 @@ mod tests {
 
     #[test]
     fn test_pattern_error_unknown_reference() {
-        let err = PatternError::unknown_reference("my_pattern", vec!["email".to_string(), "url".to_string()]);
+        let err = PatternError::unknown_reference(
+            "my_pattern",
+            vec!["email".to_string(), "url".to_string()],
+        );
         let msg = err.to_string();
         assert!(msg.contains("my_pattern"));
         assert!(msg.contains("email"));
@@ -659,7 +725,9 @@ mod tests {
 
     #[test]
     fn test_pattern_error_too_complex() {
-        let err = PatternError::TooComplex { pattern: "very.*complex.*pattern".to_string() };
+        let err = PatternError::TooComplex {
+            pattern: "very.*complex.*pattern".to_string(),
+        };
         let msg = err.to_string();
         assert!(msg.contains("too complex"));
         assert!(msg.contains("very.*complex.*pattern"));
@@ -669,10 +737,28 @@ mod tests {
     fn test_pattern_error_suggestions() {
         assert!(PatternError::PcreNotEnabled.suggestion().is_some());
         assert!(PatternError::EmptyPattern.suggestion().is_some());
-        assert!(PatternError::TooComplex { pattern: "x".to_string() }.suggestion().is_some());
-        assert!(PatternError::invalid_regex("x", "err").suggestion().is_some());
-        assert!(PatternError::unknown_reference("x", vec![]).suggestion().is_some());
-        assert!(PatternError::potential_redos("x", "risk").suggestion().is_some());
+        assert!(
+            PatternError::TooComplex {
+                pattern: "x".to_string()
+            }
+            .suggestion()
+            .is_some()
+        );
+        assert!(
+            PatternError::invalid_regex("x", "err")
+                .suggestion()
+                .is_some()
+        );
+        assert!(
+            PatternError::unknown_reference("x", vec![])
+                .suggestion()
+                .is_some()
+        );
+        assert!(
+            PatternError::potential_redos("x", "risk")
+                .suggestion()
+                .is_some()
+        );
     }
 
     #[test]
@@ -692,7 +778,9 @@ mod tests {
 
     #[test]
     fn test_config_error_not_found() {
-        let err = ConfigError::NotFound { path: PathBuf::from("/path/to/config.toml") };
+        let err = ConfigError::NotFound {
+            path: PathBuf::from("/path/to/config.toml"),
+        };
         let msg = err.to_string();
         assert!(msg.contains("/path/to/config.toml"));
         assert!(msg.contains("not found"));
@@ -739,14 +827,35 @@ mod tests {
 
     #[test]
     fn test_config_error_suggestions() {
-        assert!(ConfigError::NotFound { path: PathBuf::from("x") }.suggestion().is_some());
-        assert!(ConfigError::ReadError {
-            path: PathBuf::from("x"),
-            source: std::io::Error::new(std::io::ErrorKind::Other, "err")
-        }.suggestion().is_some());
-        assert!(ConfigError::ParseError { path: PathBuf::from("x"), message: "err".to_string() }.suggestion().is_some());
+        assert!(
+            ConfigError::NotFound {
+                path: PathBuf::from("x")
+            }
+            .suggestion()
+            .is_some()
+        );
+        assert!(
+            ConfigError::ReadError {
+                path: PathBuf::from("x"),
+                source: std::io::Error::new(std::io::ErrorKind::Other, "err")
+            }
+            .suggestion()
+            .is_some()
+        );
+        assert!(
+            ConfigError::ParseError {
+                path: PathBuf::from("x"),
+                message: "err".to_string()
+            }
+            .suggestion()
+            .is_some()
+        );
         assert!(ConfigError::invalid("msg", "hint").suggestion().is_some());
-        assert!(ConfigError::missing_field("field", "example").suggestion().is_some());
+        assert!(
+            ConfigError::missing_field("field", "example")
+                .suggestion()
+                .is_some()
+        );
     }
 
     // ========================================
@@ -822,13 +931,37 @@ mod tests {
     #[test]
     fn test_library_error_suggestions() {
         assert!(LibraryError::not_found("x", &[]).suggestion().is_some());
-        assert!(LibraryError::ReadError {
-            path: PathBuf::from("x"),
-            source: std::io::Error::new(std::io::ErrorKind::Other, "err")
-        }.suggestion().is_some());
-        assert!(LibraryError::ParseError { path: PathBuf::from("x"), message: "err".to_string() }.suggestion().is_some());
-        assert!(LibraryError::CircularInclude { cycle: "a->b".to_string() }.suggestion().is_some());
-        assert!(LibraryError::InvalidPatterns { library: "x".to_string(), errors: "err".to_string() }.suggestion().is_some());
+        assert!(
+            LibraryError::ReadError {
+                path: PathBuf::from("x"),
+                source: std::io::Error::new(std::io::ErrorKind::Other, "err")
+            }
+            .suggestion()
+            .is_some()
+        );
+        assert!(
+            LibraryError::ParseError {
+                path: PathBuf::from("x"),
+                message: "err".to_string()
+            }
+            .suggestion()
+            .is_some()
+        );
+        assert!(
+            LibraryError::CircularInclude {
+                cycle: "a->b".to_string()
+            }
+            .suggestion()
+            .is_some()
+        );
+        assert!(
+            LibraryError::InvalidPatterns {
+                library: "x".to_string(),
+                errors: "err".to_string()
+            }
+            .suggestion()
+            .is_some()
+        );
     }
 
     // ========================================
@@ -941,13 +1074,43 @@ mod tests {
     #[test]
     fn test_validation_error_suggestions() {
         assert!(ValidationError::EmptyPipeline.suggestion().is_some());
-        assert!(ValidationError::step_error(1, "msg", "hint").suggestion().is_some());
-        assert!(ValidationError::Multiple { count: 1, errors: "err".to_string() }.suggestion().is_some());
-        assert!(ValidationError::ContradictoryFilters {
-            step1: 1, step2: 2, pattern: "x".to_string(), action1: "a".to_string(), action2: "b".to_string()
-        }.suggestion().is_some());
-        assert!(ValidationError::InvalidStepType { step: 1, step_type: "x".to_string() }.suggestion().is_some());
-        assert!(ValidationError::missing_field(1, "x", "y").suggestion().is_some());
+        assert!(
+            ValidationError::step_error(1, "msg", "hint")
+                .suggestion()
+                .is_some()
+        );
+        assert!(
+            ValidationError::Multiple {
+                count: 1,
+                errors: "err".to_string()
+            }
+            .suggestion()
+            .is_some()
+        );
+        assert!(
+            ValidationError::ContradictoryFilters {
+                step1: 1,
+                step2: 2,
+                pattern: "x".to_string(),
+                action1: "a".to_string(),
+                action2: "b".to_string()
+            }
+            .suggestion()
+            .is_some()
+        );
+        assert!(
+            ValidationError::InvalidStepType {
+                step: 1,
+                step_type: "x".to_string()
+            }
+            .suggestion()
+            .is_some()
+        );
+        assert!(
+            ValidationError::missing_field(1, "x", "y")
+                .suggestion()
+                .is_some()
+        );
     }
 
     // ========================================
@@ -956,7 +1119,9 @@ mod tests {
 
     #[test]
     fn test_rexpipe_error_from_config() {
-        let config_err = ConfigError::NotFound { path: PathBuf::from("test.toml") };
+        let config_err = ConfigError::NotFound {
+            path: PathBuf::from("test.toml"),
+        };
         let err: RexpipeError = config_err.into();
         match err {
             RexpipeError::Config(_) => {}
@@ -1014,7 +1179,9 @@ mod tests {
     #[test]
     fn test_rexpipe_error_suggestions() {
         // Config suggestion comes from inner ConfigError
-        let err = RexpipeError::Config(ConfigError::NotFound { path: PathBuf::from("x") });
+        let err = RexpipeError::Config(ConfigError::NotFound {
+            path: PathBuf::from("x"),
+        });
         assert!(err.suggestion().is_some());
 
         // Pattern suggestion
@@ -1058,7 +1225,12 @@ mod tests {
     fn test_error_debug_impl() {
         // Test that all errors implement Debug
         let _ = format!("{:?}", PatternError::EmptyPattern);
-        let _ = format!("{:?}", ConfigError::NotFound { path: PathBuf::from("x") });
+        let _ = format!(
+            "{:?}",
+            ConfigError::NotFound {
+                path: PathBuf::from("x")
+            }
+        );
         let _ = format!("{:?}", LibraryError::not_found("x", &[]));
         let _ = format!("{:?}", ValidationError::EmptyPipeline);
         let _ = format!("{:?}", RexpipeError::Processing("x".to_string()));
@@ -1068,7 +1240,10 @@ mod tests {
     fn test_error_display_impl() {
         // Test that all errors implement Display
         let _ = PatternError::EmptyPattern.to_string();
-        let _ = ConfigError::NotFound { path: PathBuf::from("x") }.to_string();
+        let _ = ConfigError::NotFound {
+            path: PathBuf::from("x"),
+        }
+        .to_string();
         let _ = LibraryError::not_found("x", &[]).to_string();
         let _ = ValidationError::EmptyPipeline.to_string();
         let _ = RexpipeError::Processing("x".to_string()).to_string();

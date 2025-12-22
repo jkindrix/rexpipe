@@ -1,0 +1,26 @@
+Source: rexpipe
+Section: utils
+Priority: optional
+Maintainer: Justin Kindrix <jkindrix@gmail.com>
+Build-Depends: debhelper-compat (= 13), cargo, rustc (>= 1.85)
+Standards-Version: 4.6.2
+Homepage: https://github.com/jkindrix/rexpipe
+Vcs-Browser: https://github.com/jkindrix/rexpipe
+Vcs-Git: https://github.com/jkindrix/rexpipe.git
+Rules-Requires-Root: no
+
+Package: rexpipe
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: Modern regex pipeline processor for automated text processing
+ rexpipe is a powerful command-line tool for processing text using
+ regex-based pipelines. It supports complex transformations, filtering,
+ extraction, and validation of text data.
+ .
+ Features:
+  - Multi-step pipeline processing
+  - In-place file editing with backup
+  - Pattern libraries for reusable patterns
+  - PCRE support for advanced regex features
+  - Parallel file processing
+  - Inspect mode for interactive pattern testing

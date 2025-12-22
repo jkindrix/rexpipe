@@ -1,0 +1,104 @@
+name = "csv-clean"
+description = "Clean and normalize messy CSV data (whitespace and null handling)"
+# Usage: cat dirty.csv | rexpipe -c csv-clean.toml > clean.csv
+# Note: For complex CSV with embedded commas, use a proper CSV parser
+
+# =============================================================================
+# PHASE 1: Clean whitespace
+# =============================================================================
+
+# Trim leading whitespace from line
+[[step]]
+type = "substitute"
+pattern = "^\\s+"
+replacement = ""
+
+# Trim trailing whitespace from line
+[[step]]
+type = "substitute"
+pattern = "\\s+$"
+replacement = ""
+
+# Trim spaces after commas
+[[step]]
+type = "substitute"
+pattern = ",\\s+"
+replacement = ","
+flags = ["global"]
+
+# Trim spaces before commas
+[[step]]
+type = "substitute"
+pattern = "\\s+,"
+replacement = ","
+flags = ["global"]
+
+# =============================================================================
+# PHASE 2: Normalize null/empty values
+# =============================================================================
+
+# Replace NULL variants with empty
+[[step]]
+type = "substitute"
+pattern = ",NULL,"
+replacement = ",,"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+pattern = ",null,"
+replacement = ",,"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+pattern = ",N/A,"
+replacement = ",,"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+pattern = ",n/a,"
+replacement = ",,"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+pattern = ",NA,"
+replacement = ",,"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+pattern = ",-,"
+replacement = ",,"
+flags = ["global"]
+
+# =============================================================================
+# PHASE 3: Date format normalization (MM/DD/YYYY -> YYYY-MM-DD)
+# =============================================================================
+
+[[step]]
+type = "substitute"
+pattern = "(\\d{1,2})/(\\d{1,2})/(\\d{4})"
+replacement = "$3-$1-$2"
+flags = ["global"]
+
+# =============================================================================
+# PHASE 4: Remove currency symbols
+# =============================================================================
+
+[[step]]
+type = "substitute"
+pattern = "\\$([0-9])"
+replacement = "$1"
+flags = ["global"]
+
+# =============================================================================
+# PHASE 5: Remove empty lines
+# =============================================================================
+
+[[step]]
+type = "filter"
+pattern = "^,*$"
+action = "drop_line"

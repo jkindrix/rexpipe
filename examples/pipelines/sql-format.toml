@@ -1,0 +1,134 @@
+name = "sql-format"
+description = "Format messy SQL queries for readability"
+# Usage: echo "SELECT a,b FROM t WHERE x=1 AND y=2" | rexpipe -c sql-format.toml
+# Adds newlines and indentation to SQL keywords
+
+# =============================================================================
+# PHASE 1: Normalize whitespace
+# =============================================================================
+
+# Collapse multiple spaces
+[[step]]
+type = "substitute"
+pattern = "  +"
+replacement = " "
+flags = ["global"]
+
+# Trim around commas
+[[step]]
+type = "substitute"
+pattern = "\\s*,\\s*"
+replacement = ", "
+flags = ["global"]
+
+# =============================================================================
+# PHASE 2: Add newlines before major keywords
+# =============================================================================
+
+# SELECT on its own line
+[[step]]
+type = "substitute"
+pattern = "\\b(SELECT)\\b"
+replacement = "\n$1"
+
+# FROM on its own line
+[[step]]
+type = "substitute"
+pattern = "\\b(FROM)\\b"
+replacement = "\n$1"
+
+# WHERE on its own line
+[[step]]
+type = "substitute"
+pattern = "\\b(WHERE)\\b"
+replacement = "\n$1"
+
+# AND/OR with indentation
+[[step]]
+type = "substitute"
+pattern = "\\b(AND)\\b"
+replacement = "\n  $1"
+
+[[step]]
+type = "substitute"
+pattern = "\\b(OR)\\b"
+replacement = "\n  $1"
+
+# JOIN variants on their own line
+[[step]]
+type = "substitute"
+pattern = "\\b((?:INNER |LEFT |RIGHT |FULL |CROSS )?JOIN)\\b"
+replacement = "\n$1"
+
+# GROUP BY, ORDER BY, HAVING
+[[step]]
+type = "substitute"
+pattern = "\\b(GROUP BY)\\b"
+replacement = "\n$1"
+
+[[step]]
+type = "substitute"
+pattern = "\\b(ORDER BY)\\b"
+replacement = "\n$1"
+
+[[step]]
+type = "substitute"
+pattern = "\\b(HAVING)\\b"
+replacement = "\n$1"
+
+# LIMIT, OFFSET
+[[step]]
+type = "substitute"
+pattern = "\\b(LIMIT)\\b"
+replacement = "\n$1"
+
+[[step]]
+type = "substitute"
+pattern = "\\b(OFFSET)\\b"
+replacement = "\n$1"
+
+# =============================================================================
+# PHASE 3: Handle INSERT/UPDATE/DELETE
+# =============================================================================
+
+[[step]]
+type = "substitute"
+pattern = "\\b(INSERT INTO)\\b"
+replacement = "\n$1"
+
+[[step]]
+type = "substitute"
+pattern = "\\b(VALUES)\\b"
+replacement = "\n$1"
+
+[[step]]
+type = "substitute"
+pattern = "\\b(UPDATE)\\b"
+replacement = "\n$1"
+
+[[step]]
+type = "substitute"
+pattern = "\\b(SET)\\b"
+replacement = "\n$1"
+
+[[step]]
+type = "substitute"
+pattern = "\\b(DELETE FROM)\\b"
+replacement = "\n$1"
+
+# =============================================================================
+# PHASE 4: Cleanup
+# =============================================================================
+
+# Remove leading newline
+[[step]]
+type = "substitute"
+pattern = "^\\n"
+replacement = ""
+
+# Clean multiple newlines
+[[step]]
+type = "substitute"
+pattern = "\\n\\n+"
+replacement = "\n"
+flags = ["global"]

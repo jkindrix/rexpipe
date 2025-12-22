@@ -1,0 +1,90 @@
+name = "code-lens-deps"
+description = "Extract dependency graph from source imports"
+# Usage: cat src/**/*.rs | rexpipe -c code-lens-deps.toml
+# Or:    cat src/**/*.py | rexpipe -c code-lens-deps.toml
+# Shows what depends on what - useful for understanding module structure
+
+# =============================================================================
+# PHASE 1: Extract Rust imports
+# =============================================================================
+
+# use crate:: imports (internal dependencies)
+[[step]]
+type = "substitute"
+pattern = "^use crate::([a-z_]+)"
+replacement = "[INTERNAL] → $1"
+
+# use super:: imports
+[[step]]
+type = "substitute"
+pattern = "^use super::([a-z_]+)"
+replacement = "[PARENT] → $1"
+
+# use external_crate:: imports
+[[step]]
+type = "substitute"
+pattern = "^use ([a-z_]+)::"
+replacement = "[EXTERNAL] → $1"
+
+# mod declarations
+[[step]]
+type = "substitute"
+pattern = "^(pub )?mod ([a-z_]+);"
+replacement = "[MODULE] $2"
+
+# =============================================================================
+# PHASE 2: Extract Python imports
+# =============================================================================
+
+# from x import y
+[[step]]
+type = "substitute"
+pattern = "^from ([a-zA-Z_][a-zA-Z0-9_.]*) import"
+replacement = "[IMPORT] ← $1"
+
+# import x
+[[step]]
+type = "substitute"
+pattern = "^import ([a-zA-Z_][a-zA-Z0-9_.]*)"
+replacement = "[IMPORT] ← $1"
+
+# =============================================================================
+# PHASE 3: Extract JavaScript/TypeScript imports
+# =============================================================================
+
+# import from
+[[step]]
+type = "substitute"
+pattern = "^import .+ from ['\"]([^'\"]+)['\"]"
+replacement = "[IMPORT] ← $1"
+
+# require
+[[step]]
+type = "substitute"
+pattern = "require\\(['\"]([^'\"]+)['\"]\\)"
+replacement = "[REQUIRE] ← $1"
+
+# =============================================================================
+# PHASE 4: Keep only dependency lines
+# =============================================================================
+
+[[step]]
+type = "filter"
+pattern = "^\\[(INTERNAL|PARENT|EXTERNAL|MODULE|IMPORT|REQUIRE)\\]"
+action = "keep_line"
+
+# =============================================================================
+# PHASE 5: Categorize internal vs external
+# =============================================================================
+
+# Mark standard library
+[[step]]
+type = "substitute"
+pattern = "\\[EXTERNAL\\] → (std|core|alloc)"
+replacement = "[STDLIB] → $1"
+
+# Mark relative imports as internal
+[[step]]
+type = "substitute"
+pattern = "\\[IMPORT\\] ← \\."
+replacement = "[INTERNAL] ← ."

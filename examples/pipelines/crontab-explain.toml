@@ -1,0 +1,91 @@
+name = "crontab-explain"
+description = "Transform crontab entries into human-readable schedules"
+# Usage: crontab -l | rexpipe -c crontab-explain.toml
+# Input:  0 2 * * * /backup.sh
+# Output: [Daily 02:00] /backup.sh
+
+# =============================================================================
+# PHASE 1: Handle common patterns
+# =============================================================================
+
+# Every minute: * * * * *
+[[step]]
+type = "substitute"
+pattern = "^\\*\\s+\\*\\s+\\*\\s+\\*\\s+\\*\\s+(.+)$"
+replacement = "[Every minute] $1"
+
+# Hourly: 0 * * * *
+[[step]]
+type = "substitute"
+pattern = "^0\\s+\\*\\s+\\*\\s+\\*\\s+\\*\\s+(.+)$"
+replacement = "[Hourly :00] $1"
+
+# Daily at specific hour: 0 H * * *
+[[step]]
+type = "substitute"
+pattern = "^0\\s+(\\d{1,2})\\s+\\*\\s+\\*\\s+\\*\\s+(.+)$"
+replacement = "[Daily $1:00] $2"
+
+# Daily at specific time: M H * * *
+[[step]]
+type = "substitute"
+pattern = "^(\\d{1,2})\\s+(\\d{1,2})\\s+\\*\\s+\\*\\s+\\*\\s+(.+)$"
+replacement = "[Daily $2:$1] $3"
+
+# Weekly (day 0 = Sunday): M H * * 0
+[[step]]
+type = "substitute"
+pattern = "^(\\d{1,2})\\s+(\\d{1,2})\\s+\\*\\s+\\*\\s+0\\s+(.+)$"
+replacement = "[Sunday $2:$1] $3"
+
+[[step]]
+type = "substitute"
+pattern = "^(\\d{1,2})\\s+(\\d{1,2})\\s+\\*\\s+\\*\\s+1\\s+(.+)$"
+replacement = "[Monday $2:$1] $3"
+
+[[step]]
+type = "substitute"
+pattern = "^(\\d{1,2})\\s+(\\d{1,2})\\s+\\*\\s+\\*\\s+5\\s+(.+)$"
+replacement = "[Friday $2:$1] $3"
+
+# Monthly: M H D * *
+[[step]]
+type = "substitute"
+pattern = "^(\\d{1,2})\\s+(\\d{1,2})\\s+(\\d{1,2})\\s+\\*\\s+\\*\\s+(.+)$"
+replacement = "[Monthly day $3 $2:$1] $4"
+
+# Every N minutes: */N * * * *
+[[step]]
+type = "substitute"
+pattern = "^\\*/(\\d+)\\s+\\*\\s+\\*\\s+\\*\\s+\\*\\s+(.+)$"
+replacement = "[Every $1 min] $2"
+
+# Every N hours: 0 */N * * *
+[[step]]
+type = "substitute"
+pattern = "^0\\s+\\*/(\\d+)\\s+\\*\\s+\\*\\s+\\*\\s+(.+)$"
+replacement = "[Every $1 hours] $2"
+
+# =============================================================================
+# PHASE 2: Filter out comments and empty lines
+# =============================================================================
+
+[[step]]
+type = "filter"
+pattern = "^\\s*#"
+action = "drop_line"
+
+[[step]]
+type = "filter"
+pattern = "^\\s*$"
+action = "drop_line"
+
+# =============================================================================
+# PHASE 3: Mark unparsed entries
+# =============================================================================
+
+# If line doesn't start with [, mark as complex
+[[step]]
+type = "substitute"
+pattern = "^([^\\[].*)$"
+replacement = "[Complex] $1"

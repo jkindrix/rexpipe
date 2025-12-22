@@ -1,0 +1,81 @@
+name = "http-access-stats"
+description = "Transform HTTP access logs into status code summary"
+# Usage: cat access.log | rexpipe -c http-access-stats.toml
+# Extracts method, path, and status, categorizes by response type
+
+# =============================================================================
+# PHASE 1: Extract request info from various log formats
+# =============================================================================
+
+# Apache/Nginx combined format: extract method, path, status
+[[step]]
+type = "substitute"
+pattern = '^[^\s]+\s+[^\s]+\s+[^\s]+\s+\[[^\]]+\]\s+"(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)\s+([^\s]+)\s+[^"]*"\s+(\d{3})'
+replacement = "$1 $3 $2"
+
+# Simple format: "METHOD /path" STATUS
+[[step]]
+type = "substitute"
+pattern = '^"(GET|POST|PUT|DELETE|PATCH)\s+([^\s]+)[^"]*"\s+(\d{3})'
+replacement = "$1 $3 $2"
+
+# =============================================================================
+# PHASE 2: Categorize by status code
+# =============================================================================
+
+# 2xx Success
+[[step]]
+type = "substitute"
+pattern = "^(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS) (2\\d{2}) "
+replacement = "[OK]      $1 $2 "
+
+# 3xx Redirect
+[[step]]
+type = "substitute"
+pattern = "^(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS) (3\\d{2}) "
+replacement = "[REDIR]   $1 $2 "
+
+# 4xx Client Error
+[[step]]
+type = "substitute"
+pattern = "^(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS) (4\\d{2}) "
+replacement = "[CLIENT]  $1 $2 "
+
+# 5xx Server Error
+[[step]]
+type = "substitute"
+pattern = "^(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS) (5\\d{2}) "
+replacement = "[SERVER]  $1 $2 "
+
+# =============================================================================
+# PHASE 3: Simplify paths for grouping
+# =============================================================================
+
+# Remove query strings
+[[step]]
+type = "substitute"
+pattern = "\\?.*$"
+replacement = ""
+
+# Normalize UUID-like path segments
+[[step]]
+type = "substitute"
+pattern = "/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+replacement = "/:uuid"
+flags = ["global"]
+
+# Normalize numeric IDs in paths
+[[step]]
+type = "substitute"
+pattern = "/\\d+"
+replacement = "/:id"
+flags = ["global"]
+
+# =============================================================================
+# PHASE 4: Filter to only categorized lines
+# =============================================================================
+
+[[step]]
+type = "filter"
+pattern = "^\\[(OK|REDIR|CLIENT|SERVER)\\]"
+action = "keep_line"

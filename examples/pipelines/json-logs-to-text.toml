@@ -1,0 +1,112 @@
+name = "json-logs-to-text"
+description = "Transform JSON log lines into human-readable format"
+# Usage: cat app.log | rexpipe -c json-logs-to-text.toml
+# Input:  {"timestamp":"2024-01-15T10:30:00Z","level":"ERROR","message":"Connection failed","service":"api"}
+# Output: [2024-01-15T10:30:00Z] ERROR [api] Connection failed
+
+# =============================================================================
+# PHASE 1: Extract and restructure JSON fields
+# =============================================================================
+
+# Extract timestamp
+[[step]]
+type = "substitute"
+pattern = '"(timestamp|time|@timestamp|ts)":\s*"([^"]+)"'
+replacement = "[$2]"
+
+# Extract level/severity
+[[step]]
+type = "substitute"
+pattern = '"(level|severity|log_level)":\s*"([^"]+)"'
+replacement = " $2"
+
+# Extract service/component
+[[step]]
+type = "substitute"
+pattern = '"(service|component|source|app)":\s*"([^"]+)"'
+replacement = " [$2]"
+
+# Extract the main message
+[[step]]
+type = "substitute"
+pattern = '"(message|msg|log)":\s*"([^"]+)"'
+replacement = " $2"
+
+# =============================================================================
+# PHASE 2: Clean up JSON artifacts
+# =============================================================================
+
+# Remove remaining JSON structure
+[[step]]
+type = "substitute"
+pattern = '[{}\[\]]'
+replacement = ""
+flags = ["global"]
+
+# Remove remaining quoted fields we don't care about
+[[step]]
+type = "substitute"
+pattern = '"[^"]+"\s*:\s*"[^"]*",?\s*'
+replacement = ""
+flags = ["global"]
+
+# Remove remaining quoted fields with numbers
+[[step]]
+type = "substitute"
+pattern = '"[^"]+"\s*:\s*\d+,?\s*'
+replacement = ""
+flags = ["global"]
+
+# =============================================================================
+# PHASE 3: Normalize severity levels
+# =============================================================================
+
+[[step]]
+type = "substitute"
+pattern = " (error|ERROR|err|ERR) "
+replacement = " ERROR "
+
+[[step]]
+type = "substitute"
+pattern = " (warn|WARN|warning|WARNING) "
+replacement = " WARN  "
+
+[[step]]
+type = "substitute"
+pattern = " (info|INFO) "
+replacement = " INFO  "
+
+[[step]]
+type = "substitute"
+pattern = " (debug|DEBUG) "
+replacement = " DEBUG "
+
+# =============================================================================
+# PHASE 4: Final cleanup
+# =============================================================================
+
+# Clean escaped characters
+[[step]]
+type = "substitute"
+pattern = "\\\\n"
+replacement = " "
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+pattern = '\\"'
+replacement = '"'
+flags = ["global"]
+
+# Collapse multiple spaces
+[[step]]
+type = "substitute"
+pattern = "  +"
+replacement = " "
+flags = ["global"]
+
+# Trim trailing whitespace
+[[step]]
+type = "substitute"
+pattern = "\\s+$"
+replacement = ""

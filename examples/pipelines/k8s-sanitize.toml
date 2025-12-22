@@ -1,0 +1,88 @@
+name = "k8s-sanitize"
+description = "Sanitize Kubernetes manifests for sharing (remove secrets, IPs, etc.)"
+# Usage: kubectl get secret mysecret -o yaml | rexpipe -c k8s-sanitize.toml
+# Or:    cat deployment.yaml | rexpipe -c k8s-sanitize.toml
+# Safe to share: removes sensitive values while preserving structure
+
+# =============================================================================
+# PHASE 1: Redact base64-encoded secret data
+# =============================================================================
+
+# Secret data fields (base64 values)
+[[step]]
+type = "substitute"
+pattern = "^(\\s*)(\\S+):\\s*[A-Za-z0-9+/=]{20,}\\s*$"
+replacement = "$1$2: <REDACTED>"
+
+# Inline base64 in stringData
+[[step]]
+type = "substitute"
+pattern = "(stringData:)"
+replacement = "$1 # VALUES REDACTED"
+
+# =============================================================================
+# PHASE 2: Redact common secret field names
+# =============================================================================
+
+# Password fields
+[[step]]
+type = "substitute"
+pattern = "^(\\s*)(password|passwd|secret|token|api[_-]?key|apikey):\\s*\\S+$"
+replacement = "$1$2: <REDACTED>"
+
+# Connection strings
+[[step]]
+type = "substitute"
+pattern = "^(\\s*)(connection[_-]?string|database[_-]?url|redis[_-]?url):\\s*\\S+$"
+replacement = "$1$2: <REDACTED>"
+
+# =============================================================================
+# PHASE 3: Redact infrastructure details
+# =============================================================================
+
+# IP addresses
+[[step]]
+type = "substitute"
+pattern = "\\b\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\b"
+replacement = "<IP>"
+flags = ["global"]
+
+# Internal hostnames
+[[step]]
+type = "substitute"
+pattern = "\\b[a-z0-9-]+\\.(internal|local|cluster\\.local|svc)\\b"
+replacement = "<INTERNAL_HOST>"
+flags = ["global"]
+
+# AWS account IDs (12 digits)
+[[step]]
+type = "substitute"
+pattern = "\\b\\d{12}\\b"
+replacement = "<AWS_ACCOUNT>"
+flags = ["global"]
+
+# =============================================================================
+# PHASE 4: Redact annotations with sensitive info
+# =============================================================================
+
+# Cert manager annotations
+[[step]]
+type = "substitute"
+pattern = "(cert-manager.io/[^:]+:)\\s*\\S+"
+replacement = "$1 <REDACTED>"
+
+# AWS annotations
+[[step]]
+type = "substitute"
+pattern = "(eks.amazonaws.com/[^:]+:)\\s*\\S+"
+replacement = "$1 <REDACTED>"
+
+# =============================================================================
+# PHASE 5: Preserve structure markers
+# =============================================================================
+
+# Keep YAML structure visible
+[[step]]
+type = "substitute"
+pattern = "^(---)"
+replacement = "$1"

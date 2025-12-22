@@ -13,6 +13,10 @@ pub struct PipelineConfig {
     pub name: Option<String>,
     pub description: Option<String>,
     pub version: Option<String>,
+    /// Base pipeline configuration to extend (inherits steps and settings)
+    /// Steps from the base are prepended to this config's steps
+    #[serde(default)]
+    pub extends: Option<String>,
     /// Pattern libraries to include (supports ${pattern_name} references in steps)
     #[serde(default)]
     pub patterns_include: Vec<String>,
@@ -22,7 +26,6 @@ pub struct PipelineConfig {
     pub step: Vec<PipelineStep>,
 
     // === Advanced feature configurations ===
-
     /// Bidirectional (reversible) pipeline configuration
     #[serde(default)]
     pub bidirectional: BidirectionalConfig,
@@ -38,6 +41,11 @@ pub struct PipelineConfig {
     /// Inline test cases for pipeline validation
     #[serde(default, rename = "test")]
     pub tests: Vec<TestCase>,
+
+    /// Finalize section for post-processing aggregation and summary.
+    /// Runs after all input lines have been processed.
+    #[serde(default)]
+    pub finalize: FinalizeConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -127,6 +135,80 @@ impl Default for PipelineSettings {
     }
 }
 
+impl PipelineSettings {
+    /// Merge with a base config - this config's non-default values override base
+    pub fn merge_with_base(self, base: PipelineSettings) -> PipelineSettings {
+        let default = PipelineSettings::default();
+        PipelineSettings {
+            pcre_mode: if self.pcre_mode != default.pcre_mode {
+                self.pcre_mode
+            } else {
+                base.pcre_mode
+            },
+            fixed_strings: if self.fixed_strings != default.fixed_strings {
+                self.fixed_strings
+            } else {
+                base.fixed_strings
+            },
+            context_before: if self.context_before != default.context_before {
+                self.context_before
+            } else {
+                base.context_before
+            },
+            context_after: if self.context_after != default.context_after {
+                self.context_after
+            } else {
+                base.context_after
+            },
+            timeout_ms: if self.timeout_ms != default.timeout_ms {
+                self.timeout_ms
+            } else {
+                base.timeout_ms
+            },
+            allow_shell: if self.allow_shell != default.allow_shell {
+                self.allow_shell
+            } else {
+                base.allow_shell
+            },
+            strict_mode: if self.strict_mode != default.strict_mode {
+                self.strict_mode
+            } else {
+                base.strict_mode
+            },
+            block_mode: if self.block_mode != default.block_mode {
+                self.block_mode
+            } else {
+                base.block_mode
+            },
+            preserve_line_endings: if self.preserve_line_endings != default.preserve_line_endings {
+                self.preserve_line_endings
+            } else {
+                base.preserve_line_endings
+            },
+            max_line_length: if self.max_line_length != default.max_line_length {
+                self.max_line_length
+            } else {
+                base.max_line_length
+            },
+            max_line_action: if self.max_line_action != default.max_line_action {
+                self.max_line_action
+            } else {
+                base.max_line_action
+            },
+            shell_timeout_secs: if self.shell_timeout_secs != default.shell_timeout_secs {
+                self.shell_timeout_secs
+            } else {
+                base.shell_timeout_secs
+            },
+            regex_size_limit: if self.regex_size_limit != default.regex_size_limit {
+                self.regex_size_limit
+            } else {
+                base.regex_size_limit
+            },
+        }
+    }
+}
+
 fn default_shell_timeout() -> u64 {
     30
 }
@@ -139,6 +221,128 @@ fn default_allow_shell() -> bool {
     // Security: Shell transforms are disabled by default to prevent command injection
     // when processing untrusted input. Enable explicitly with allow_shell = true in config.
     false
+}
+
+// =============================================================================
+// Finalize Configuration - Post-processing aggregation and summary
+// =============================================================================
+
+/// Configuration for the finalize section - runs after all input is processed.
+///
+/// The finalize section enables aggregation operations that require seeing all input
+/// before producing output, such as counting matches, computing statistics, or
+/// producing summaries.
+///
+/// # Example
+///
+/// ```toml
+/// [finalize]
+/// template = """
+/// === Summary ===
+/// Total errors: ${count:errors}
+/// Unique IPs: ${count:unique_ips}
+/// """
+///
+/// [[finalize.counters]]
+/// name = "errors"
+/// pattern = "ERROR|FATAL"
+///
+/// [[finalize.counters]]
+/// name = "unique_ips"
+/// pattern = "^(\\d+\\.\\d+\\.\\d+\\.\\d+)"
+/// deduplicate = true
+/// ```
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct FinalizeConfig {
+    /// Output template with counter references like ${count:COUNTER_NAME}
+    ///
+    /// Available template variables:
+    /// - `${count:NAME}` - Value of counter named NAME
+    /// - `${lines}` - Total lines processed
+    /// - `${matches}` - Total pattern matches across all steps
+    /// - `${transformations}` - Total transformations applied
+    #[serde(default)]
+    pub template: Option<String>,
+
+    /// Shell command to run after processing, receiving accumulated output via stdin.
+    /// Requires `settings.allow_shell = true` in the pipeline config.
+    #[serde(default)]
+    pub shell: Option<String>,
+
+    /// Counters to track during processing
+    #[serde(default)]
+    pub counters: Vec<CounterConfig>,
+
+    /// Whether to suppress normal line output and only show finalize output.
+    /// When true, lines are processed but not output; only the finalize template is shown.
+    /// Default: false (normal output plus finalize summary)
+    #[serde(default)]
+    pub suppress_output: bool,
+
+    /// Output format for finalize: "text" (default), "json"
+    #[serde(default)]
+    pub output_format: Option<FinalizeOutputFormat>,
+}
+
+/// Output format for finalize section
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FinalizeOutputFormat {
+    #[default]
+    Text,
+    Json,
+}
+
+/// Configuration for a counter that tracks pattern matches during processing.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CounterConfig {
+    /// Name of the counter (used in template as ${count:NAME})
+    pub name: String,
+
+    /// Pattern to match for incrementing the counter.
+    /// Each line matching this pattern increments the counter.
+    pub pattern: String,
+
+    /// If true, only count unique matched values (deduplication).
+    /// The first capture group is used for uniqueness; if no capture group,
+    /// the entire match is used.
+    /// Default: false (count all matches)
+    #[serde(default)]
+    pub deduplicate: bool,
+
+    /// Optional description of what this counter tracks
+    #[serde(default)]
+    pub description: Option<String>,
+
+    /// Regex flags for the pattern
+    #[serde(default)]
+    pub flags: Option<Vec<RegexFlag>>,
+
+    /// If true, extract and store matched values (available in JSON output).
+    /// Default: false (only count, don't store values)
+    #[serde(default)]
+    pub collect_values: bool,
+
+    /// Maximum number of values to collect when collect_values is true.
+    /// Default: 1000 (prevents memory exhaustion)
+    #[serde(default = "default_max_collected_values")]
+    pub max_collected_values: usize,
+}
+
+fn default_max_collected_values() -> usize {
+    1000
+}
+
+impl FinalizeConfig {
+    /// Check if finalize is configured (has any meaningful configuration)
+    pub fn is_configured(&self) -> bool {
+        self.template.is_some() || self.shell.is_some() || !self.counters.is_empty()
+    }
+
+    /// Get counter names
+    pub fn counter_names(&self) -> Vec<&str> {
+        self.counters.iter().map(|c| c.name.as_str()).collect()
+    }
 }
 
 /// Action to take when a line exceeds the maximum length
@@ -496,7 +700,10 @@ pub enum BlockAction {
     /// Mark/tag lines within matching blocks
     MarkBlock { marker: String },
     /// Apply a substitution to lines within the block
-    SubstituteInBlock { pattern: String, replacement: String },
+    SubstituteInBlock {
+        pattern: String,
+        replacement: String,
+    },
 }
 
 impl BlockAction {
@@ -507,13 +714,16 @@ impl BlockAction {
             StepAction::DropBlock => Some(BlockAction::DropBlock),
             StepAction::CollectBlock => Some(BlockAction::CollectBlock),
             StepAction::Deduplicate => Some(BlockAction::Deduplicate),
-            StepAction::MarkBlock { marker } => Some(BlockAction::MarkBlock { marker: marker.clone() }),
-            StepAction::SubstituteInBlock { pattern, replacement } => {
-                Some(BlockAction::SubstituteInBlock {
-                    pattern: pattern.clone(),
-                    replacement: replacement.clone(),
-                })
-            }
+            StepAction::MarkBlock { marker } => Some(BlockAction::MarkBlock {
+                marker: marker.clone(),
+            }),
+            StepAction::SubstituteInBlock {
+                pattern,
+                replacement,
+            } => Some(BlockAction::SubstituteInBlock {
+                pattern: pattern.clone(),
+                replacement: replacement.clone(),
+            }),
             _ => None, // Filter actions don't convert to block actions
         }
     }
@@ -646,9 +856,83 @@ pub enum ErrorType {
 
 impl PipelineConfig {
     pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
+        Self::from_file_with_base_dir(path.as_ref(), path.as_ref().parent())
+    }
+
+    /// Load a pipeline config, resolving `extends` relative to the given base directory.
+    fn from_file_with_base_dir(path: &Path, base_dir: Option<&Path>) -> Result<Self> {
         let content = fs::read_to_string(path)?;
-        let config: PipelineConfig = toml::from_str(&content)?;
+        let mut config: PipelineConfig = toml::from_str(&content)?;
+
+        // Handle extends: merge base configuration
+        if let Some(ref extends_path) = config.extends {
+            let base_path = if Path::new(extends_path).is_absolute() {
+                std::path::PathBuf::from(extends_path)
+            } else if let Some(dir) = base_dir {
+                dir.join(extends_path)
+            } else {
+                std::path::PathBuf::from(extends_path)
+            };
+
+            // Prevent infinite recursion by limiting depth
+            let base_config = Self::from_file_with_base_dir(&base_path, base_path.parent())?;
+            config = config.merge_with_base(base_config);
+        }
+
         Ok(config)
+    }
+
+    /// Merge this config with a base config (for extends support)
+    fn merge_with_base(self, base: PipelineConfig) -> PipelineConfig {
+        // Steps from base are prepended to this config's steps
+        let mut merged_steps = base.step;
+        merged_steps.extend(self.step);
+
+        // Pattern includes are merged
+        let mut merged_patterns = base.patterns_include;
+        for pattern in self.patterns_include {
+            if !merged_patterns.contains(&pattern) {
+                merged_patterns.push(pattern);
+            }
+        }
+
+        PipelineConfig {
+            // Keep this config's metadata (name, description, version)
+            name: self.name.or(base.name),
+            description: self.description.or(base.description),
+            version: self.version.or(base.version),
+            extends: None, // Clear extends since we've processed it
+            patterns_include: merged_patterns,
+            // Merge settings (this config's settings override base)
+            settings: self.settings.merge_with_base(base.settings),
+            step: merged_steps,
+            // Use this config's advanced configs if present, else base
+            bidirectional: if self.bidirectional != BidirectionalConfig::default() {
+                self.bidirectional
+            } else {
+                base.bidirectional
+            },
+            checkpoint: if self.checkpoint != CheckpointConfig::default() {
+                self.checkpoint
+            } else {
+                base.checkpoint
+            },
+            cross_file: if self.cross_file != CrossFileConfig::default() {
+                self.cross_file
+            } else {
+                base.cross_file
+            },
+            tests: if !self.tests.is_empty() {
+                self.tests
+            } else {
+                base.tests
+            },
+            finalize: if self.finalize.is_configured() {
+                self.finalize
+            } else {
+                base.finalize
+            },
+        }
     }
 
     /// Create a pipeline from a single inline pattern.
@@ -714,6 +998,7 @@ impl PipelineConfig {
             name: Some("Inline Pipeline".to_string()),
             description: Some("Generated from command line pattern".to_string()),
             version: Some("1.0.0".to_string()),
+            extends: None,
             patterns_include: Vec::new(),
             settings,
             step: vec![step],
@@ -721,6 +1006,7 @@ impl PipelineConfig {
             checkpoint: CheckpointConfig::default(),
             cross_file: CrossFileConfig::default(),
             tests: Vec::new(),
+            finalize: FinalizeConfig::default(),
         }
     }
 
@@ -886,7 +1172,11 @@ impl PipelineConfig {
                         errors.push(format!(
                             "Contradictory filters: Step {} ({} on '{}') conflicts with \
                              Step {} ({} on same pattern). The second filter will have no effect.",
-                            idx1 + 1, action1_str, step1.pattern, idx2 + 1, action2_str
+                            idx1 + 1,
+                            action1_str,
+                            step1.pattern,
+                            idx2 + 1,
+                            action2_str
                         ));
                     }
                 }
@@ -941,9 +1231,7 @@ impl PipelineConfig {
                 StepType::Filter => {
                     if step.action.is_none() {
                         errors.push(crate::error::ValidationError::missing_field(
-                            step_num,
-                            "action",
-                            "filter",
+                            step_num, "action", "filter",
                         ));
                     }
                 }
@@ -1041,12 +1329,9 @@ impl PipelineConfig {
     /// Shell transforms execute external commands and may be restricted
     /// for security reasons when processing untrusted input.
     pub fn has_shell_transforms(&self) -> bool {
-        self.step.iter().any(|step| {
-            matches!(
-                &step.transform,
-                Some(TransformAction::Shell { .. })
-            )
-        })
+        self.step
+            .iter()
+            .any(|step| matches!(&step.transform, Some(TransformAction::Shell { .. })))
     }
 
     /// Get a list of shell commands used in this pipeline.
@@ -1275,7 +1560,9 @@ mod tests {
         };
 
         // Empty pipeline should be rejected
-        let err = config.validate().expect_err("Empty pipeline should be invalid");
+        let err = config
+            .validate()
+            .expect_err("Empty pipeline should be invalid");
         assert!(
             err.iter().any(|e| e.contains("at least one step")),
             "Error should mention missing steps: {:?}",
@@ -1295,7 +1582,9 @@ mod tests {
         });
 
         // Substitute step without replacement should be rejected
-        let err = config.validate().expect_err("Substitute without replacement should be invalid");
+        let err = config
+            .validate()
+            .expect_err("Substitute without replacement should be invalid");
         assert!(
             err.iter().any(|e| e.contains("replacement")),
             "Error should mention missing replacement: {:?}",
@@ -1303,7 +1592,9 @@ mod tests {
         );
 
         config.step[0].replacement = Some("replacement".to_string());
-        config.validate().expect("Valid config should pass validation");
+        config
+            .validate()
+            .expect("Valid config should pass validation");
     }
 
     #[test]
@@ -1463,7 +1754,11 @@ mod tests {
         let result = config.validate();
         assert!(result.is_err());
         let errors = result.unwrap_err();
-        assert!(errors.iter().any(|e| e.contains("${") && e.contains("library")));
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("${") && e.contains("library"))
+        );
     }
 
     #[test]
@@ -1567,5 +1862,64 @@ mod tests {
             result.unwrap_err(),
             crate::error::ValidationError::ContradictoryFilters { .. }
         ));
+    }
+
+    #[test]
+    fn test_config_merge_with_base() {
+        // Create a base config with settings
+        let base = PipelineConfig {
+            name: Some("Base".to_string()),
+            description: Some("Base description".to_string()),
+            version: Some("1.0.0".to_string()),
+            settings: PipelineSettings {
+                pcre_mode: true,
+                strict_mode: true,
+                ..Default::default()
+            },
+            step: vec![PipelineStep {
+                pattern: "base_pattern".to_string(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        // Create a child config that overrides some values
+        // Note: Child can only override if the value differs from default
+        let child = PipelineConfig {
+            name: Some("Child".to_string()),
+            description: None, // Should inherit from base
+            version: None,     // Should inherit from base
+            settings: PipelineSettings {
+                block_mode: true, // Explicitly set (differs from default false)
+                timeout_ms: 5000, // Explicitly set (differs from default 0)
+                ..Default::default()
+            },
+            step: vec![PipelineStep {
+                pattern: "child_pattern".to_string(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let merged = child.merge_with_base(base);
+
+        // Child name should override
+        assert_eq!(merged.name, Some("Child".to_string()));
+        // Should inherit base description
+        assert_eq!(merged.description, Some("Base description".to_string()));
+        // Should inherit base version
+        assert_eq!(merged.version, Some("1.0.0".to_string()));
+        // Base pcre_mode should be inherited (child didn't set it)
+        assert!(merged.settings.pcre_mode);
+        // Base strict_mode should be inherited (child used default)
+        assert!(merged.settings.strict_mode);
+        // Child block_mode should be set (explicitly differs from default)
+        assert!(merged.settings.block_mode);
+        // Child timeout should be set
+        assert_eq!(merged.settings.timeout_ms, 5000);
+        // Steps are merged: base steps first, then child steps
+        assert_eq!(merged.step.len(), 2);
+        assert_eq!(merged.step[0].pattern, "base_pattern");
+        assert_eq!(merged.step[1].pattern, "child_pattern");
     }
 }

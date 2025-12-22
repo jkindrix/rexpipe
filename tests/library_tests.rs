@@ -257,7 +257,7 @@ exists = 'pattern'
             flags: None,
             description: None,
             enabled: Some(true),
-                ..Default::default()
+            ..Default::default()
         }],
         ..Default::default()
     };
@@ -302,7 +302,7 @@ suffix = 'END$'
             flags: None,
             description: None,
             enabled: Some(true),
-                ..Default::default()
+            ..Default::default()
         }],
         ..Default::default()
     };

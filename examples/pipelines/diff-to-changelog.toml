@@ -1,0 +1,73 @@
+name = "diff-to-changelog"
+description = "Transform git diff into changelog-style summary"
+# Usage: git diff HEAD~1 | rexpipe -c diff-to-changelog.toml
+# Extracts what files changed and summarizes additions/removals
+
+# =============================================================================
+# PHASE 1: Extract file headers
+# =============================================================================
+
+# Keep diff headers: diff --git a/file b/file
+[[step]]
+type = "filter"
+pattern = "^(diff --git|\\+\\+\\+|---)"
+action = "keep_line"
+
+# =============================================================================
+# PHASE 2: Clean up file paths
+# =============================================================================
+
+# Extract file from diff --git
+[[step]]
+type = "substitute"
+pattern = "^diff --git a/(.+) b/(.+)$"
+replacement = "📄 $2"
+
+# Remove +++ and --- lines (redundant with above)
+[[step]]
+type = "filter"
+pattern = "^(\\+\\+\\+|---)"
+action = "drop_line"
+
+# =============================================================================
+# PHASE 3: Categorize by file type
+# =============================================================================
+
+# Source files
+[[step]]
+type = "substitute"
+pattern = "^📄 (.+\\.(rs|py|js|ts|go|java|c|cpp|rb))$"
+replacement = "[SOURCE] $1"
+
+# Test files
+[[step]]
+type = "substitute"
+pattern = "^📄 (.*(test|spec|_test|_spec)\\.[^.]+)$"
+replacement = "[TEST] $1"
+
+# Config files
+[[step]]
+type = "substitute"
+pattern = "^📄 (.+\\.(toml|yaml|yml|json|xml|ini|cfg|conf))$"
+replacement = "[CONFIG] $1"
+
+# Documentation
+[[step]]
+type = "substitute"
+pattern = "^📄 (.+\\.(md|rst|txt|adoc))$"
+replacement = "[DOCS] $1"
+
+# Remaining files
+[[step]]
+type = "substitute"
+pattern = "^📄 (.+)$"
+replacement = "[FILE] $1"
+
+# =============================================================================
+# PHASE 4: Clean up
+# =============================================================================
+
+[[step]]
+type = "filter"
+pattern = "^\\[(SOURCE|TEST|CONFIG|DOCS|FILE)\\]"
+action = "keep_line"

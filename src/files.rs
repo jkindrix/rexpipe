@@ -73,8 +73,8 @@ use rayon::prelude::*;
 use std::fs::{self, File};
 use std::io::{BufReader, IsTerminal};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 /// Minimum number of files required before parallel processing is used.
 ///
@@ -205,14 +205,16 @@ fn format_walk_error(err: &ignore::Error) -> String {
             )
         }
         ignore::Error::Glob { glob, err } => {
-            format!("Invalid glob pattern '{}': {}", glob.as_deref().unwrap_or("<unknown>"), err)
+            format!(
+                "Invalid glob pattern '{}': {}",
+                glob.as_deref().unwrap_or("<unknown>"),
+                err
+            )
         }
         ignore::Error::UnrecognizedFileType(file_type) => {
             format!("Unrecognized file type: {}", file_type)
         }
-        ignore::Error::InvalidDefinition => {
-            "Invalid file type definition".to_string()
-        }
+        ignore::Error::InvalidDefinition => "Invalid file type definition".to_string(),
         ignore::Error::Partial(errors) => {
             let msgs: Vec<String> = errors.iter().map(format_walk_error).collect();
             format!("Multiple errors: {}", msgs.join("; "))
@@ -621,7 +623,11 @@ impl FileProcessingOptions {
                     Ok(false) => false,
                     Err(e) => {
                         // If we can't read the file, let the actual processing handle the error
-                        trace!("Could not check if file is binary: {}: {}", path.display(), e);
+                        trace!(
+                            "Could not check if file is binary: {}: {}",
+                            path.display(),
+                            e
+                        );
                         false
                     }
                 }
@@ -2166,11 +2172,14 @@ mod tests {
         fs::write(temp_dir.path().join("text.txt"), "content 123").unwrap();
 
         // Create a binary file
-        fs::write(temp_dir.path().join("binary.bin"), b"data\x00with\x00nulls 456").unwrap();
+        fs::write(
+            temp_dir.path().join("binary.bin"),
+            b"data\x00with\x00nulls 456",
+        )
+        .unwrap();
 
         let config = PipelineConfig::from_inline_pattern(r"\d+", None);
-        let options = FileProcessingOptions::default()
-            .binary_mode(BinaryMode::Auto);
+        let options = FileProcessingOptions::default().binary_mode(BinaryMode::Auto);
         let processor = MultiFileProcessor::new(config, options);
 
         let files = vec![
@@ -2193,11 +2202,14 @@ mod tests {
         fs::write(temp_dir.path().join("text.txt"), "content 123").unwrap();
 
         // Create a binary file
-        fs::write(temp_dir.path().join("binary.bin"), b"data\x00with\x00nulls 456").unwrap();
+        fs::write(
+            temp_dir.path().join("binary.bin"),
+            b"data\x00with\x00nulls 456",
+        )
+        .unwrap();
 
         let config = PipelineConfig::from_inline_pattern(r"\d+", None);
-        let options = FileProcessingOptions::default()
-            .binary_mode(BinaryMode::Text);
+        let options = FileProcessingOptions::default().binary_mode(BinaryMode::Text);
         let processor = MultiFileProcessor::new(config, options);
 
         let files = vec![

@@ -83,13 +83,16 @@ impl std::str::FromStr for ViolationAction {
             "fail" | "error" => Ok(ViolationAction::Fail),
             "fix" | "auto" | "auto-fix" => Ok(ViolationAction::Fix),
             "skip" | "ignore" => Ok(ViolationAction::Skip),
-            _ => Err(format!("Invalid action '{}'. Valid: warn, fail, fix, skip", s)),
+            _ => Err(format!(
+                "Invalid action '{}'. Valid: warn, fail, fix, skip",
+                s
+            )),
         }
     }
 }
 
 /// A rule defining cross-file relationships.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CrossFileRule {
     /// Rule name for identification (optional, auto-generated if not provided)
     #[serde(default)]
@@ -173,7 +176,10 @@ impl CrossFileRule {
         let dir = trigger_path.parent()?.to_string_lossy();
         let name = trigger_path.file_name()?.to_string_lossy();
         let stem = trigger_path.file_stem()?.to_string_lossy();
-        let ext = trigger_path.extension().map(|e| e.to_string_lossy()).unwrap_or_default();
+        let ext = trigger_path
+            .extension()
+            .map(|e| e.to_string_lossy())
+            .unwrap_or_default();
 
         let result = template
             .replace("{dir}", &dir)
@@ -405,10 +411,12 @@ impl CrossFileManager {
                     };
 
                     for file_path in self.file_contents.keys() {
-                        if file_path != trigger_file && related_glob.matches_path(file_path)
-                            && !group.related.contains(file_path) {
-                                group.related.push(file_path.clone());
-                            }
+                        if file_path != trigger_file
+                            && related_glob.matches_path(file_path)
+                            && !group.related.contains(file_path)
+                        {
+                            group.related.push(file_path.clone());
+                        }
                     }
                 }
             }
@@ -436,7 +444,11 @@ impl CrossFileManager {
     ///
     /// # Returns
     /// A tuple of (files_modified, fixes_applied)
-    pub fn apply_fixes(&self, results: &[CrossFileCheckResult], dry_run: bool) -> Result<(usize, usize)> {
+    pub fn apply_fixes(
+        &self,
+        results: &[CrossFileCheckResult],
+        dry_run: bool,
+    ) -> Result<(usize, usize)> {
         let mut files_modified = 0;
         let mut fixes_applied = 0;
 
@@ -463,9 +475,7 @@ impl CrossFileManager {
                     use std::fs::OpenOptions;
                     use std::io::Write;
 
-                    let mut file = OpenOptions::new()
-                        .append(true)
-                        .open(&violation.file)?;
+                    let mut file = OpenOptions::new().append(true).open(&violation.file)?;
 
                     writeln!(file, "{}", fix_text)?;
                     files_modified += 1;
@@ -496,7 +506,7 @@ pub struct FileGroup {
 }
 
 /// Configuration for cross-file processing in pipeline.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub struct CrossFileConfig {
     /// Enable cross-file processing
     #[serde(default)]
@@ -545,8 +555,7 @@ impl CrossFileConfig {
     /// action = "warn"
     /// ```
     pub fn load_rules_file(path: impl AsRef<Path>) -> Result<Self> {
-        let content = std::fs::read_to_string(path.as_ref())
-            .map_err(CrossFileError::Io)?;
+        let content = std::fs::read_to_string(path.as_ref()).map_err(CrossFileError::Io)?;
 
         #[derive(Deserialize)]
         struct RulesFile {
@@ -577,7 +586,12 @@ pub fn format_check_report(results: &[CrossFileCheckResult]) -> String {
     report.push_str("║              CROSS-FILE CONSISTENCY CHECK                        ║\n");
     report.push_str("╚══════════════════════════════════════════════════════════════════╝\n\n");
 
-    report.push_str(&format!("Total checks: {} ({} passed, {} failed)\n\n", results.len(), passed, failed));
+    report.push_str(&format!(
+        "Total checks: {} ({} passed, {} failed)\n\n",
+        results.len(),
+        passed,
+        failed
+    ));
 
     for result in results {
         let status = if result.passed { "✓" } else { "✗" };
@@ -641,21 +655,29 @@ mod tests {
 
     #[test]
     fn test_violation_action_parsing() {
-        assert_eq!("warn".parse::<ViolationAction>().unwrap(), ViolationAction::Warn);
-        assert_eq!("fail".parse::<ViolationAction>().unwrap(), ViolationAction::Fail);
-        assert_eq!("fix".parse::<ViolationAction>().unwrap(), ViolationAction::Fix);
-        assert_eq!("skip".parse::<ViolationAction>().unwrap(), ViolationAction::Skip);
+        assert_eq!(
+            "warn".parse::<ViolationAction>().unwrap(),
+            ViolationAction::Warn
+        );
+        assert_eq!(
+            "fail".parse::<ViolationAction>().unwrap(),
+            ViolationAction::Fail
+        );
+        assert_eq!(
+            "fix".parse::<ViolationAction>().unwrap(),
+            ViolationAction::Fix
+        );
+        assert_eq!(
+            "skip".parse::<ViolationAction>().unwrap(),
+            ViolationAction::Skip
+        );
     }
 
     #[test]
     fn test_cross_file_manager() {
         let mut manager = CrossFileManager::new();
 
-        manager.add_rule(CrossFileRule::new(
-            "test-sync",
-            r"api/v1/",
-            "**/*.test.ts",
-        ));
+        manager.add_rule(CrossFileRule::new("test-sync", r"api/v1/", "**/*.test.ts"));
 
         manager.file_contents.insert(
             PathBuf::from("src/api.ts"),

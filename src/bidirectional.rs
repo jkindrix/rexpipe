@@ -85,7 +85,7 @@ impl std::str::FromStr for Direction {
 }
 
 /// Configuration for bidirectional pipeline support.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub struct BidirectionalConfig {
     /// Enable bidirectional mode
     #[serde(default)]
@@ -196,9 +196,8 @@ impl MappingStore {
             BidirectionalError::MappingLoadError(format!("{}: {}", path.as_ref().display(), e))
         })?;
 
-        serde_json::from_str(&content).map_err(|e| {
-            BidirectionalError::MappingLoadError(format!("Invalid JSON: {}", e))
-        })
+        serde_json::from_str(&content)
+            .map_err(|e| BidirectionalError::MappingLoadError(format!("Invalid JSON: {}", e)))
     }
 
     /// Save mappings to a file.
@@ -223,13 +222,11 @@ impl MappingStore {
         self.forward.insert(entry.original.clone(), entry.clone());
 
         // Add to reverse map
-        self.reverse.insert(entry.transformed.clone(), entry.clone());
+        self.reverse
+            .insert(entry.transformed.clone(), entry.clone());
 
         // Add to step-specific map
-        self.by_step
-            .entry(step_index)
-            .or_default()
-            .push(entry);
+        self.by_step.entry(step_index).or_default().push(entry);
     }
 
     /// Look up the transformed value for an original value.
@@ -462,7 +459,9 @@ impl BidirectionalManager {
 }
 
 /// Analyze a pipeline configuration for reversibility.
-pub fn analyze_reversibility(steps: &[super::pipeline::PipelineStep]) -> Vec<(usize, Reversibility)> {
+pub fn analyze_reversibility(
+    steps: &[super::pipeline::PipelineStep],
+) -> Vec<(usize, Reversibility)> {
     use super::pipeline::{StepType, TransformAction};
 
     steps
@@ -493,23 +492,20 @@ pub fn analyze_reversibility(steps: &[super::pipeline::PipelineStep]) -> Vec<(us
                             // Case changes lose original casing
                             Reversibility::WithMapping
                         }
-                        Some(TransformAction::Base64Encode) | Some(TransformAction::Base64Decode) |
-                        Some(TransformAction::UrlEncode) | Some(TransformAction::UrlDecode) => {
-                            Reversibility::Inherent
-                        }
-                        Some(TransformAction::Reverse) => {
-                            Reversibility::Inherent
-                        }
-                        Some(TransformAction::Trim) | Some(TransformAction::RemoveWhitespace) |
-                        Some(TransformAction::NormalizeWhitespace) => {
+                        Some(TransformAction::Base64Encode)
+                        | Some(TransformAction::Base64Decode)
+                        | Some(TransformAction::UrlEncode)
+                        | Some(TransformAction::UrlDecode) => Reversibility::Inherent,
+                        Some(TransformAction::Reverse) => Reversibility::Inherent,
+                        Some(TransformAction::Trim)
+                        | Some(TransformAction::RemoveWhitespace)
+                        | Some(TransformAction::NormalizeWhitespace) => {
                             // Whitespace changes lose original formatting
                             Reversibility::NotReversible
                         }
                         #[cfg(feature = "fpe")]
-                        Some(TransformAction::FpeEncrypt { .. }) |
-                        Some(TransformAction::FpeDecrypt { .. }) => {
-                            Reversibility::Inherent
-                        }
+                        Some(TransformAction::FpeEncrypt { .. })
+                        | Some(TransformAction::FpeDecrypt { .. }) => Reversibility::Inherent,
                         Some(TransformAction::MaskDeterministic { .. }) => {
                             // Masking is one-way
                             Reversibility::NotReversible
@@ -559,43 +555,53 @@ pub fn generate_reverse_pipeline(
                     Some(TransformAction::UrlDecode) => Some(TransformAction::UrlEncode),
                     Some(TransformAction::Reverse) => Some(TransformAction::Reverse),
                     #[cfg(feature = "fpe")]
-                    Some(TransformAction::FpeEncrypt { key, key_file, tweak, tweak_file, radix }) => {
-                        Some(TransformAction::FpeDecrypt {
-                            key: key.clone(),
-                            key_file: key_file.clone(),
-                            tweak: tweak.clone(),
-                            tweak_file: tweak_file.clone(),
-                            radix: radix.clone(),
-                        })
-                    }
+                    Some(TransformAction::FpeEncrypt {
+                        key,
+                        key_file,
+                        tweak,
+                        tweak_file,
+                        radix,
+                    }) => Some(TransformAction::FpeDecrypt {
+                        key: key.clone(),
+                        key_file: key_file.clone(),
+                        tweak: tweak.clone(),
+                        tweak_file: tweak_file.clone(),
+                        radix: radix.clone(),
+                    }),
                     #[cfg(feature = "fpe")]
-                    Some(TransformAction::FpeDecrypt { key, key_file, tweak, tweak_file, radix }) => {
-                        Some(TransformAction::FpeEncrypt {
-                            key: key.clone(),
-                            key_file: key_file.clone(),
-                            tweak: tweak.clone(),
-                            tweak_file: tweak_file.clone(),
-                            radix: radix.clone(),
-                        })
-                    }
+                    Some(TransformAction::FpeDecrypt {
+                        key,
+                        key_file,
+                        tweak,
+                        tweak_file,
+                        radix,
+                    }) => Some(TransformAction::FpeEncrypt {
+                        key: key.clone(),
+                        key_file: key_file.clone(),
+                        tweak: tweak.clone(),
+                        tweak_file: tweak_file.clone(),
+                        radix: radix.clone(),
+                    }),
                     other => {
-                        return Err(BidirectionalError::NotReversible(
-                            format!("Transform action {:?} is not reversible", other)
-                        ));
+                        return Err(BidirectionalError::NotReversible(format!(
+                            "Transform action {:?} is not reversible",
+                            other
+                        )));
                     }
                 };
             }
             StepType::Filter | StepType::Extract => {
-                return Err(BidirectionalError::NotReversible(
-                    format!("{:?} steps are not reversible", step.step_type)
-                ));
+                return Err(BidirectionalError::NotReversible(format!(
+                    "{:?} steps are not reversible",
+                    step.step_type
+                )));
             }
             StepType::Validate => {
                 // Validation is a no-op for reversal
             }
             StepType::Block => {
                 return Err(BidirectionalError::NotReversible(
-                    "Block steps are not reversible".to_string()
+                    "Block steps are not reversible".to_string(),
                 ));
             }
         }
@@ -633,8 +639,14 @@ mod tests {
         });
 
         assert_eq!(store.len(), 1);
-        assert_eq!(store.get_forward("original_value"), Some("transformed_value"));
-        assert_eq!(store.get_reverse("transformed_value"), Some("original_value"));
+        assert_eq!(
+            store.get_forward("original_value"),
+            Some("transformed_value")
+        );
+        assert_eq!(
+            store.get_reverse("transformed_value"),
+            Some("original_value")
+        );
     }
 
     #[test]

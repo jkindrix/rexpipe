@@ -1,0 +1,70 @@
+name = "code-lens-errors"
+description = "View code through error-handling lens - see only error paths"
+# Usage: cat src/*.rs | rexpipe -c code-lens-errors.toml
+# Shows ONLY error handling: Result, Option, panic, unwrap, expect, ?
+
+# =============================================================================
+# PHASE 1: Keep lines with error handling
+# =============================================================================
+
+# Result types and error handling
+[[step]]
+type = "filter"
+pattern = "(Result<|Err\\(|Ok\\(|\\?;|unwrap\\(|expect\\(|panic!|anyhow|thiserror|Error|error!)"
+action = "keep_line"
+
+# =============================================================================
+# PHASE 2: Categorize error patterns
+# =============================================================================
+
+# Dangerous unwraps
+[[step]]
+type = "substitute"
+pattern = "^(.*)(\\.unwrap\\(\\))(.*)$"
+replacement = "⚠️ UNWRAP: $1$2$3"
+
+# Dangerous expects
+[[step]]
+type = "substitute"
+pattern = "^(.*)\\.expect\\((.*)$"
+replacement = "⚠️ EXPECT: $1.expect($2"
+
+# Panic calls
+[[step]]
+type = "substitute"
+pattern = "^(.*)panic!(.*)$"
+replacement = "🚨 PANIC: $1panic!$2"
+
+# Error propagation with ?
+[[step]]
+type = "substitute"
+pattern = "^(.+)\\?;(.*)$"
+replacement = "↗️ PROPAGATE: $1?;$2"
+
+# Error creation
+[[step]]
+type = "substitute"
+pattern = "^(.*)Err\\((.*)$"
+replacement = "❌ ERROR: $1Err($2"
+
+# Error types defined
+[[step]]
+type = "substitute"
+pattern = "^.*(enum|struct).*Error.*$"
+replacement = "📋 ERRTYPE: $0"
+
+# =============================================================================
+# PHASE 3: Clean up
+# =============================================================================
+
+# Trim leading whitespace
+[[step]]
+type = "substitute"
+pattern = "^\\s+"
+replacement = ""
+
+# Keep only categorized lines
+[[step]]
+type = "filter"
+pattern = "^(⚠️|🚨|↗️|❌|📋)"
+action = "keep_line"

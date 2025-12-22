@@ -1,0 +1,123 @@
+name = "stacktrace-clean"
+description = "Clean and simplify stack traces for readability"
+# Usage: cat error.log | rexpipe -c stacktrace-clean.toml
+# Handles: Java, Python, Node.js, Rust stack traces
+
+# =============================================================================
+# PHASE 1: Remove framework noise
+# =============================================================================
+
+# Remove Java internal frames
+[[step]]
+type = "filter"
+pattern = "at (sun\\.|java\\.lang\\.reflect\\.|java\\.util\\.concurrent\\.|org\\.springframework\\.aop)"
+action = "drop_line"
+
+# Remove Node.js internal frames
+[[step]]
+type = "filter"
+pattern = "at (internal/|node:|Module\\._|Object\\.<anonymous>)"
+action = "drop_line"
+
+# Remove Python internal frames
+[[step]]
+type = "filter"
+pattern = "File \".*(site-packages|lib/python|importlib)"
+action = "drop_line"
+
+# Remove Rust panic machinery
+[[step]]
+type = "filter"
+pattern = "(rust_begin_unwind|__rust_|std::panicking|std::rt::)"
+action = "drop_line"
+
+# =============================================================================
+# PHASE 2: Simplify frame format
+# =============================================================================
+
+# Java: simplify at com.company.module.Class.method(File.java:123)
+[[step]]
+type = "substitute"
+pattern = "^\\s*at ([a-z]+\\.)+([A-Z][a-zA-Z0-9]*)\\.([a-zA-Z0-9]+)\\(([^:]+):(\\d+)\\)"
+replacement = "  → $2.$3() at $4:$5"
+
+# Python: simplify File "path", line X, in func
+[[step]]
+type = "substitute"
+pattern = "^\\s*File \"([^\"]+)\", line (\\d+), in ([a-zA-Z0-9_]+)"
+replacement = "  → $3() at $1:$2"
+
+# Node.js: simplify at function (file:line:col)
+[[step]]
+type = "substitute"
+pattern = "^\\s*at ([a-zA-Z0-9_.]+) \\(([^:]+):(\\d+):\\d+\\)"
+replacement = "  → $1() at $2:$3"
+
+# Rust: simplify N: module::function
+[[step]]
+type = "substitute"
+pattern = "^\\s*\\d+:\\s+([a-z_]+::)*([a-z_]+)$"
+replacement = "  → $2()"
+
+# =============================================================================
+# PHASE 3: Highlight key information
+# =============================================================================
+
+# Mark the exception/error line
+[[step]]
+type = "substitute"
+pattern = "^(Exception|Error|Panic|Traceback|caused by)"
+replacement = "❌ $1"
+
+# Mark the root cause
+[[step]]
+type = "substitute"
+pattern = "^Caused by:"
+replacement = "⚠️  Caused by:"
+
+# =============================================================================
+# PHASE 4: Clean up paths
+# =============================================================================
+
+# Shorten home directory paths
+[[step]]
+type = "substitute"
+pattern = "/home/[a-zA-Z0-9_-]+/"
+replacement = "~/"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+pattern = "/Users/[a-zA-Z0-9_-]+/"
+replacement = "~/"
+flags = ["global"]
+
+# Remove verbose paths, keep just filename
+[[step]]
+type = "substitute"
+pattern = "at (/[^:]+/)+([^/:]+:\\d+)"
+replacement = "at $2"
+flags = ["global"]
+
+# =============================================================================
+# PHASE 5: Remove noise
+# =============================================================================
+
+# Remove "... X more" lines
+[[step]]
+type = "filter"
+pattern = "^\\s*\\.\\.\\.\\s*\\d+ more"
+action = "drop_line"
+
+# Remove blank lines
+[[step]]
+type = "filter"
+pattern = "^\\s*$"
+action = "drop_line"
+
+# Collapse multiple spaces
+[[step]]
+type = "substitute"
+pattern = "  +"
+replacement = " "
+flags = ["global"]

@@ -1,0 +1,84 @@
+name = "dependency-audit"
+description = "Extract and normalize dependencies from package files"
+# Usage: cat package.json | rexpipe -c dependency-audit.toml
+# Or:    cat Cargo.toml | rexpipe -c dependency-audit.toml
+# Or:    cat requirements.txt | rexpipe -c dependency-audit.toml
+# Outputs: unified format for dependency tracking
+
+# =============================================================================
+# PHASE 1: Extract from package.json format
+# =============================================================================
+
+# npm dependencies: "package": "^1.2.3"
+[[step]]
+type = "substitute"
+pattern = '^\s*"([^"]+)":\s*"[\^~]?([0-9][^"]*)"'
+replacement = "[NPM] $1@$2"
+
+# =============================================================================
+# PHASE 2: Extract from Cargo.toml format
+# =============================================================================
+
+# Cargo inline: package = "1.2.3"
+[[step]]
+type = "substitute"
+pattern = '^([a-z][a-z0-9_-]*)\s*=\s*"([0-9][^"]*)"'
+replacement = "[CARGO] $1@$2"
+
+# Cargo table: package = { version = "1.2.3" }
+[[step]]
+type = "substitute"
+pattern = '^([a-z][a-z0-9_-]*)\s*=\s*\{[^}]*version\s*=\s*"([^"]+)"'
+replacement = "[CARGO] $1@$2"
+
+# =============================================================================
+# PHASE 3: Extract from requirements.txt format
+# =============================================================================
+
+# pip: package==1.2.3 or package>=1.2.3
+[[step]]
+type = "substitute"
+pattern = "^([a-zA-Z][a-zA-Z0-9_-]*)([=<>!]+)([0-9][^\\s#]*)"
+replacement = "[PIP] $1@$3"
+
+# pip with extras: package[extra]==1.2.3
+[[step]]
+type = "substitute"
+pattern = "^([a-zA-Z][a-zA-Z0-9_-]*)\\[[^\\]]+\\]([=<>!]+)([0-9][^\\s#]*)"
+replacement = "[PIP] $1@$3"
+
+# =============================================================================
+# PHASE 4: Extract from go.mod format
+# =============================================================================
+
+# Go modules: require github.com/pkg v1.2.3
+[[step]]
+type = "substitute"
+pattern = "^\\s*require\\s+(\\S+)\\s+(v[0-9][^\\s]*)"
+replacement = "[GO] $1@$2"
+
+# Go modules in block: github.com/pkg v1.2.3
+[[step]]
+type = "substitute"
+pattern = "^\\s+(\\S+/\\S+)\\s+(v[0-9][^\\s]*)"
+replacement = "[GO] $1@$2"
+
+# =============================================================================
+# PHASE 5: Keep only extracted dependencies
+# =============================================================================
+
+[[step]]
+type = "filter"
+pattern = "^\\[(NPM|CARGO|PIP|GO)\\]"
+action = "keep_line"
+
+# =============================================================================
+# PHASE 6: Sort-friendly output (remove ecosystem prefix if desired)
+# =============================================================================
+
+# Clean up multiple spaces
+[[step]]
+type = "substitute"
+pattern = "  +"
+replacement = " "
+flags = ["global"]

@@ -1,0 +1,88 @@
+name = "curl-to-api-doc"
+description = "Transform curl verbose output into API documentation"
+# Usage: curl -v https://api.example.com/users 2>&1 | rexpipe -c curl-to-api-doc.toml
+# Transforms raw curl debug output into readable API documentation
+
+# =============================================================================
+# PHASE 1: Mark line types
+# =============================================================================
+
+# Request line
+[[step]]
+type = "substitute"
+pattern = "^> (GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS) ([^ ]+) HTTP"
+replacement = "## $1 $2\n\n### Request"
+
+# Request headers
+[[step]]
+type = "substitute"
+pattern = "^> ([A-Za-z-]+): (.+)$"
+replacement = "| `$1` | `$2` |"
+
+# Response status
+[[step]]
+type = "substitute"
+pattern = "^< HTTP/[0-9.]+ (\\d+) (.+)$"
+replacement = "\n### Response: **$1 $2**"
+
+# Response headers
+[[step]]
+type = "substitute"
+pattern = "^< ([A-Za-z-]+): (.+)$"
+replacement = "| `$1` | `$2` |"
+
+# =============================================================================
+# PHASE 2: Remove noise
+# =============================================================================
+
+# Remove connection info
+[[step]]
+type = "filter"
+pattern = "^\\* (Trying|Connected|TLS|SSL|ALPN|CAfile|CApath)"
+action = "drop_line"
+
+# Remove timing info
+[[step]]
+type = "filter"
+pattern = "^\\* (upload|download|left|speed)"
+action = "drop_line"
+
+# Remove empty curl lines
+[[step]]
+type = "filter"
+pattern = "^[*<>{}] *$"
+action = "drop_line"
+
+# Remove { and } data markers
+[[step]]
+type = "filter"
+pattern = "^[{}]"
+action = "drop_line"
+
+# =============================================================================
+# PHASE 3: Format JSON body
+# =============================================================================
+
+# Mark JSON body start (line starting with curly brace)
+[[step]]
+type = "substitute"
+pattern = '^([{].*)$'
+replacement = "\n### Body\n```json\n$1"
+
+# Keep JSON as-is (it will be between markers)
+
+# =============================================================================
+# PHASE 4: Clean up
+# =============================================================================
+
+# Remove remaining * lines
+[[step]]
+type = "filter"
+pattern = "^\\*"
+action = "drop_line"
+
+# Remove empty lines at start
+[[step]]
+type = "substitute"
+pattern = "^\\n+"
+replacement = ""

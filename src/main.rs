@@ -16,7 +16,10 @@ use rexpipe::inspector::{Inspector, InspectorOptions};
 use rexpipe::json_schema;
 use rexpipe::library;
 use rexpipe::library::LibraryResolver;
-use rexpipe::pipeline::{MaxLineAction, PipelineConfig, PipelineSettings, PipelineStep, StepType, TransformAction, RegexFlag};
+use rexpipe::pipeline::{
+    MaxLineAction, PipelineConfig, PipelineSettings, PipelineStep, RegexFlag, StepType,
+    TransformAction,
+};
 use rexpipe::plugin::PluginRegistry;
 use rexpipe::processor::StreamProcessor;
 
@@ -70,7 +73,10 @@ fn should_use_color(matches: &clap::ArgMatches) -> bool {
     }
 
     // NO_COLOR env var (any non-empty value disables color)
-    if std::env::var("NO_COLOR").map(|v| !v.is_empty()).unwrap_or(false) {
+    if std::env::var("NO_COLOR")
+        .map(|v| !v.is_empty())
+        .unwrap_or(false)
+    {
         return false;
     }
 
@@ -846,6 +852,56 @@ fn build_cli() -> Command {
                 .help("Generate man page to stdout")
                 .action(ArgAction::SetTrue),
         )
+        .arg(
+            Arg::new("init")
+                .long("init")
+                .value_name("FILE")
+                .help("Generate a starter pipeline configuration")
+                .long_help(
+                    "Generate a starter pipeline configuration file with example steps.\n\n\
+                     Templates available:\n\
+                       basic    - Simple substitution pipeline (default)\n\
+                       log      - Log processing with filtering\n\
+                       security - Data sanitization and masking\n\
+                       validate - Input validation pipeline\n\n\
+                     Examples:\n\
+                       rexpipe --init pipeline.toml\n\
+                       rexpipe --init my-config.toml:log\n\
+                       rexpipe --init config.toml:security"
+                ),
+        )
+        .arg(
+            Arg::new("watch")
+                .short('w')
+                .long("watch")
+                .help("Watch input files for changes and re-run")
+                .long_help(
+                    "Watch mode: re-runs the pipeline when input files change.\n\n\
+                     Requires the 'watch' feature to be enabled.\n\n\
+                     Example:\n\
+                       rexpipe -c config.toml --watch ./logs/*.log"
+                )
+                .action(ArgAction::SetTrue),
+        )
+        .arg(
+            Arg::new("plugin-dir")
+                .long("plugin-dir")
+                .value_name("DIR")
+                .help("Load plugins from directory")
+                .long_help(
+                    "Load script-based plugins from a directory.\n\n\
+                     Scripts are registered as plugins with names derived from filenames.\n\
+                     Supported types: .sh (shell), .py (Python), .rb (Ruby), .pl (Perl)\n\n\
+                     Example:\n\
+                       rexpipe --plugin-dir ./my-plugins -c config.toml < input\n\n\
+                     Default plugin directories (checked automatically):\n\
+                       - ./plugins/\n\
+                       - ~/.config/rexpipe/plugins/\n\
+                       - /usr/local/share/rexpipe/plugins/\n\
+                       - $REXPIPE_PLUGIN_DIR (if set)"
+                )
+                .value_hint(ValueHint::DirPath),
+        )
         // === I/O ===
         .arg(
             Arg::new("input")
@@ -890,6 +946,200 @@ fn print_man_page(cmd: Command) -> Result<()> {
         .map_err(|e| anyhow!("Failed to render man page: {}", e))
 }
 
+/// Generate a starter pipeline configuration file
+fn generate_starter_pipeline(init_arg: &str) -> Result<()> {
+    // Parse FILE:TEMPLATE format
+    let (file_path, template) = if let Some(idx) = init_arg.rfind(':') {
+        let path = &init_arg[..idx];
+        let tmpl = &init_arg[idx + 1..];
+        // Handle Windows paths like C:\path
+        if path.len() == 1
+            && path
+                .chars()
+                .next()
+                .map(|c| c.is_ascii_alphabetic())
+                .unwrap_or(false)
+        {
+            (init_arg, "basic")
+        } else {
+            (path, tmpl)
+        }
+    } else {
+        (init_arg, "basic")
+    };
+
+    // Check if file already exists
+    if std::path::Path::new(file_path).exists() {
+        return Err(anyhow!(
+            "File '{}' already exists. Use a different name or delete the existing file.",
+            file_path
+        ));
+    }
+
+    let content = match template {
+        "basic" => TEMPLATE_BASIC,
+        "log" => TEMPLATE_LOG,
+        "security" => TEMPLATE_SECURITY,
+        "validate" => TEMPLATE_VALIDATE,
+        _ => {
+            return Err(anyhow!(
+                "Unknown template '{}'. Available: basic, log, security, validate",
+                template
+            ));
+        }
+    };
+
+    std::fs::write(file_path, content)?;
+    println!("Created pipeline configuration: {}", file_path);
+    println!("Edit the file to customize your pipeline, then run:");
+    println!("  rexpipe -c {} < input.txt", file_path);
+
+    Ok(())
+}
+
+const TEMPLATE_BASIC: &str = r#"# rexpipe Pipeline Configuration
+# Generated with: rexpipe --init
+#
+# Run with: rexpipe -c this_file.toml < input.txt
+
+name = "My Pipeline"
+description = "A basic text processing pipeline"
+version = "1.0.0"
+
+# Step 1: Simple substitution
+[[step]]
+pattern = 'foo'
+replacement = "bar"
+description = "Replace foo with bar"
+
+# Step 2: Another substitution with regex
+[[step]]
+pattern = '\d{4}-\d{2}-\d{2}'
+replacement = "[DATE]"
+description = "Redact dates"
+flags = ["global"]
+
+# Uncomment to add more steps:
+# [[step]]
+# type = "filter"
+# pattern = 'DEBUG'
+# action = "drop_line"
+# description = "Remove debug lines"
+"#;
+
+const TEMPLATE_LOG: &str = r#"# rexpipe Log Processing Pipeline
+# Generated with: rexpipe --init pipeline.toml:log
+#
+# Run with: rexpipe -c this_file.toml < application.log
+
+name = "Log Processor"
+description = "Filter and transform log files"
+version = "1.0.0"
+
+# Step 1: Keep only ERROR and WARN lines
+[[step]]
+type = "filter"
+pattern = '\[(ERROR|WARN)\]'
+action = "keep_line"
+description = "Keep error and warning lines"
+
+# Step 2: Normalize log levels
+[[step]]
+pattern = '\[WARNING\]'
+replacement = "[WARN]"
+description = "Standardize WARNING to WARN"
+
+# Step 3: Anonymize IP addresses
+[[step]]
+pattern = '\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}'
+replacement = "[IP_REDACTED]"
+flags = ["global"]
+description = "Redact IP addresses"
+
+# Step 4: Anonymize email addresses
+[[step]]
+pattern = '[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'
+replacement = "[EMAIL_REDACTED]"
+flags = ["global"]
+description = "Redact email addresses"
+"#;
+
+const TEMPLATE_SECURITY: &str = r#"# rexpipe Security/Sanitization Pipeline
+# Generated with: rexpipe --init pipeline.toml:security
+#
+# Run with: rexpipe -c this_file.toml < sensitive_data.txt
+
+name = "Data Sanitizer"
+description = "Redact sensitive information for safe sharing"
+version = "1.0.0"
+
+# Step 1: Redact credit card numbers
+[[step]]
+pattern = '\b\d{4}[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{4}\b'
+replacement = "[CREDIT_CARD]"
+flags = ["global"]
+description = "Redact credit card numbers"
+
+# Step 2: Redact Social Security Numbers
+[[step]]
+pattern = '\b\d{3}-\d{2}-\d{4}\b'
+replacement = "[SSN]"
+flags = ["global"]
+description = "Redact SSN"
+
+# Step 3: Redact API keys (generic pattern)
+[[step]]
+pattern = '(?i)(api[_-]?key|apikey|secret|token)\s*[=:]\s*["\']?([a-zA-Z0-9_-]{20,})["\']?'
+replacement = "${1}=[REDACTED]"
+flags = ["global"]
+description = "Redact API keys and secrets"
+
+# Step 4: Redact phone numbers
+[[step]]
+pattern = '\b\d{3}[-.]?\d{3}[-.]?\d{4}\b'
+replacement = "[PHONE]"
+flags = ["global"]
+description = "Redact phone numbers"
+
+# Step 5: Redact email addresses
+[[step]]
+pattern = '[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'
+replacement = "[EMAIL]"
+flags = ["global"]
+description = "Redact email addresses"
+"#;
+
+const TEMPLATE_VALIDATE: &str = r#"# rexpipe Validation Pipeline
+# Generated with: rexpipe --init pipeline.toml:validate
+#
+# Run with: rexpipe -c this_file.toml < input.txt
+
+name = "Input Validator"
+description = "Validate input format and flag issues"
+version = "1.0.0"
+
+# Step 1: Validate that each line has a timestamp
+[[step]]
+type = "validate"
+pattern = '^\d{4}-\d{2}-\d{2}'
+description = "Each line must start with a date (YYYY-MM-DD)"
+on_mismatch = "warn"
+
+# Step 2: Flag lines without proper log level
+[[step]]
+type = "validate"
+pattern = '\[(DEBUG|INFO|WARN|ERROR|FATAL)\]'
+description = "Each line must have a valid log level"
+on_mismatch = "warn"
+
+# Step 3: Extract only valid entries
+[[step]]
+type = "filter"
+pattern = '^\d{4}-\d{2}-\d{2}.*\[(DEBUG|INFO|WARN|ERROR|FATAL)\]'
+action = "keep_line"
+description = "Keep only properly formatted lines"
+"#;
+
 fn main() {
     // Initialize logger from RUST_LOG environment variable
     // Example: RUST_LOG=rexpipe=debug rexpipe --config my.toml < input.txt
@@ -917,6 +1167,36 @@ fn main() {
         return;
     }
 
+    // Handle --init to generate starter pipeline
+    if let Some(init_arg) = matches.get_one::<String>("init") {
+        if let Err(e) = generate_starter_pipeline(init_arg) {
+            eprintln!("Error: {}", e);
+            std::process::exit(exit_codes::IO_ERROR);
+        }
+        return;
+    }
+
+    // Load plugins from default directories
+    let default_loaded = PluginRegistry::load_default_plugins_to_global();
+    if default_loaded > 0 {
+        debug!("Loaded {} plugins from default directories", default_loaded);
+    }
+
+    // Load plugins from --plugin-dir if specified
+    if let Some(plugin_dir) = matches.get_one::<String>("plugin-dir") {
+        let plugin_path = std::path::Path::new(plugin_dir);
+        match PluginRegistry::load_plugins_to_global(plugin_path) {
+            Ok(count) => {
+                if count > 0 {
+                    debug!("Loaded {} plugins from {}", count, plugin_dir);
+                }
+            }
+            Err(e) => {
+                eprintln!("Warning: Failed to load plugins from {}: {}", plugin_dir, e);
+            }
+        }
+    }
+
     if let Err(e) = run_application(&matches) {
         let exit_code = categorize_error(&e);
 
@@ -933,7 +1213,9 @@ fn main() {
                 Err(_) => eprintln!("Error: {}", e), // Fallback to plain text
             }
         } else {
-            eprintln!("Error: {}", e);
+            // Print full error chain for better debugging
+            // {:#} shows the error and all its causes
+            eprintln!("Error: {:#}", e);
         }
 
         std::process::exit(exit_code);
@@ -1036,6 +1318,17 @@ fn run_application(matches: &clap::ArgMatches) -> Result<()> {
         return validate_configuration(&config);
     }
 
+    // Handle watch mode
+    if matches.get_flag("watch") {
+        if paths.is_empty() {
+            return Err(anyhow::anyhow!(
+                "Watch mode requires file paths. Usage: rexpipe -c config.toml --watch ./files/*.log"
+            ));
+        }
+        let path_strings: Vec<String> = paths.iter().map(|p| p.display().to_string()).collect();
+        return run_watch_mode(matches, &path_strings, &config);
+    }
+
     if is_multi_file {
         return run_multi_file_mode(&config, matches, paths);
     }
@@ -1044,6 +1337,11 @@ fn run_application(matches: &clap::ArgMatches) -> Result<()> {
     let input: Box<dyn io::BufRead> = if let Some(input_file) = matches.get_one::<String>("input") {
         Box::new(BufReader::new(File::open(input_file)?))
     } else {
+        // Warn if stdin is a TTY (user might be expecting file input)
+        if io::stdin().is_terminal() && !matches.get_flag("quiet") {
+            eprintln!("Reading from stdin (press Ctrl+D when done, or Ctrl+C to cancel)...");
+            eprintln!("Tip: Pipe input or use -f <file> to read from a file.");
+        }
         Box::new(io::stdin().lock())
     };
 
@@ -1305,17 +1603,28 @@ fn run_multi_file_mode(
                 Ok(true) => to_process.push(file.clone()),
                 Ok(false) => {
                     skipped += 1;
-                    debug!("Skipping {} (unchanged since last checkpoint)", file.display());
+                    debug!(
+                        "Skipping {} (unchanged since last checkpoint)",
+                        file.display()
+                    );
                 }
                 Err(e) => {
-                    debug!("Error checking checkpoint for {}: {}, will process", file.display(), e);
+                    debug!(
+                        "Error checking checkpoint for {}: {}, will process",
+                        file.display(),
+                        e
+                    );
                     to_process.push(file.clone());
                 }
             }
         }
 
         if skipped > 0 && !quiet {
-            eprintln!("Checkpoint: skipping {} unchanged files, processing {}", skipped, to_process.len());
+            eprintln!(
+                "Checkpoint: skipping {} unchanged files, processing {}",
+                skipped,
+                to_process.len()
+            );
         }
 
         if to_process.is_empty() {
@@ -1343,16 +1652,22 @@ fn run_multi_file_mode(
             for file in &files_to_process {
                 if let Err(e) = manager.load_file(file) {
                     if !quiet {
-                        eprintln!("Warning: Could not load {} for cross-file check: {}", file.display(), e);
+                        eprintln!(
+                            "Warning: Could not load {} for cross-file check: {}",
+                            file.display(),
+                            e
+                        );
                     }
                 }
             }
 
             // Scan for triggers and check rules
-            manager.scan_triggers()
+            manager
+                .scan_triggers()
                 .map_err(|e| anyhow!("Failed to scan triggers: {}", e))?;
 
-            let results = manager.check_all()
+            let results = manager
+                .check_all()
                 .map_err(|e| anyhow!("Failed to check cross-file rules: {}", e))?;
 
             // Report results
@@ -1361,20 +1676,23 @@ fn run_multi_file_mode(
             if has_violations || !quiet {
                 if json_output {
                     // Output as JSON
-                    let json_results: Vec<serde_json::Value> = results.iter().map(|r| {
-                        serde_json::json!({
-                            "rule_name": r.rule_name,
-                            "trigger_file": r.trigger_file.display().to_string(),
-                            "passed": r.passed,
-                            "violations": r.violations.iter().map(|v| {
-                                serde_json::json!({
-                                    "file": v.file.display().to_string(),
-                                    "description": v.description,
-                                    "expected_pattern": v.expected_pattern
-                                })
-                            }).collect::<Vec<_>>()
+                    let json_results: Vec<serde_json::Value> = results
+                        .iter()
+                        .map(|r| {
+                            serde_json::json!({
+                                "rule_name": r.rule_name,
+                                "trigger_file": r.trigger_file.display().to_string(),
+                                "passed": r.passed,
+                                "violations": r.violations.iter().map(|v| {
+                                    serde_json::json!({
+                                        "file": v.file.display().to_string(),
+                                        "description": v.description,
+                                        "expected_pattern": v.expected_pattern
+                                    })
+                                }).collect::<Vec<_>>()
+                            })
                         })
-                    }).collect();
+                        .collect();
                     println!("{}", serde_json::to_string_pretty(&json_results)?);
                 } else {
                     eprintln!("{}", format_check_report(&results));
@@ -1450,7 +1768,9 @@ fn run_multi_file_mode(
                     checkpoint.update_file_state(file, metadata.len(), 0, metadata.len());
                 }
             }
-            checkpoint.save().map_err(|e| anyhow!("Failed to save checkpoint: {}", e))?;
+            checkpoint
+                .save()
+                .map_err(|e| anyhow!("Failed to save checkpoint: {}", e))?;
         }
         output_file_list(&matching, quiet, json_output, "files_with_matches")?;
         return Ok(());
@@ -1463,7 +1783,9 @@ fn run_multi_file_mode(
                     checkpoint.update_file_state(file, metadata.len(), 0, metadata.len());
                 }
             }
-            checkpoint.save().map_err(|e| anyhow!("Failed to save checkpoint: {}", e))?;
+            checkpoint
+                .save()
+                .map_err(|e| anyhow!("Failed to save checkpoint: {}", e))?;
         }
         output_file_list(&non_matching, quiet, json_output, "files_without_matches")?;
         return Ok(());
@@ -1484,7 +1806,9 @@ fn run_multi_file_mode(
                         checkpoint.update_file_state(file, metadata.len(), 0, metadata.len());
                     }
                 }
-                checkpoint.save().map_err(|e| anyhow!("Failed to save checkpoint: {}", e))?;
+                checkpoint
+                    .save()
+                    .map_err(|e| anyhow!("Failed to save checkpoint: {}", e))?;
             }
             output_count_results(&result, quiet, json_output)?;
             return Ok(());
@@ -1497,7 +1821,9 @@ fn run_multi_file_mode(
                     checkpoint.update_file_state(file, metadata.len(), 0, metadata.len());
                 }
             }
-            checkpoint.save().map_err(|e| anyhow!("Failed to save checkpoint: {}", e))?;
+            checkpoint
+                .save()
+                .map_err(|e| anyhow!("Failed to save checkpoint: {}", e))?;
         }
         output_count_results(&result, quiet, json_output)?;
         return Ok(());
@@ -1516,7 +1842,9 @@ fn run_multi_file_mode(
                     checkpoint.update_file_state(file, metadata.len(), 0, metadata.len());
                 }
             }
-            checkpoint.save().map_err(|e| anyhow!("Failed to save checkpoint: {}", e))?;
+            checkpoint
+                .save()
+                .map_err(|e| anyhow!("Failed to save checkpoint: {}", e))?;
         }
 
         // Output summary as final JSONL line
@@ -1551,7 +1879,9 @@ fn run_multi_file_mode(
                 checkpoint.update_file_state(file, metadata.len(), 0, metadata.len());
             }
         }
-        checkpoint.save().map_err(|e| anyhow!("Failed to save checkpoint: {}", e))?;
+        checkpoint
+            .save()
+            .map_err(|e| anyhow!("Failed to save checkpoint: {}", e))?;
     }
 
     // Output results
@@ -1790,7 +2120,9 @@ fn load_pipeline_config(
             }
             if !all_warnings.is_empty() {
                 eprintln!("\nSecurity analysis warnings:\n{}", all_warnings.join("\n"));
-                eprintln!("\nThese commands may have security implications. Review carefully before proceeding.");
+                eprintln!(
+                    "\nThese commands may have security implications. Review carefully before proceeding."
+                );
             }
         }
 
@@ -1807,7 +2139,9 @@ fn load_pipeline_config(
         Ok(config)
     } else if let Some(pattern) = matches.get_one::<String>("pattern") {
         debug!("Using inline pattern: {}", pattern);
-        let replacement = matches.get_one::<String>("replacement").map(|s| s.to_string());
+        let replacement = matches
+            .get_one::<String>("replacement")
+            .map(|s| s.to_string());
         let is_extract = matches.get_flag("extract");
         let transform_name = matches.get_one::<String>("transform").cloned();
         let scope = matches.get_one::<String>("scope").cloned();
@@ -1838,13 +2172,20 @@ fn load_pipeline_config(
                 "url_encode" => Some(TransformAction::UrlEncode),
                 "url_decode" => Some(TransformAction::UrlDecode),
                 // For plugin transforms (snake_case, camel_case, kebab_case, pascal_case, etc.)
-                _ => Some(TransformAction::Plugin { name: name.clone(), args: vec![] }),
+                _ => Some(TransformAction::Plugin {
+                    name: name.clone(),
+                    args: vec![],
+                }),
             };
             (StepType::Transform, None, transform_action)
         } else if replacement.is_some() {
             (StepType::Substitute, None, None)
         } else {
-            (StepType::Filter, Some(rexpipe::pipeline::StepAction::KeepMatch), None)
+            (
+                StepType::Filter,
+                Some(rexpipe::pipeline::StepAction::KeepMatch),
+                None,
+            )
         };
 
         let step = PipelineStep {
@@ -1886,6 +2227,7 @@ fn load_pipeline_config(
             name: Some("Inline Pipeline".to_string()),
             description: Some("Generated from command line pattern".to_string()),
             version: Some("1.0.0".to_string()),
+            extends: None,
             patterns_include: Vec::new(),
             settings,
             step: vec![step],
@@ -1893,6 +2235,7 @@ fn load_pipeline_config(
             checkpoint: Default::default(),
             cross_file: Default::default(),
             tests: Vec::new(),
+            finalize: Default::default(),
         })
     } else {
         Err(anyhow!(
@@ -1948,7 +2291,7 @@ fn validate_configuration(config: &PipelineConfig) -> Result<()> {
 /// Explain what a pipeline will do without processing data.
 /// Outputs human-readable or JSON description of each step.
 fn explain_pipeline(config: &PipelineConfig, matches: &clap::ArgMatches) -> Result<()> {
-    use rexpipe::pipeline::{StepType, StepAction, TransformAction};
+    use rexpipe::pipeline::{StepAction, StepType, TransformAction};
 
     let json_output = should_use_json(matches);
 
@@ -1975,65 +2318,86 @@ fn explain_pipeline(config: &PipelineConfig, matches: &clap::ArgMatches) -> Resu
             summary: String,
         }
 
-        let steps: Vec<StepExplanation> = config.step.iter().enumerate().map(|(i, step)| {
-            let (effect, action_str) = match step.step_type {
-                StepType::Substitute => {
-                    let repl = step.replacement.clone().unwrap_or_else(|| "(none)".to_string());
-                    (format!("Replace matches with '{}'", repl), None)
-                }
-                StepType::Filter => {
-                    let action_desc = step.action.as_ref().map(|a| match a {
-                        StepAction::KeepLine => "Keep only matching lines".to_string(),
-                        StepAction::DropLine => "Remove matching lines".to_string(),
-                        StepAction::KeepMatch => "Keep only the match text".to_string(),
-                        StepAction::DropMatch => "Remove the match from line".to_string(),
-                        StepAction::DeduplicateByPrefix => {
-                            "Deduplicate by prefix from capture group".to_string()
-                        }
-                        _ => "Filter action".to_string(),
-                    }).unwrap_or_else(|| "Filter lines".to_string());
-                    (action_desc, step.action.as_ref().map(|a| format!("{:?}", a).to_lowercase()))
-                }
-                StepType::Extract => ("Extract matching text".to_string(), None),
-                StepType::Validate => ("Validate lines match pattern".to_string(), None),
-                StepType::Transform => {
-                    let t = step.transform.as_ref().map(|t| match t {
-                        TransformAction::Uppercase => "Convert to uppercase",
-                        TransformAction::Lowercase => "Convert to lowercase",
-                        TransformAction::TitleCase => "Convert to title case",
-                        TransformAction::Trim => "Trim whitespace",
-                        TransformAction::Reverse => "Reverse text",
-                        TransformAction::Base64Encode => "Encode to base64",
-                        TransformAction::Base64Decode => "Decode from base64",
-                        TransformAction::UrlEncode => "URL encode",
-                        TransformAction::UrlDecode => "URL decode",
-                        TransformAction::Prepend => "Prepend text",
-                        TransformAction::Append => "Append text",
-                        TransformAction::RemoveWhitespace => "Remove whitespace",
-                        TransformAction::NormalizeWhitespace => "Normalize whitespace",
-                        TransformAction::Deduplicate => "Remove duplicates",
-                        TransformAction::SortChars => "Sort characters",
-                        TransformAction::CharCount => "Count characters",
-                        TransformAction::WordCount => "Count words",
-                        TransformAction::Shell { .. } => "Run shell command",
-                        TransformAction::Plugin { .. } => "Run plugin",
-                        _ => "Custom transformation",
-                    }).unwrap_or("Transform matches");
-                    (t.to_string(), None)
-                }
-                StepType::Block => ("Process within block boundaries".to_string(), None),
-            };
+        let steps: Vec<StepExplanation> = config
+            .step
+            .iter()
+            .enumerate()
+            .map(|(i, step)| {
+                let (effect, action_str) = match step.step_type {
+                    StepType::Substitute => {
+                        let repl = step
+                            .replacement
+                            .clone()
+                            .unwrap_or_else(|| "(none)".to_string());
+                        (format!("Replace matches with '{}'", repl), None)
+                    }
+                    StepType::Filter => {
+                        let action_desc = step
+                            .action
+                            .as_ref()
+                            .map(|a| match a {
+                                StepAction::KeepLine => "Keep only matching lines".to_string(),
+                                StepAction::DropLine => "Remove matching lines".to_string(),
+                                StepAction::KeepMatch => "Keep only the match text".to_string(),
+                                StepAction::DropMatch => "Remove the match from line".to_string(),
+                                StepAction::DeduplicateByPrefix => {
+                                    "Deduplicate by prefix from capture group".to_string()
+                                }
+                                _ => "Filter action".to_string(),
+                            })
+                            .unwrap_or_else(|| "Filter lines".to_string());
+                        (
+                            action_desc,
+                            step.action
+                                .as_ref()
+                                .map(|a| format!("{:?}", a).to_lowercase()),
+                        )
+                    }
+                    StepType::Extract => ("Extract matching text".to_string(), None),
+                    StepType::Validate => ("Validate lines match pattern".to_string(), None),
+                    StepType::Transform => {
+                        let t = step
+                            .transform
+                            .as_ref()
+                            .map(|t| match t {
+                                TransformAction::Uppercase => "Convert to uppercase",
+                                TransformAction::Lowercase => "Convert to lowercase",
+                                TransformAction::TitleCase => "Convert to title case",
+                                TransformAction::Trim => "Trim whitespace",
+                                TransformAction::Reverse => "Reverse text",
+                                TransformAction::Base64Encode => "Encode to base64",
+                                TransformAction::Base64Decode => "Decode from base64",
+                                TransformAction::UrlEncode => "URL encode",
+                                TransformAction::UrlDecode => "URL decode",
+                                TransformAction::Prepend => "Prepend text",
+                                TransformAction::Append => "Append text",
+                                TransformAction::RemoveWhitespace => "Remove whitespace",
+                                TransformAction::NormalizeWhitespace => "Normalize whitespace",
+                                TransformAction::Deduplicate => "Remove duplicates",
+                                TransformAction::SortChars => "Sort characters",
+                                TransformAction::CharCount => "Count characters",
+                                TransformAction::WordCount => "Count words",
+                                TransformAction::Shell { .. } => "Run shell command",
+                                TransformAction::Plugin { .. } => "Run plugin",
+                                _ => "Custom transformation",
+                            })
+                            .unwrap_or("Transform matches");
+                        (t.to_string(), None)
+                    }
+                    StepType::Block => ("Process within block boundaries".to_string(), None),
+                };
 
-            StepExplanation {
-                step_number: i + 1,
-                step_type: format!("{:?}", step.step_type).to_lowercase(),
-                pattern: step.pattern.clone(),
-                description: step.description.clone().unwrap_or_default(),
-                effect,
-                replacement: step.replacement.clone(),
-                action: action_str,
-            }
-        }).collect();
+                StepExplanation {
+                    step_number: i + 1,
+                    step_type: format!("{:?}", step.step_type).to_lowercase(),
+                    pattern: step.pattern.clone(),
+                    description: step.description.clone().unwrap_or_default(),
+                    effect,
+                    replacement: step.replacement.clone(),
+                    action: action_str,
+                }
+            })
+            .collect();
 
         let summary = if steps.is_empty() {
             "Empty pipeline (passthrough)".to_string()
@@ -2110,7 +2474,9 @@ fn explain_pipeline(config: &PipelineConfig, matches: &clap::ArgMatches) -> Resu
                             TransformAction::Prepend => "Prepend text".to_string(),
                             TransformAction::Append => "Append text".to_string(),
                             TransformAction::RemoveWhitespace => "Remove whitespace".to_string(),
-                            TransformAction::NormalizeWhitespace => "Normalize whitespace".to_string(),
+                            TransformAction::NormalizeWhitespace => {
+                                "Normalize whitespace".to_string()
+                            }
                             TransformAction::Deduplicate => "Remove duplicates".to_string(),
                             TransformAction::SortChars => "Sort characters".to_string(),
                             TransformAction::CharCount => "Count characters".to_string(),
@@ -2127,7 +2493,10 @@ fn explain_pipeline(config: &PipelineConfig, matches: &clap::ArgMatches) -> Resu
             println!();
         }
 
-        println!("Summary: Pipeline processes input through {} step(s).", config.step.len());
+        println!(
+            "Summary: Pipeline processes input through {} step(s).",
+            config.step.len()
+        );
     }
 
     Ok(())
@@ -2226,15 +2595,19 @@ fn validate_config_file(matches: &clap::ArgMatches) -> Result<()> {
     }
 
     // Parse the config file
-    let content = std::fs::read_to_string(path)
-        .map_err(|e| anyhow!("Failed to read config file: {}", e))?;
+    let content =
+        std::fs::read_to_string(path).map_err(|e| anyhow!("Failed to read config file: {}", e))?;
 
-    let config: PipelineConfig = toml::from_str(&content)
-        .map_err(|e| anyhow!("TOML parsing error: {}", e))?;
+    let config: PipelineConfig =
+        toml::from_str(&content).map_err(|e| anyhow!("TOML parsing error: {}", e))?;
 
     // Validate the config
-    config.validate()
-        .map_err(|errors| anyhow!("Configuration validation errors:\n  {}", errors.join("\n  ")))?;
+    config.validate().map_err(|errors| {
+        anyhow!(
+            "Configuration validation errors:\n  {}",
+            errors.join("\n  ")
+        )
+    })?;
 
     // Try to compile the processor to catch regex errors
     match StreamProcessor::new(config.clone()) {
@@ -2250,11 +2623,16 @@ fn validate_config_file(matches: &clap::ArgMatches) -> Result<()> {
             // Check for shell transforms
             if config.has_shell_transforms() {
                 let shell_count = config.get_shell_commands().len();
-                println!("  Shell transforms: {} (requires --allow-shell)", shell_count);
+                println!(
+                    "  Shell transforms: {} (requires --allow-shell)",
+                    shell_count
+                );
             }
 
             // Check for pattern library references
-            let patterns_with_refs: usize = config.step.iter()
+            let patterns_with_refs: usize = config
+                .step
+                .iter()
                 .filter(|s| s.pattern.starts_with("${"))
                 .count();
             if patterns_with_refs > 0 {
@@ -2399,7 +2777,10 @@ fn output_verification_summary(
         eprintln!("\n--- Verification Summary ---");
         eprintln!("Lines processed: {}", result.lines_processed);
         eprintln!("Matches found: {}", result.matches_found);
-        eprintln!("Transformations applied: {}", result.transformations_applied);
+        eprintln!(
+            "Transformations applied: {}",
+            result.transformations_applied
+        );
         eprintln!("Success rate: {:.1}%", result.success_rate() * 100.0);
 
         if result.transformations_applied > 0 {
@@ -2429,7 +2810,9 @@ fn print_git_filter_setup(filter_name: &str, matches: &clap::ArgMatches) -> Resu
     let rexpipe_cmd = if let Some(cfg) = config_path {
         format!("rexpipe -c {}", cfg)
     } else {
-        println!("# NOTE: No config file specified. Add -c <config.toml> for transformation rules.");
+        println!(
+            "# NOTE: No config file specified. Add -c <config.toml> for transformation rules."
+        );
         "rexpipe -c .rexpipe/filter.toml".to_string()
     };
 
@@ -2469,7 +2852,10 @@ fn print_git_filter_setup(filter_name: &str, matches: &clap::ArgMatches) -> Resu
     println!();
 
     println!("# Global setup (applies to all repositories):");
-    println!("# git config --global filter.{}.clean '{}'", filter_name, rexpipe_cmd);
+    println!(
+        "# git config --global filter.{}.clean '{}'",
+        filter_name, rexpipe_cmd
+    );
     println!("# git config --global filter.{}.smudge 'cat'", filter_name);
 
     Ok(())
@@ -2477,25 +2863,80 @@ fn print_git_filter_setup(filter_name: &str, matches: &clap::ArgMatches) -> Resu
 
 /// Run pattern discovery/learning mode
 fn run_pattern_discovery(matches: &clap::ArgMatches) -> Result<()> {
-    use std::collections::HashMap;
     use regex::Regex;
+    use std::collections::HashMap;
     use std::io::BufRead;
 
     // Common pattern templates to search for
     let pattern_templates: Vec<(&str, &str, Regex)> = vec![
-        ("email", r"Email addresses", Regex::new(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}").unwrap()),
-        ("ipv4", r"IPv4 addresses", Regex::new(r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b").unwrap()),
-        ("phone_us", r"US phone numbers", Regex::new(r"\b\d{3}[-.]?\d{3}[-.]?\d{4}\b").unwrap()),
-        ("date_iso", r"ISO dates (YYYY-MM-DD)", Regex::new(r"\b\d{4}-\d{2}-\d{2}\b").unwrap()),
-        ("date_us", r"US dates (MM/DD/YYYY)", Regex::new(r"\b\d{1,2}/\d{1,2}/\d{4}\b").unwrap()),
-        ("time_24h", r"24-hour time", Regex::new(r"\b\d{1,2}:\d{2}(:\d{2})?\b").unwrap()),
-        ("uuid", r"UUIDs", Regex::new(r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b").unwrap()),
-        ("hex_id", r"Hex identifiers (8+ chars)", Regex::new(r"\b[0-9a-fA-F]{8,}\b").unwrap()),
-        ("url", r"URLs", Regex::new(r#"https?://[^\s<>"']+"#).unwrap()),
-        ("ssn", r"SSN-like patterns", Regex::new(r"\b\d{3}-\d{2}-\d{4}\b").unwrap()),
-        ("credit_card", r"Credit card patterns", Regex::new(r"\b\d{4}[- ]?\d{4}[- ]?\d{4}[- ]?\d{4}\b").unwrap()),
-        ("api_key", r"API key patterns", Regex::new(r"\b[A-Za-z0-9_-]{20,}\b").unwrap()),
-        ("base64_blob", r"Base64 blobs (20+ chars)", Regex::new(r"\b[A-Za-z0-9+/]{20,}={0,2}\b").unwrap()),
+        (
+            "email",
+            r"Email addresses",
+            Regex::new(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}").unwrap(),
+        ),
+        (
+            "ipv4",
+            r"IPv4 addresses",
+            Regex::new(r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b").unwrap(),
+        ),
+        (
+            "phone_us",
+            r"US phone numbers",
+            Regex::new(r"\b\d{3}[-.]?\d{3}[-.]?\d{4}\b").unwrap(),
+        ),
+        (
+            "date_iso",
+            r"ISO dates (YYYY-MM-DD)",
+            Regex::new(r"\b\d{4}-\d{2}-\d{2}\b").unwrap(),
+        ),
+        (
+            "date_us",
+            r"US dates (MM/DD/YYYY)",
+            Regex::new(r"\b\d{1,2}/\d{1,2}/\d{4}\b").unwrap(),
+        ),
+        (
+            "time_24h",
+            r"24-hour time",
+            Regex::new(r"\b\d{1,2}:\d{2}(:\d{2})?\b").unwrap(),
+        ),
+        (
+            "uuid",
+            r"UUIDs",
+            Regex::new(
+                r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b",
+            )
+            .unwrap(),
+        ),
+        (
+            "hex_id",
+            r"Hex identifiers (8+ chars)",
+            Regex::new(r"\b[0-9a-fA-F]{8,}\b").unwrap(),
+        ),
+        (
+            "url",
+            r"URLs",
+            Regex::new(r#"https?://[^\s<>"']+"#).unwrap(),
+        ),
+        (
+            "ssn",
+            r"SSN-like patterns",
+            Regex::new(r"\b\d{3}-\d{2}-\d{4}\b").unwrap(),
+        ),
+        (
+            "credit_card",
+            r"Credit card patterns",
+            Regex::new(r"\b\d{4}[- ]?\d{4}[- ]?\d{4}[- ]?\d{4}\b").unwrap(),
+        ),
+        (
+            "api_key",
+            r"API key patterns",
+            Regex::new(r"\b[A-Za-z0-9_-]{20,}\b").unwrap(),
+        ),
+        (
+            "base64_blob",
+            r"Base64 blobs (20+ chars)",
+            Regex::new(r"\b[A-Za-z0-9+/]{20,}={0,2}\b").unwrap(),
+        ),
     ];
 
     // Count matches
@@ -2541,7 +2982,9 @@ fn run_pattern_discovery(matches: &clap::ArgMatches) -> Result<()> {
             process_line(&line, &pattern_templates, &mut pattern_counts);
         }
     } else {
-        return Err(anyhow!("No input provided. Pipe data to stdin or use -f <file>"));
+        return Err(anyhow!(
+            "No input provided. Pipe data to stdin or use -f <file>"
+        ));
     }
 
     // Report findings
@@ -2648,7 +3091,9 @@ fn run_pattern_learning(matches: &clap::ArgMatches) -> Result<()> {
     }
 
     if learner.example_count() == 0 {
-        return Err(anyhow!("No examples provided. Use --positive and --negative flags or provide examples via stdin."));
+        return Err(anyhow!(
+            "No examples provided. Use --positive and --negative flags or provide examples via stdin."
+        ));
     }
 
     // Learn patterns
@@ -2672,7 +3117,10 @@ fn run_pattern_learning(matches: &clap::ArgMatches) -> Result<()> {
                     println!("Suggested pipeline configuration:");
                     println!("[[step]]");
                     println!("type = \"substitute\"");
-                    println!("pattern = \"{}\"", best.pattern.replace('\\', "\\\\").replace('"', "\\\""));
+                    println!(
+                        "pattern = \"{}\"",
+                        best.pattern.replace('\\', "\\\\").replace('"', "\\\"")
+                    );
                     println!("replacement = \"[REDACTED]\"");
                 }
             }
@@ -2691,7 +3139,9 @@ fn run_pipeline_tests(config: &PipelineConfig, matches: &clap::ArgMatches) -> Re
     use std::io::Cursor;
 
     if config.tests.is_empty() {
-        return Err(anyhow!("No tests defined in pipeline configuration. Add [[tests]] sections to define test cases."));
+        return Err(anyhow!(
+            "No tests defined in pipeline configuration. Add [[tests]] sections to define test cases."
+        ));
     }
 
     // Create test runner
@@ -2713,7 +3163,11 @@ fn run_pipeline_tests(config: &PipelineConfig, matches: &clap::ArgMatches) -> Re
         match processor.process_stream(reader, &mut output) {
             Ok(result) => {
                 let output_str = String::from_utf8_lossy(&output).to_string();
-                Ok((output_str, result.matches_found, result.transformations_applied))
+                Ok((
+                    output_str,
+                    result.matches_found,
+                    result.transformations_applied,
+                ))
             }
             Err(e) => Err(format!("Processing error: {}", e)),
         }
@@ -2722,14 +3176,20 @@ fn run_pipeline_tests(config: &PipelineConfig, matches: &clap::ArgMatches) -> Re
     let summary = runner.run_all(processor);
 
     // Get output format
-    let format = matches.get_one::<String>("test-format").map(|s| s.as_str()).unwrap_or("text");
+    let format = matches
+        .get_one::<String>("test-format")
+        .map(|s| s.as_str())
+        .unwrap_or("text");
 
     match format {
         "tap" => {
             println!("{}", rexpipe::testing::format_tap_output(&summary));
         }
         "junit" => {
-            println!("{}", rexpipe::testing::format_junit_xml(&summary, "rexpipe"));
+            println!(
+                "{}",
+                rexpipe::testing::format_junit_xml(&summary, "rexpipe")
+            );
         }
         _ => {
             // Default text format
@@ -2740,6 +3200,127 @@ fn run_pipeline_tests(config: &PipelineConfig, matches: &clap::ArgMatches) -> Re
     // Exit with appropriate code
     if summary.failed > 0 {
         std::process::exit(1);
+    }
+
+    Ok(())
+}
+
+/// Watch mode implementation - re-runs pipeline when input files change.
+///
+/// Requires the `watch` feature to be enabled.
+#[cfg(feature = "watch")]
+fn run_watch_mode(
+    matches: &clap::ArgMatches,
+    paths: &[String],
+    config: &PipelineConfig,
+) -> Result<()> {
+    use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
+    use std::sync::mpsc::channel;
+    use std::time::Duration;
+
+    println!("Watch mode enabled. Watching for changes...");
+    println!("Press Ctrl+C to exit.\n");
+
+    // Create a channel to receive file system events
+    let (tx, rx) = channel();
+
+    // Create a watcher
+    let mut watcher = RecommendedWatcher::new(tx, Config::default())?;
+
+    // Watch each path
+    for path in paths {
+        let path = std::path::Path::new(path);
+        if path.exists() {
+            watcher.watch(path, RecursiveMode::NonRecursive)?;
+            println!("Watching: {}", path.display());
+        } else {
+            eprintln!("Warning: Path does not exist: {}", path.display());
+        }
+    }
+
+    println!();
+
+    // Run initial processing
+    let _ = process_files_with_config(matches, paths, config);
+
+    // Wait for events
+    loop {
+        match rx.recv_timeout(Duration::from_millis(100)) {
+            Ok(Ok(event)) => {
+                // Only react to modify/create events
+                match event.kind {
+                    notify::EventKind::Modify(_) | notify::EventKind::Create(_) => {
+                        println!("\n--- File changed, re-running pipeline ---\n");
+                        // Small delay to let file writes complete
+                        std::thread::sleep(Duration::from_millis(100));
+                        let _ = process_files_with_config(matches, paths, config);
+                    }
+                    _ => {}
+                }
+            }
+            Ok(Err(e)) => {
+                eprintln!("Watch error: {:?}", e);
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                // Check for Ctrl+C
+                continue;
+            }
+            Err(e) => {
+                eprintln!("Channel error: {:?}", e);
+                break;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Stub for when watch feature is disabled.
+#[cfg(not(feature = "watch"))]
+fn run_watch_mode(
+    _matches: &clap::ArgMatches,
+    _paths: &[String],
+    _config: &PipelineConfig,
+) -> Result<()> {
+    Err(anyhow::anyhow!(
+        "Watch mode requires the 'watch' feature.\n\
+         Install with: cargo install rexpipe --features watch"
+    ))
+}
+
+/// Helper to process files with a given config (for watch mode).
+#[cfg(feature = "watch")]
+fn process_files_with_config(
+    matches: &clap::ArgMatches,
+    paths: &[String],
+    config: &PipelineConfig,
+) -> Result<()> {
+    let quiet = matches.get_flag("quiet");
+    let in_place = matches.get_flag("in-place");
+
+    for path_str in paths {
+        let path = std::path::Path::new(path_str);
+        if !path.exists() {
+            continue;
+        }
+
+        if path.is_file() {
+            let mut processor = rexpipe::processor::StreamProcessor::new(config.clone())?;
+            let content = std::fs::read_to_string(path)?;
+            let reader = std::io::BufReader::new(content.as_bytes());
+            let mut output = Vec::new();
+            let _ = processor.process_stream(reader, &mut output)?;
+            let result = String::from_utf8_lossy(&output);
+
+            if in_place {
+                std::fs::write(path, result.as_bytes())?;
+                if !quiet {
+                    eprintln!("Updated: {}", path.display());
+                }
+            } else {
+                print!("{}", result);
+            }
+        }
     }
 
     Ok(())

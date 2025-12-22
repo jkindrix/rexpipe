@@ -1,0 +1,93 @@
+name = "markdown-toc"
+description = "Extract table of contents from markdown file"
+# Usage: cat README.md | rexpipe -c markdown-toc.toml
+
+# =============================================================================
+# PHASE 1: Extract only headers
+# =============================================================================
+
+# Keep only markdown headers
+[[step]]
+type = "filter"
+pattern = "^#{1,6} "
+action = "keep_line"
+
+# =============================================================================
+# PHASE 2: Create anchor links
+# =============================================================================
+
+# Store the header text and create link format
+# H1 headers
+[[step]]
+type = "substitute"
+pattern = "^# (.+)$"
+replacement = "- [$1](#$1)"
+
+# H2 headers (indented)
+[[step]]
+type = "substitute"
+pattern = "^## (.+)$"
+replacement = "  - [$1](#$1)"
+
+# H3 headers (more indented)
+[[step]]
+type = "substitute"
+pattern = "^### (.+)$"
+replacement = "    - [$1](#$1)"
+
+# H4 headers
+[[step]]
+type = "substitute"
+pattern = "^#### (.+)$"
+replacement = "      - [$1](#$1)"
+
+# H5 headers
+[[step]]
+type = "substitute"
+pattern = "^##### (.+)$"
+replacement = "        - [$1](#$1)"
+
+# H6 headers
+[[step]]
+type = "substitute"
+pattern = "^###### (.+)$"
+replacement = "          - [$1](#$1)"
+
+# =============================================================================
+# PHASE 3: Normalize anchors (GitHub style)
+# =============================================================================
+
+# Replace spaces with hyphens in anchors
+[[step]]
+type = "substitute"
+pattern = "\\(#([^) ]*) ([^)]*)"
+replacement = "(#$1-$2"
+flags = ["global"]
+
+# Another pass for multiple spaces
+[[step]]
+type = "substitute"
+pattern = "\\(#([^) ]*) ([^)]*)"
+replacement = "(#$1-$2"
+flags = ["global"]
+
+# Remove special characters from anchors (colons)
+[[step]]
+type = "substitute"
+pattern = "\\(#([^):]*):([^)]*)"
+replacement = "(#$1$2"
+flags = ["global"]
+
+# Remove special characters from anchors (quotes, punctuation)
+[[step]]
+type = "substitute"
+pattern = "\\(#([^)]*)[,'\"!?]([^)]*)"
+replacement = "(#$1$2"
+flags = ["global"]
+
+# Clean up multiple hyphens
+[[step]]
+type = "substitute"
+pattern = "--+"
+replacement = "-"
+flags = ["global"]

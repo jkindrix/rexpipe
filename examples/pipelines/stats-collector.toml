@@ -1,0 +1,36 @@
+name = "stats-collector"
+description = "Collect and deduplicate statistics - demonstrates existing aggregation"
+# Usage: cat access.log | rexpipe -c stats-collector.toml
+# Extracts unique values and outputs them (dedup is the aggregation)
+
+# =============================================================================
+# PHASE 1: Extract and tag different data types
+# =============================================================================
+
+# Tag IP addresses
+[[step]]
+type = "substitute"
+pattern = "^(\\d+\\.\\d+\\.\\d+\\.\\d+)"
+replacement = "[IP] $1"
+
+# Tag HTTP methods
+[[step]]
+type = "substitute"
+pattern = '"(GET|POST|PUT|DELETE|PATCH) '
+replacement = '"[METHOD:$1] '
+
+# Tag status codes
+[[step]]
+type = "substitute"
+pattern = '" (\d{3}) '
+replacement = '" [STATUS:$1] '
+
+# =============================================================================
+# PHASE 2: Extract just the tagged values (one per line)
+# =============================================================================
+
+[[step]]
+type = "extract"
+pattern = "\\[(IP|METHOD|STATUS)[:]]?\\s*([^\\]\\s\"]+)"
+output_template = "$1: $2"
+deduplicate = true

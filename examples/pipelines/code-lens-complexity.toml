@@ -1,0 +1,59 @@
+name = "code-lens-complexity"
+description = "Find complexity hotspots - deeply nested code, long functions"
+# Usage: cat src/*.rs | rexpipe -c code-lens-complexity.toml
+# Flags potential problem areas: deep nesting, complex conditions
+
+# =============================================================================
+# PHASE 1: Detect deep nesting (4+ levels)
+# =============================================================================
+
+# Lines with 4+ levels of indentation (likely too nested)
+[[step]]
+type = "substitute"
+pattern = "^(\\s{16,})(\\S.*)$"
+replacement = "🔴 DEEP NEST: $2"
+
+# Lines with 3 levels
+[[step]]
+type = "substitute"
+pattern = "^(\\s{12,15})(\\S.*)$"
+replacement = "🟡 NESTED: $2"
+
+# =============================================================================
+# PHASE 2: Detect complex conditions
+# =============================================================================
+
+# Multiple && or || in one line
+[[step]]
+type = "substitute"
+pattern = "^(.*(&&|\\|\\|).*(&&|\\|\\|).*(&&|\\|\\|).*)$"
+replacement = "🔴 COMPLEX COND: $1"
+
+# =============================================================================
+# PHASE 3: Detect long match arms
+# =============================================================================
+
+# Match with many arms indicator
+[[step]]
+type = "substitute"
+pattern = "^(\\s*)(\\S+) => \\{$"
+replacement = "📊 MATCH ARM: $2"
+
+# =============================================================================
+# PHASE 4: Detect magic numbers
+# =============================================================================
+
+# Hardcoded numbers > 1 (excluding 0, 1, 2, common ports)
+[[step]]
+type = "substitute"
+pattern = "([=<>]\\s*)(\\d{3,})(\\s*[;,\\)])"
+replacement = "⚠️ MAGIC NUM: $1$2$3"
+
+# =============================================================================
+# PHASE 5: Keep only flagged lines
+# =============================================================================
+
+[[step]]
+type = "filter"
+pattern = "^(🔴|🟡|📊|⚠️)"
+action = "keep_line"

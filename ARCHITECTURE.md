@@ -433,6 +433,66 @@ RUST_LOG=debug rexpipe -c config.toml < input.txt
 RUST_LOG=rexpipe::processor=trace rexpipe -c config.toml < input.txt
 ```
 
+## Advanced Features
+
+### Configuration Inheritance (`extends`)
+
+**Why**: Reduce duplication in related pipelines.
+
+Pipelines can extend a base configuration:
+
+```toml
+extends = "base-pipeline.toml"
+name = "specialized"
+
+[[step]]
+type = "substitute"
+pattern = "additional"
+replacement = "extra"
+```
+
+The `merge_with_base()` function combines:
+- Base steps are prepended to child steps
+- Child settings override base settings
+- Name, version, description taken from child
+
+### Plugin System
+
+**Why**: Extensibility without core changes.
+
+Two plugin types:
+
+1. **Built-in Plugins**: Registered in `PluginRegistry::register_builtins()`
+   - Pure Rust functions for performance
+   - Snake_case, camelCase, base64, etc.
+
+2. **Script Plugins**: Loaded from `~/.config/rexpipe/plugins/`
+   - Shell scripts (.sh), Python (.py), Ruby (.rb), Perl (.pl)
+   - Receive matched text on stdin, output replacement on stdout
+   - Sandboxed execution with timeout
+
+Plugin discovery uses a global `RwLock<PluginRegistry>` for runtime loading.
+
+### Remote Pattern Libraries (`--features remote`)
+
+**Why**: Share pattern libraries across teams/projects.
+
+Features:
+- URL detection and HTTP fetching via `ureq`
+- In-memory caching during resolution
+- Circular dependency detection via resolution stack
+- Recursive flattening for nested includes
+
+### Watch Mode (`--features watch`)
+
+**Why**: Continuous re-processing during development.
+
+Architecture:
+- Uses `notify` crate for filesystem events
+- Debouncing via short sleep after events
+- Initial run + re-run on modify/create events
+- Graceful Ctrl+C handling
+
 ## Testing Strategy
 
 - **Unit tests**: Core processing logic in each module
@@ -440,3 +500,4 @@ RUST_LOG=rexpipe::processor=trace rexpipe -c config.toml < input.txt
 - **Property tests**: Invariant checking with proptest
 - **Fuzz tests**: Edge case discovery with cargo-fuzz
 - **Benchmarks**: Performance regression detection with criterion
+- **CRLF tests**: Windows line ending compatibility

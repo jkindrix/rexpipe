@@ -1,0 +1,87 @@
+name = "meeting-notes"
+description = "Extract action items and decisions from meeting notes"
+# Usage: cat meeting.txt | rexpipe -c meeting-notes.toml
+# Pulls out: action items, decisions, questions, deadlines
+
+# =============================================================================
+# PHASE 1: Extract action items
+# =============================================================================
+
+# Common action item patterns
+[[step]]
+type = "substitute"
+pattern = "^.*\\b(TODO|Action|ACTION|Task|TASK)[:\\s]+(.+)$"
+replacement = "📋 ACTION: $2"
+
+# Assigned to someone
+[[step]]
+type = "substitute"
+pattern = "^.*@([a-zA-Z]+)[:\\s]+(.+)$"
+replacement = "👤 @$1: $2"
+
+# Will/should/must do patterns
+[[step]]
+type = "substitute"
+pattern = "^.*\\b(will|should|must|needs? to)\\s+(\\w+)\\s+(.+)$"
+replacement = "📋 ACTION: $2 $3"
+
+# =============================================================================
+# PHASE 2: Extract decisions
+# =============================================================================
+
+# Decision patterns
+[[step]]
+type = "substitute"
+pattern = "^.*\\b(Decided|DECIDED|Decision|DECISION|Agreed|AGREED)[:\\s]+(.+)$"
+replacement = "✅ DECIDED: $2"
+
+# We will/won't patterns
+[[step]]
+type = "substitute"
+pattern = "^.*(We will|We won't|We're going to)\\s+(.+)$"
+replacement = "✅ DECIDED: $1 $2"
+
+# =============================================================================
+# PHASE 3: Extract questions/blockers
+# =============================================================================
+
+# Questions
+[[step]]
+type = "substitute"
+pattern = "^.*\\?\\s*$"
+replacement = "❓ QUESTION: $0"
+
+# Blockers
+[[step]]
+type = "substitute"
+pattern = "^.*\\b(blocked|blocker|blocking|waiting on|depends on)\\b(.*)$"
+replacement = "🚫 BLOCKER: $0"
+
+# =============================================================================
+# PHASE 4: Extract deadlines
+# =============================================================================
+
+# Date patterns
+[[step]]
+type = "substitute"
+pattern = "^.*(by|before|due|deadline)[:\\s]*(\\d{1,2}[/-]\\d{1,2}|Monday|Tuesday|Wednesday|Thursday|Friday|EOD|EOW|EOM)(.*)$"
+replacement = "📅 DEADLINE: $1 $2$3"
+
+# =============================================================================
+# PHASE 5: Keep only extracted items
+# =============================================================================
+
+[[step]]
+type = "filter"
+pattern = "^(📋|👤|✅|❓|🚫|📅)"
+action = "keep_line"
+
+# =============================================================================
+# PHASE 6: Clean up
+# =============================================================================
+
+# Trim leading whitespace from results
+[[step]]
+type = "substitute"
+pattern = "^(📋|✅|❓|🚫|📅|👤)\\s*:?\\s*"
+replacement = "$1 "

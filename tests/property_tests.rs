@@ -4,8 +4,7 @@
 
 use proptest::prelude::*;
 use rexpipe::pipeline::{
-    PipelineConfig, PipelineResult, PipelineSettings, PipelineStep, RegexFlag, StepAction,
-    StepType,
+    PipelineConfig, PipelineResult, PipelineSettings, PipelineStep, RegexFlag, StepAction, StepType,
 };
 use rexpipe::processor::StreamProcessor;
 use std::io::Cursor;

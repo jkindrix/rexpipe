@@ -1,0 +1,59 @@
+name = "api-audit"
+description = "Audit API access logs and produce JSON report"
+# Usage: cat access.log | rexpipe -c api-audit.toml
+# Demonstrates: finalize with JSON output and value collection
+
+# =============================================================================
+# PROCESSING STEPS
+# =============================================================================
+
+# Keep all lines for processing
+[[step]]
+type = "filter"
+pattern = "."
+action = "keep_line"
+
+# =============================================================================
+# FINALIZE: Produce JSON audit report
+# =============================================================================
+
+[finalize]
+suppress_output = true
+output_format = "json"
+
+# Track API endpoints accessed
+[[finalize.counters]]
+name = "endpoints"
+pattern = '"(GET|POST|PUT|DELETE|PATCH) ([^"\s]+)'
+deduplicate = true
+collect_values = true
+max_collected_values = 100
+description = "Unique API endpoints accessed"
+
+# Track error responses
+[[finalize.counters]]
+name = "errors"
+pattern = '" (4\d{2}|5\d{2}) '
+description = "Count of error responses (4xx/5xx)"
+
+# Track successful responses
+[[finalize.counters]]
+name = "success"
+pattern = '" (2\d{2}) '
+description = "Count of successful responses (2xx)"
+
+# Track unique client IPs
+[[finalize.counters]]
+name = "clients"
+pattern = "^(\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3})"
+deduplicate = true
+collect_values = true
+max_collected_values = 50
+description = "Unique client IP addresses"
+
+# Track user agents (browsers/bots)
+[[finalize.counters]]
+name = "bots"
+pattern = "(bot|crawler|spider|scraper)"
+flags = ["case_insensitive"]
+description = "Requests from bots/crawlers"

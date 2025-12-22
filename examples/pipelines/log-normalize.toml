@@ -1,0 +1,144 @@
+name = "log-normalize"
+description = "Normalize logs from various sources into consistent format"
+# Usage: cat mixed-logs.txt | rexpipe -c log-normalize.toml
+# Handles: nginx, Apache, syslog, JSON logs, common app formats
+
+# =============================================================================
+# PHASE 1: Normalize timestamp formats
+# =============================================================================
+
+# Nginx/Apache combined log format timestamp: [10/Oct/2023:13:55:36 -0700]
+[[step]]
+type = "substitute"
+pattern = "\\[(\\d{2})/(\\w{3})/(\\d{4}):(\\d{2}:\\d{2}:\\d{2}) [+-]\\d{4}\\]"
+replacement = "[$3-$2-$1T$4]"
+
+# Syslog format: Oct 10 13:55:36
+[[step]]
+type = "substitute"
+pattern = "^(\\w{3})\\s+(\\d{1,2}) (\\d{2}:\\d{2}:\\d{2})"
+replacement = "[2024-$1-$2T$3]"
+
+# ISO8601 with T: 2023-10-10T13:55:36.123Z
+[[step]]
+type = "substitute"
+pattern = "(\\d{4}-\\d{2}-\\d{2})T(\\d{2}:\\d{2}:\\d{2})\\.?\\d*Z?"
+replacement = "[$1T$2]"
+
+# JSON timestamp field
+[[step]]
+type = "substitute"
+pattern = "\"(timestamp|time|@timestamp|ts)\":\\s*\"([^\"]+)\""
+replacement = "[$2]"
+
+# =============================================================================
+# PHASE 2: Normalize severity levels
+# =============================================================================
+
+# Map various debug levels
+[[step]]
+type = "substitute"
+pattern = "(?i)\\b(DEBUG|TRACE|FINE|VERBOSE)\\b"
+replacement = "DEBUG"
+
+# Map various info levels
+[[step]]
+type = "substitute"
+pattern = "(?i)\\b(INFO|NOTICE|INFORMATION)\\b"
+replacement = "INFO"
+
+# Map various warning levels
+[[step]]
+type = "substitute"
+pattern = "(?i)\\b(WARN|WARNING)\\b"
+replacement = "WARN"
+
+# Map various error levels
+[[step]]
+type = "substitute"
+pattern = "(?i)\\b(ERROR|ERR|SEVERE|CRITICAL|CRIT)\\b"
+replacement = "ERROR"
+
+# Map fatal levels
+[[step]]
+type = "substitute"
+pattern = "(?i)\\b(FATAL|EMERGENCY|EMERG|PANIC)\\b"
+replacement = "FATAL"
+
+# =============================================================================
+# PHASE 3: Extract and normalize common fields
+# =============================================================================
+
+# HTTP status codes - tag by category
+[[step]]
+type = "substitute"
+pattern = "\\b(2\\d{2})\\b"
+replacement = "[OK:$1]"
+
+[[step]]
+type = "substitute"
+pattern = "\\b(3\\d{2})\\b"
+replacement = "[REDIRECT:$1]"
+
+[[step]]
+type = "substitute"
+pattern = "\\b(4\\d{2})\\b"
+replacement = "[CLIENT_ERR:$1]"
+
+[[step]]
+type = "substitute"
+pattern = "\\b(5\\d{2})\\b"
+replacement = "[SERVER_ERR:$1]"
+
+# HTTP methods
+[[step]]
+type = "substitute"
+pattern = "\"(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS) "
+replacement = "[$1] \""
+
+# =============================================================================
+# PHASE 4: Clean JSON log artifacts
+# =============================================================================
+
+# Remove JSON wrapper noise
+[[step]]
+type = "substitute"
+pattern = "^\\{\"(level|severity)\":\"([^\"]+)\",\"(message|msg)\":\"([^\"]+)\".*\\}$"
+replacement = "$2 $4"
+
+# Clean escaped quotes in messages
+[[step]]
+type = "substitute"
+pattern = "\\\\\""
+replacement = "\""
+flags = ["global"]
+
+# Clean escaped newlines
+[[step]]
+type = "substitute"
+pattern = "\\\\n"
+replacement = " "
+flags = ["global"]
+
+# =============================================================================
+# PHASE 5: Final formatting
+# =============================================================================
+
+# Ensure consistent spacing
+[[step]]
+type = "substitute"
+pattern = "\\]\\["
+replacement = "] ["
+
+# Clean multiple spaces
+[[step]]
+type = "substitute"
+pattern = "  +"
+replacement = " "
+flags = ["global"]
+
+# Trim trailing whitespace
+[[step]]
+type = "substitute"
+pattern = "\\s+$"
+replacement = ""

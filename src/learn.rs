@@ -170,7 +170,9 @@ impl PatternCategory {
             PatternCategory::DateTime => Some(r"\d{4}-\d{2}-\d{2}"),
             PatternCategory::CreditCard => Some(r"\d{4}[\s\-]?\d{4}[\s\-]?\d{4}[\s\-]?\d{4}"),
             PatternCategory::Ssn => Some(r"\d{3}-\d{2}-\d{4}"),
-            PatternCategory::Uuid => Some(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"),
+            PatternCategory::Uuid => {
+                Some(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
+            }
             PatternCategory::Identifier => Some(r"[a-zA-Z_][a-zA-Z0-9_]*"),
             PatternCategory::Numeric => Some(r"\d+"),
             PatternCategory::Alphanumeric => Some(r"[a-zA-Z0-9]+"),
@@ -498,16 +500,19 @@ impl PatternLearner {
         while i < first_seq.len() {
             // Check if this position has the same char type in all examples
             let char_type = first_seq[i];
-            let consistent = analysis.char_sequences.iter().all(|seq| {
-                seq.get(i).map(|&ct| ct == char_type).unwrap_or(false)
-            });
+            let consistent = analysis
+                .char_sequences
+                .iter()
+                .all(|seq| seq.get(i).map(|&ct| ct == char_type).unwrap_or(false));
 
             if consistent {
                 // Count consecutive same-type characters
                 let mut count = 1;
                 while i + count < first_seq.len() && first_seq[i + count] == char_type {
                     let all_same = analysis.char_sequences.iter().all(|seq| {
-                        seq.get(i + count).map(|&ct| ct == char_type).unwrap_or(false)
+                        seq.get(i + count)
+                            .map(|&ct| ct == char_type)
+                            .unwrap_or(false)
                     });
                     if all_same {
                         count += 1;
@@ -560,7 +565,10 @@ impl PatternLearner {
                     continue;
                 }
 
-                let all_contain = self.positive_examples.iter().all(|ex| ex.contains(candidate));
+                let all_contain = self
+                    .positive_examples
+                    .iter()
+                    .all(|ex| ex.contains(candidate));
                 if all_contain {
                     best_common = candidate.to_string();
                 }
@@ -613,11 +621,7 @@ impl PatternLearner {
             let prefix = &first[..prefix_len];
             let suffix = &first[first.len() - suffix_len..];
 
-            let pattern = format!(
-                "{}.*{}",
-                regex::escape(prefix),
-                regex::escape(suffix)
-            );
+            let pattern = format!("{}.*{}", regex::escape(prefix), regex::escape(suffix));
 
             Some(pattern)
         } else {
@@ -626,7 +630,11 @@ impl PatternLearner {
     }
 
     /// Evaluate a pattern against examples.
-    fn evaluate_pattern(&self, pattern_str: &str, category: PatternCategory) -> Result<LearnedPattern> {
+    fn evaluate_pattern(
+        &self,
+        pattern_str: &str,
+        category: PatternCategory,
+    ) -> Result<LearnedPattern> {
         let regex = Regex::new(pattern_str)?;
 
         let matches_positive = self
@@ -761,12 +769,21 @@ pub fn generate_pipeline_config(patterns: &[LearnedPattern]) -> String {
     config.push_str("name = \"learned-patterns\"\n\n");
 
     for (i, pattern) in patterns.iter().enumerate() {
-        config.push_str(&format!("# {} (confidence: {}%)\n", pattern.description, pattern.confidence));
+        config.push_str(&format!(
+            "# {} (confidence: {}%)\n",
+            pattern.description, pattern.confidence
+        ));
         config.push_str("[[step]]\n");
         config.push_str("type = \"substitute\"\n");
-        config.push_str(&format!("pattern = '{}'\n", pattern.pattern.replace('\'', "\\'")));
+        config.push_str(&format!(
+            "pattern = '{}'\n",
+            pattern.pattern.replace('\'', "\\'")
+        ));
         config.push_str(&format!("replacement = \"MATCH_{}\"\n", i + 1));
-        config.push_str(&format!("description = \"{:?} pattern\"\n\n", pattern.category));
+        config.push_str(&format!(
+            "description = \"{:?} pattern\"\n\n",
+            pattern.category
+        ));
     }
 
     config
@@ -817,7 +834,10 @@ mod tests {
         learner.add_positive("only-one");
 
         let result = learner.learn();
-        assert!(matches!(result, Err(LearnError::InsufficientExamples { .. })));
+        assert!(matches!(
+            result,
+            Err(LearnError::InsufficientExamples { .. })
+        ));
     }
 
     #[test]
@@ -879,7 +899,10 @@ mod tests {
         }
 
         let result = learner.learn();
-        assert!(matches!(result, Err(LearnError::TooManyExamples { max: 5, .. })));
+        assert!(matches!(
+            result,
+            Err(LearnError::TooManyExamples { max: 5, .. })
+        ));
     }
 
     #[test]

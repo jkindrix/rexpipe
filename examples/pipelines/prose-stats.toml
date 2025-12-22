@@ -1,0 +1,65 @@
+name = "prose-stats"
+description = "Analyze prose for readability - find long sentences, passive voice"
+# Usage: cat document.md | rexpipe -c prose-stats.toml
+# Flags: long sentences, passive voice, complex words
+
+# =============================================================================
+# PHASE 1: Flag long sentences (rough heuristic: many words before period)
+# =============================================================================
+
+# Sentences with 30+ words (very long)
+[[step]]
+type = "substitute"
+pattern = "^(\\S+\\s+){30,}[^.]*\\."
+replacement = "🔴 VERY LONG: $0"
+
+# =============================================================================
+# PHASE 2: Flag passive voice
+# =============================================================================
+
+# Common passive constructions
+[[step]]
+type = "substitute"
+pattern = "\\b(was|were|is|are|been|being|be)\\s+(\\w+ed)\\b"
+replacement = "⚠️ PASSIVE: $0"
+
+# "by the" often indicates passive
+[[step]]
+type = "substitute"
+pattern = "\\bby the\\b"
+replacement = "⚠️ PASSIVE: by the"
+
+# =============================================================================
+# PHASE 3: Flag weak words
+# =============================================================================
+
+# Hedge words
+[[step]]
+type = "substitute"
+pattern = "\\b(very|really|quite|somewhat|fairly|rather|basically|actually|literally)\\b"
+replacement = "💭 WEAK: $1"
+
+# Filler phrases
+[[step]]
+type = "substitute"
+pattern = "\\b(in order to|due to the fact that|at this point in time|in the event that)\\b"
+replacement = "💭 FILLER: $1"
+
+# =============================================================================
+# PHASE 4: Flag jargon/complexity
+# =============================================================================
+
+# Words ending in -ization, -ification (often jargon)
+[[step]]
+type = "substitute"
+pattern = "\\b(\\w{4,}ization|\\w{4,}ification)\\b"
+replacement = "📚 JARGON: $1"
+
+# =============================================================================
+# PHASE 5: Keep only flagged items
+# =============================================================================
+
+[[step]]
+type = "filter"
+pattern = "(🔴|⚠️|💭|📚)"
+action = "keep_line"

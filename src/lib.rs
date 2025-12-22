@@ -120,10 +120,14 @@ pub use bidirectional::{BidirectionalConfig, Direction, MappingStore};
 pub use checkpoint::{Checkpoint, CheckpointConfig, GitDiff};
 
 // Re-export cross-file types for semantic relationships
-pub use crossfile::{CrossFileConfig, CrossFileRule, CrossFileManager};
+pub use crossfile::{CrossFileConfig, CrossFileManager, CrossFileRule};
 
 // Re-export learning types for pattern inference
-pub use learn::{PatternLearner, LearnedPattern, LearnConfig};
+pub use learn::{LearnConfig, LearnedPattern, PatternLearner};
 
 // Re-export testing types for pipeline validation
-pub use testing::{TestRunner, TestCase, TestConfig, TestSummary};
+pub use testing::{TestCase, TestConfig, TestRunner, TestSummary};
+
+// Re-export finalize types for aggregation
+pub use pipeline::{CounterConfig, FinalizeConfig, FinalizeOutputFormat};
+pub use processor::{CompiledCounter, FinalizeState};

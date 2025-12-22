@@ -1,0 +1,106 @@
+name = "build-triage"
+description = "Parse compiler output into categorized actionable items"
+# Usage: cargo build 2>&1 | rexpipe -c build-triage.toml
+# Works with: rustc, gcc, clang, typescript, go build
+
+# =============================================================================
+# PHASE 1: Strip noise
+# =============================================================================
+
+# Remove ANSI color codes
+[[step]]
+type = "substitute"
+pattern = "\\x1b\\[[0-9;]*m"
+replacement = ""
+flags = ["global"]
+
+# Remove "Compiling/Downloading" progress lines
+[[step]]
+type = "filter"
+pattern = "^\\s*(Compiling|Downloading|Downloaded|Updating|Finished|Running)\\s"
+action = "drop_line"
+
+# Remove blank lines
+[[step]]
+type = "filter"
+pattern = "^\\s*$"
+action = "drop_line"
+
+# =============================================================================
+# PHASE 2: Categorize by severity
+# =============================================================================
+
+# Tag errors (rust, gcc, clang, tsc)
+[[step]]
+type = "substitute"
+pattern = "^(error\\[E[0-9]+\\]|error:|ERROR:)"
+replacement = "[ERROR] "
+
+# Tag warnings
+[[step]]
+type = "substitute"
+pattern = "^(warning\\[?[A-Z0-9]*\\]?:|warning:|WARNING:)"
+replacement = "[WARN] "
+
+# Tag notes/hints
+[[step]]
+type = "substitute"
+pattern = "^(note:|help:|hint:|NOTE:|HELP:)"
+replacement = "[NOTE] "
+
+# Tag info lines
+[[step]]
+type = "substitute"
+pattern = "^(info:|INFO:)"
+replacement = "[INFO] "
+
+# =============================================================================
+# PHASE 3: Extract file locations
+# =============================================================================
+
+# Rust-style: --> file:line:col
+[[step]]
+type = "substitute"
+pattern = "^\\s*--> ([^:]+):(\\d+):(\\d+)"
+replacement = "  📍 $1:$2:$3"
+
+# GCC/Clang style: file:line:col: severity
+[[step]]
+type = "substitute"
+pattern = "^([^:]+):(\\d+):(\\d+): (error|warning)"
+replacement = "[$4] 📍 $1:$2:$3"
+
+# TypeScript style: file(line,col)
+[[step]]
+type = "substitute"
+pattern = "^([^(]+)\\((\\d+),(\\d+)\\): (error|warning)"
+replacement = "[$4] 📍 $1:$2:$3"
+
+# =============================================================================
+# PHASE 4: Clean up for readability
+# =============================================================================
+
+# Indent continuation lines
+[[step]]
+type = "substitute"
+pattern = "^(\\d+\\s*\\|)"
+replacement = "     $1"
+
+# Mark suggestion blocks
+[[step]]
+type = "substitute"
+pattern = "^\\s*\\|\\s*\\^+"
+replacement = "     ^^^"
+
+# Remove excessive dashes/equals
+[[step]]
+type = "substitute"
+pattern = "^[-=]{10,}$"
+replacement = ""
+
+# Final cleanup of multiple spaces
+[[step]]
+type = "substitute"
+pattern = "  +"
+replacement = " "
+flags = ["global"]

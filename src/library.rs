@@ -36,9 +36,59 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
+/// Check if a path string is a URL (http:// or https://)
+pub fn is_url(path: &str) -> bool {
+    path.starts_with("http://") || path.starts_with("https://")
+}
+
+/// Fetch content from a URL.
+///
+/// Requires the `remote` feature to be enabled.
+///
+/// # Example
+///
+/// ```rust,no_run
+/// use rexpipe::library::fetch_url;
+///
+/// let content = fetch_url("https://example.com/patterns.toml").unwrap();
+/// ```
+#[cfg(feature = "remote")]
+pub fn fetch_url(url: &str) -> Result<String> {
+    log::debug!("Fetching remote library: {}", url);
+
+    let response = ureq::get(url)
+        .timeout(std::time::Duration::from_secs(30))
+        .call()
+        .map_err(|e| anyhow::anyhow!("Failed to fetch '{}': {}", url, e))?;
+
+    if response.status() != 200 {
+        return Err(anyhow::anyhow!(
+            "Failed to fetch '{}': HTTP {}",
+            url,
+            response.status()
+        ));
+    }
+
+    response
+        .into_string()
+        .map_err(|e| anyhow::anyhow!("Failed to read response from '{}': {}", url, e))
+}
+
+/// Stub for when remote feature is disabled.
+#[cfg(not(feature = "remote"))]
+pub fn fetch_url(url: &str) -> Result<String> {
+    Err(anyhow::anyhow!(
+        "Remote library support requires the 'remote' feature. \
+         Cannot fetch '{}'.\n\
+         Install with: cargo install rexpipe --features remote",
+        url
+    ))
+}
+
 /// Pre-compiled regex for pattern references like `${pattern.name}`
-static PATTERN_REF_REGEX: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\$\{([a-zA-Z_][a-zA-Z0-9_.]*)\}").expect("invalid pattern ref regex"));
+static PATTERN_REF_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\$\{([a-zA-Z_][a-zA-Z0-9_.]*)\}").expect("invalid pattern ref regex")
+});
 
 /// Pattern library configuration as loaded from TOML
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -159,8 +209,12 @@ pub struct LibraryResolver {
     search_paths: Vec<PathBuf>,
     /// Cache of loaded libraries by canonical path
     loaded: HashMap<PathBuf, PatternLibrary>,
+    /// Cache of loaded remote libraries by URL
+    remote_cache: HashMap<String, PatternLibrary>,
     /// Stack of libraries currently being resolved (for cycle detection and depth limiting)
     resolution_stack: Vec<PathBuf>,
+    /// Stack of remote URLs currently being resolved (for cycle detection)
+    remote_resolution_stack: Vec<String>,
 }
 
 impl LibraryResolver {
@@ -185,19 +239,38 @@ impl LibraryResolver {
         Self {
             search_paths,
             loaded: HashMap::new(),
+            remote_cache: HashMap::new(),
             resolution_stack: Vec::new(),
+            remote_resolution_stack: Vec::new(),
         }
     }
 
     /// Load and resolve multiple libraries into a single ResolvedLibrary
+    ///
+    /// Supports both local files and remote URLs (with the `remote` feature):
+    ///
+    /// ```toml
+    /// patterns_include = [
+    ///     "local-patterns.toml",
+    ///     "https://example.com/patterns/common.toml"
+    /// ]
+    /// ```
     pub fn load_libraries(&mut self, includes: &[String]) -> Result<ResolvedLibrary> {
         let mut resolved = ResolvedLibrary::new();
 
         for include in includes {
-            let path = self.find_library(include)?;
-            let lib = self.load_library_recursive(&path)?;
-            let flattened = self.flatten_library(&lib, &path)?;
-            resolved.merge(flattened);
+            if is_url(include) {
+                // Handle remote library
+                let lib = self.load_remote_library(include)?;
+                let flattened = self.flatten_remote_library(&lib, include)?;
+                resolved.merge(flattened);
+            } else {
+                // Handle local file
+                let path = self.find_library(include)?;
+                let lib = self.load_library_recursive(&path)?;
+                let flattened = self.flatten_library(&lib, &path)?;
+                resolved.merge(flattened);
+            }
         }
 
         Ok(resolved)
@@ -240,6 +313,96 @@ impl LibraryResolver {
             searched_paths: searched.join(", "),
         }
         .into())
+    }
+
+    /// Load a remote library from a URL
+    ///
+    /// Requires the `remote` feature.
+    fn load_remote_library(&mut self, url: &str) -> Result<PatternLibrary> {
+        // Check for circular reference
+        if self.remote_resolution_stack.contains(&url.to_string()) {
+            let cycle: Vec<String> = self.remote_resolution_stack.clone();
+            return Err(LibraryError::CircularInclude {
+                cycle: format!("{} -> {}", cycle.join(" -> "), url),
+            }
+            .into());
+        }
+
+        // Check for excessive depth
+        let total_depth = self.resolution_stack.len() + self.remote_resolution_stack.len();
+        if total_depth >= MAX_INCLUDE_DEPTH {
+            return Err(anyhow::anyhow!(
+                "Maximum library include depth ({}) exceeded",
+                MAX_INCLUDE_DEPTH
+            ));
+        }
+
+        // Check cache
+        if let Some(lib) = self.remote_cache.get(url) {
+            return Ok(lib.clone());
+        }
+
+        // Mark as in-progress
+        self.remote_resolution_stack.push(url.to_string());
+
+        // Fetch and parse the library
+        let content = fetch_url(url)?;
+        let library: PatternLibrary = toml::from_str(&content)
+            .with_context(|| format!("Failed to parse remote library '{}'", url))?;
+
+        // Process nested includes (remote libraries can include other remote libraries)
+        for include in &library.patterns_include {
+            if is_url(include) {
+                // Recursively load remote
+                let _nested = self.load_remote_library(include)?;
+            } else {
+                // Remote library including a local file - not supported
+                // The remote library should only reference other remote libraries
+                // or have all patterns inline
+                log::warn!(
+                    "Remote library '{}' references local file '{}' which is not supported. \
+                     Remote libraries can only include other remote libraries or inline patterns.",
+                    url,
+                    include
+                );
+            }
+        }
+
+        // Remove from resolution stack
+        self.remote_resolution_stack.pop();
+
+        // Cache the loaded library
+        self.remote_cache.insert(url.to_string(), library.clone());
+
+        Ok(library)
+    }
+
+    /// Flatten a remote library's patterns to dot notation
+    fn flatten_remote_library(
+        &self,
+        library: &PatternLibrary,
+        url: &str,
+    ) -> Result<ResolvedLibrary> {
+        let mut resolved = ResolvedLibrary::new();
+        resolved.source_files.push(PathBuf::from(url));
+
+        // Flatten the patterns
+        flatten_patterns_recursive(&library.patterns, "", &mut resolved.patterns);
+
+        // Include patterns from nested remote includes
+        for include in &library.patterns_include {
+            if is_url(include) {
+                if let Some(nested_lib) = self.remote_cache.get(include) {
+                    let nested_resolved = self.flatten_remote_library(nested_lib, include)?;
+                    for (name, pattern) in nested_resolved.patterns {
+                        resolved.patterns.entry(name).or_insert(pattern);
+                    }
+                    resolved.source_files.extend(nested_resolved.source_files);
+                }
+            }
+        }
+
+        Ok(resolved)
     }
 
     /// Load a library file recursively, handling nested includes

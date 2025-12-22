@@ -125,7 +125,11 @@ fn test_inspection_mode() {
     assert_eq!(line_match.matches.len(), 3, "Should have exactly 3 matches");
 
     // Verify the actual matched values
-    let match_values: Vec<&str> = line_match.matches.iter().map(|m| m.full_match.as_str()).collect();
+    let match_values: Vec<&str> = line_match
+        .matches
+        .iter()
+        .map(|m| m.full_match.as_str())
+        .collect();
     assert_eq!(match_values, vec!["123", "456", "789"]);
 }
 
@@ -151,7 +155,7 @@ another DEBUG to drop"#;
             flags: None,
             description: None,
             enabled: Some(true),
-                ..Default::default()
+            ..Default::default()
         }],
         ..Default::default()
     };
@@ -209,7 +213,7 @@ Invalid line without timestamp
             flags: None,
             description: Some("Validate timestamp format".to_string()),
             enabled: Some(true),
-                ..Default::default()
+            ..Default::default()
         }],
         ..Default::default()
     };
@@ -254,7 +258,7 @@ fn test_extract_step_type() {
             flags: None,
             description: Some("Extract email addresses".to_string()),
             enabled: Some(true),
-                ..Default::default()
+            ..Default::default()
         }],
         ..Default::default()
     };
@@ -289,7 +293,7 @@ fn test_error_handling() {
             flags: None,
             description: None,
             enabled: Some(true),
-                ..Default::default()
+            ..Default::default()
         }],
         ..Default::default()
     };
@@ -353,7 +357,7 @@ fn test_transform_uppercase() {
             flags: Some(vec![RegexFlag::Global]),
             description: Some("Convert lowercase words to uppercase".to_string()),
             enabled: Some(true),
-                ..Default::default()
+            ..Default::default()
         }],
         ..Default::default()
     };
@@ -387,7 +391,7 @@ fn test_transform_lowercase() {
             flags: Some(vec![RegexFlag::Global]),
             description: Some("Convert uppercase to lowercase".to_string()),
             enabled: Some(true),
-                ..Default::default()
+            ..Default::default()
         }],
         ..Default::default()
     };
@@ -435,7 +439,7 @@ fn test_pcre_positive_lookahead() {
             flags: Some(vec![RegexFlag::Global]),
             description: Some("Match foo only when followed by bar".to_string()),
             enabled: Some(true),
-                ..Default::default()
+            ..Default::default()
         }],
         ..Default::default()
     };
@@ -477,7 +481,7 @@ fn test_pcre_negative_lookahead() {
             flags: Some(vec![RegexFlag::Global]),
             description: Some("Match foo only when NOT followed by bar".to_string()),
             enabled: Some(true),
-                ..Default::default()
+            ..Default::default()
         }],
         ..Default::default()
     };
@@ -519,7 +523,7 @@ fn test_pcre_positive_lookbehind() {
             flags: Some(vec![RegexFlag::Global]),
             description: Some("Match numbers preceded by $".to_string()),
             enabled: Some(true),
-                ..Default::default()
+            ..Default::default()
         }],
         ..Default::default()
     };
@@ -561,7 +565,7 @@ fn test_pcre_negative_lookbehind() {
             flags: Some(vec![RegexFlag::Global]),
             description: Some("Match numbers NOT preceded by $".to_string()),
             enabled: Some(true),
-                ..Default::default()
+            ..Default::default()
         }],
         ..Default::default()
     };
@@ -607,7 +611,7 @@ fn test_pcre_combined_lookaround() {
             flags: Some(vec![RegexFlag::Global]),
             description: Some("Complex lookaround pattern".to_string()),
             enabled: Some(true),
-                ..Default::default()
+            ..Default::default()
         }],
         ..Default::default()
     };
@@ -664,7 +668,7 @@ INFO: Processing complete"#;
             flags: Some(vec![RegexFlag::CaseInsensitive]),
             description: Some("Drop debug lines mentioning user".to_string()),
             enabled: Some(true),
-                ..Default::default()
+            ..Default::default()
         }],
         ..Default::default()
     };
@@ -712,7 +716,7 @@ fn test_fixed_string_basic_replacement() {
             flags: Some(vec![RegexFlag::Global]),
             description: Some("Replace literal .*".to_string()),
             enabled: Some(true),
-                ..Default::default()
+            ..Default::default()
         }],
         ..Default::default()
     };
@@ -754,7 +758,7 @@ fn test_fixed_string_special_chars() {
             flags: Some(vec![RegexFlag::Global]),
             description: None,
             enabled: Some(true),
-                ..Default::default()
+            ..Default::default()
         }],
         ..Default::default()
     };
@@ -801,7 +805,7 @@ Line with ERROR without brackets"#;
             flags: None,
             description: None,
             enabled: Some(true),
-                ..Default::default()
+            ..Default::default()
         }],
         ..Default::default()
     };
@@ -846,7 +850,7 @@ fn test_fixed_string_backslashes() {
             flags: Some(vec![RegexFlag::Global]),
             description: None,
             enabled: Some(true),
-                ..Default::default()
+            ..Default::default()
         }],
         ..Default::default()
     };
@@ -888,7 +892,7 @@ fn test_fixed_string_multiple_occurrences() {
             flags: Some(vec![RegexFlag::Global]),
             description: None,
             enabled: Some(true),
-                ..Default::default()
+            ..Default::default()
         }],
         ..Default::default()
     };
@@ -927,7 +931,7 @@ fn test_unicode_basic_matching() {
             flags: Some(vec![RegexFlag::Global]),
             description: None,
             enabled: Some(true),
-                ..Default::default()
+            ..Default::default()
         }],
         ..Default::default()
     };
@@ -963,7 +967,7 @@ fn test_unicode_character_classes() {
             flags: Some(vec![RegexFlag::Global]),
             description: None,
             enabled: Some(true),
-                ..Default::default()
+            ..Default::default()
         }],
         ..Default::default()
     };
@@ -998,7 +1002,7 @@ fn test_unicode_emoji() {
             flags: Some(vec![RegexFlag::Global]),
             description: None,
             enabled: Some(true),
-                ..Default::default()
+            ..Default::default()
         }],
         ..Default::default()
     };
@@ -1037,7 +1041,7 @@ Mixed: English 和 中文"#;
             flags: None,
             description: None,
             enabled: Some(true),
-                ..Default::default()
+            ..Default::default()
         }],
         ..Default::default()
     };
@@ -1077,7 +1081,7 @@ fn test_unicode_transform() {
             flags: Some(vec![RegexFlag::Global]),
             description: None,
             enabled: Some(true),
-                ..Default::default()
+            ..Default::default()
         }],
         ..Default::default()
     };
@@ -1113,7 +1117,7 @@ fn test_unicode_accented_characters() {
             flags: Some(vec![RegexFlag::Global]),
             description: None,
             enabled: Some(true),
-                ..Default::default()
+            ..Default::default()
         }],
         ..Default::default()
     };
@@ -1149,7 +1153,7 @@ fn test_unicode_word_boundaries() {
             flags: Some(vec![RegexFlag::Global, RegexFlag::Unicode]),
             description: None,
             enabled: Some(true),
-                ..Default::default()
+            ..Default::default()
         }],
         ..Default::default()
     };
@@ -1188,7 +1192,7 @@ fn test_error_invalid_regex_pattern() {
             flags: None,
             description: None,
             enabled: Some(true),
-                ..Default::default()
+            ..Default::default()
         }],
         ..Default::default()
     };
@@ -1215,7 +1219,7 @@ fn test_error_missing_replacement() {
             flags: None,
             description: None,
             enabled: Some(true),
-                ..Default::default()
+            ..Default::default()
         }],
         ..Default::default()
     };
@@ -1244,7 +1248,7 @@ fn test_error_missing_filter_action() {
             flags: None,
             description: None,
             enabled: Some(true),
-                ..Default::default()
+            ..Default::default()
         }],
         ..Default::default()
     };
@@ -1292,7 +1296,7 @@ fn test_error_empty_pattern() {
             flags: None,
             description: None,
             enabled: Some(true),
-                ..Default::default()
+            ..Default::default()
         }],
         ..Default::default()
     };
@@ -1376,7 +1380,7 @@ fn test_pcre_mode_disabled_error() {
             flags: None,
             description: None,
             enabled: Some(true),
-                ..Default::default()
+            ..Default::default()
         }],
         ..Default::default()
     };
@@ -1510,11 +1514,17 @@ fn test_exclude_patterns_with_discovery() {
     let processor = MultiFileProcessor::new(config, options);
 
     // Use discover_files which applies exclude patterns
-    let discovered = processor.discover_files(&[temp_dir.path().to_path_buf()]).unwrap();
+    let discovered = processor
+        .discover_files(&[temp_dir.path().to_path_buf()])
+        .unwrap();
 
     // txt and md should be discovered, log excluded
     assert_eq!(discovered.len(), 2);
-    assert!(!discovered.iter().any(|p| p.extension().map(|e| e == "log").unwrap_or(false)));
+    assert!(
+        !discovered
+            .iter()
+            .any(|p| p.extension().map(|e| e == "log").unwrap_or(false))
+    );
 
     // Now process the discovered files
     let result = processor.process_files(&discovered).unwrap();
@@ -1594,8 +1604,8 @@ fn test_atomic_write_preserves_original_on_read() {
 /// Test progress callback
 #[test]
 fn test_progress_callback() {
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     let temp_dir = TempDir::new().unwrap();
 
@@ -1740,7 +1750,7 @@ fn test_max_line_length_configuration() {
             flags: Some(vec![RegexFlag::Global]),
             description: None,
             enabled: Some(true),
-                ..Default::default()
+            ..Default::default()
         }],
         ..Default::default()
     };
@@ -1777,7 +1787,7 @@ fn test_max_line_action_truncate_config() {
             flags: Some(vec![RegexFlag::Global]),
             description: None,
             enabled: Some(true),
-                ..Default::default()
+            ..Default::default()
         }],
         ..Default::default()
     };
@@ -1985,8 +1995,8 @@ fn test_context_lines_at_boundaries() {
         version: None,
         patterns_include: Vec::new(),
         settings: PipelineSettings {
-            context_before: 5,  // More than available lines before
-            context_after: 5,   // More than available lines after
+            context_before: 5, // More than available lines before
+            context_after: 5,  // More than available lines after
             ..Default::default()
         },
         step: vec![PipelineStep {
@@ -1998,7 +2008,7 @@ fn test_context_lines_at_boundaries() {
             flags: None,
             description: None,
             enabled: Some(true),
-                ..Default::default()
+            ..Default::default()
         }],
         ..Default::default()
     };
@@ -2138,4 +2148,431 @@ mod async_tests {
         assert_eq!(matching.len(), 1);
         assert!(matching.contains(&file1_path));
     }
+}
+
+// =====================================================
+// Windows Line Ending Tests (CRLF)
+// =====================================================
+
+/// Test basic substitution with Windows CRLF line endings
+#[test]
+fn test_crlf_basic_substitution() {
+    // Input with Windows-style line endings
+    let input_data = "Line 1: 123\r\nLine 2: 456\r\nLine 3: 789\r\n";
+
+    let config = PipelineConfig::from_inline_pattern(r"\d+", Some("[NUM]"));
+    let mut processor = StreamProcessor::new(config).unwrap();
+
+    let reader = Cursor::new(input_data);
+    let mut output = Vec::new();
+
+    let result = processor.process_stream(reader, &mut output).unwrap();
+    let output_str = String::from_utf8(output).unwrap();
+
+    // Verify processing happened
+    assert_eq!(result.lines_processed, 3);
+    assert!(result.transformations_applied >= 3);
+
+    // Verify substitution worked
+    assert!(output_str.contains("[NUM]"));
+    assert!(!output_str.contains("123"));
+    assert!(!output_str.contains("456"));
+    assert!(!output_str.contains("789"));
+}
+
+/// Test mixed line endings (some LF, some CRLF)
+#[test]
+fn test_mixed_line_endings() {
+    // Mix of Unix and Windows line endings
+    let input_data = "Unix line 123\nWindows line 456\r\nAnother Unix 789\n";
+
+    let config = PipelineConfig::from_inline_pattern(r"\d+", Some("[X]"));
+    let mut processor = StreamProcessor::new(config).unwrap();
+
+    let reader = Cursor::new(input_data);
+    let mut output = Vec::new();
+
+    let result = processor.process_stream(reader, &mut output).unwrap();
+    let output_str = String::from_utf8(output).unwrap();
+
+    // All three lines should be processed
+    assert_eq!(result.lines_processed, 3);
+    assert!(result.transformations_applied >= 3);
+
+    // All numbers replaced
+    assert!(output_str.contains("[X]"));
+    assert!(!output_str.contains("123"));
+    assert!(!output_str.contains("456"));
+    assert!(!output_str.contains("789"));
+}
+
+/// Test CRLF with filter operations (drop lines)
+#[test]
+fn test_crlf_filter_drop() {
+    let input_data =
+        "Keep this line\r\nDROP this DEBUG line\r\nKeep this too\r\nAnother DEBUG drop\r\n";
+
+    let config = PipelineConfig {
+        name: Some("CRLF Filter Test".to_string()),
+        description: None,
+        version: None,
+        patterns_include: Vec::new(),
+        settings: PipelineSettings::default(),
+        step: vec![PipelineStep {
+            step_type: StepType::Filter,
+            pattern: "DEBUG".to_string(),
+            replacement: None,
+            action: Some(StepAction::DropLine),
+            transform: None,
+            flags: None,
+            description: None,
+            enabled: Some(true),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    let mut processor = StreamProcessor::new(config).unwrap();
+    let reader = Cursor::new(input_data);
+    let mut output = Vec::new();
+
+    let _result = processor.process_stream(reader, &mut output).unwrap();
+    let output_str = String::from_utf8(output).unwrap();
+
+    // DEBUG lines should be dropped
+    assert!(!output_str.contains("DEBUG"));
+    assert!(output_str.contains("Keep this line"));
+    assert!(output_str.contains("Keep this too"));
+
+    // Count remaining lines
+    let lines: Vec<&str> = output_str.lines().filter(|s| !s.is_empty()).collect();
+    assert_eq!(lines.len(), 2);
+}
+
+/// Test CRLF with filter operations (keep lines)
+#[test]
+fn test_crlf_filter_keep() {
+    let input_data = "ERROR: something wrong\r\nINFO: normal message\r\nERROR: another error\r\nDEBUG: debug info\r\n";
+
+    let config = PipelineConfig {
+        name: Some("CRLF Keep Filter Test".to_string()),
+        description: None,
+        version: None,
+        patterns_include: Vec::new(),
+        settings: PipelineSettings::default(),
+        step: vec![PipelineStep {
+            step_type: StepType::Filter,
+            pattern: "ERROR".to_string(),
+            replacement: None,
+            action: Some(StepAction::KeepLine),
+            transform: None,
+            flags: None,
+            description: None,
+            enabled: Some(true),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    let mut processor = StreamProcessor::new(config).unwrap();
+    let reader = Cursor::new(input_data);
+    let mut output = Vec::new();
+
+    let _result = processor.process_stream(reader, &mut output).unwrap();
+    let output_str = String::from_utf8(output).unwrap();
+
+    // Only ERROR lines should remain
+    let lines: Vec<&str> = output_str.lines().filter(|s| !s.is_empty()).collect();
+    assert_eq!(lines.len(), 2);
+    assert!(lines.iter().all(|line| line.contains("ERROR")));
+}
+
+/// Test CRLF with extract step
+#[test]
+fn test_crlf_extract() {
+    let input_data = "Email: john@example.com text\r\nMore: jane@test.org here\r\n";
+
+    let config = PipelineConfig {
+        name: Some("CRLF Extract Test".to_string()),
+        description: None,
+        version: None,
+        patterns_include: Vec::new(),
+        settings: PipelineSettings::default(),
+        step: vec![PipelineStep {
+            step_type: StepType::Extract,
+            pattern: r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}".to_string(),
+            replacement: None,
+            action: None,
+            transform: None,
+            flags: None,
+            description: None,
+            enabled: Some(true),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    let mut processor = StreamProcessor::new(config).unwrap();
+    let reader = Cursor::new(input_data);
+    let mut output = Vec::new();
+
+    let result = processor.process_stream(reader, &mut output).unwrap();
+    let output_str = String::from_utf8(output).unwrap();
+
+    // Should extract emails
+    assert!(result.transformations_applied > 0);
+    assert!(output_str.contains("john@example.com"));
+    assert!(output_str.contains("jane@test.org"));
+}
+
+/// Test CRLF with transform (uppercase)
+#[test]
+fn test_crlf_transform_uppercase() {
+    let input_data = "hello world\r\ntest data\r\n";
+
+    let config = PipelineConfig {
+        name: Some("CRLF Transform Test".to_string()),
+        description: None,
+        version: None,
+        patterns_include: Vec::new(),
+        settings: PipelineSettings::default(),
+        step: vec![PipelineStep {
+            step_type: StepType::Transform,
+            pattern: r"[a-z]+".to_string(),
+            replacement: None,
+            action: None,
+            transform: Some(TransformAction::Uppercase),
+            flags: Some(vec![RegexFlag::Global]),
+            description: None,
+            enabled: Some(true),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    let mut processor = StreamProcessor::new(config).unwrap();
+    let reader = Cursor::new(input_data);
+    let mut output = Vec::new();
+
+    processor.process_stream(reader, &mut output).unwrap();
+    let output_str = String::from_utf8(output).unwrap();
+
+    // Should be uppercased
+    assert!(output_str.contains("HELLO"));
+    assert!(output_str.contains("WORLD"));
+    assert!(output_str.contains("TEST"));
+    assert!(output_str.contains("DATA"));
+}
+
+/// Test CRLF at end of file without trailing newline
+#[test]
+fn test_crlf_no_trailing_newline() {
+    // Windows file without trailing newline
+    let input_data = "Line 1: 123\r\nLine 2: 456";
+
+    let config = PipelineConfig::from_inline_pattern(r"\d+", Some("[N]"));
+    let mut processor = StreamProcessor::new(config).unwrap();
+
+    let reader = Cursor::new(input_data);
+    let mut output = Vec::new();
+
+    let result = processor.process_stream(reader, &mut output).unwrap();
+    let output_str = String::from_utf8(output).unwrap();
+
+    // Both lines should be processed
+    assert_eq!(result.lines_processed, 2);
+    assert!(output_str.contains("[N]"));
+    assert!(!output_str.contains("123"));
+    assert!(!output_str.contains("456"));
+}
+
+/// Test CRLF with carriage return in pattern match
+#[test]
+fn test_crlf_pattern_at_line_end() {
+    // Match pattern at end of line, just before CRLF
+    let input_data = "value: 100\r\nvalue: 200\r\n";
+
+    let config = PipelineConfig::from_inline_pattern(r"\d+$", Some("[END]"));
+    let mut processor = StreamProcessor::new(config).unwrap();
+
+    let reader = Cursor::new(input_data);
+    let mut output = Vec::new();
+
+    let result = processor.process_stream(reader, &mut output).unwrap();
+    let output_str = String::from_utf8(output).unwrap();
+
+    // End-of-line pattern should match before the line terminator
+    assert!(result.transformations_applied >= 2);
+    assert!(output_str.contains("[END]"));
+}
+
+/// Test file processing with CRLF line endings
+#[test]
+fn test_crlf_file_processing() {
+    let temp_dir = TempDir::new().unwrap();
+
+    // Create file with Windows line endings
+    let file_path = temp_dir.path().join("windows.txt");
+    fs::write(&file_path, "Line 123\r\nLine 456\r\n").unwrap();
+
+    let config = PipelineConfig::from_inline_pattern(r"\d+", Some("[X]"));
+    let options = FileProcessingOptions {
+        in_place: true,
+        ..Default::default()
+    };
+
+    let processor = MultiFileProcessor::new(config, options);
+    let paths = vec![file_path.clone()];
+    let result = processor.process_files(&paths).unwrap();
+
+    assert_eq!(result.files_processed, 1);
+    assert!(result.files_modified > 0);
+
+    // Verify content was modified
+    let content = fs::read_to_string(&file_path).unwrap();
+    assert!(content.contains("[X]"));
+    assert!(!content.contains("123"));
+    assert!(!content.contains("456"));
+}
+
+/// Test validation step with CRLF
+#[test]
+fn test_crlf_validation() {
+    let input_data =
+        "2025-01-08 valid line\r\nInvalid line without date\r\n2025-01-09 another valid\r\n";
+
+    let config = PipelineConfig {
+        name: Some("CRLF Validation Test".to_string()),
+        description: None,
+        version: None,
+        patterns_include: Vec::new(),
+        settings: PipelineSettings::default(),
+        step: vec![PipelineStep {
+            step_type: StepType::Validate,
+            pattern: r"^\d{4}-\d{2}-\d{2}".to_string(),
+            replacement: None,
+            action: None,
+            transform: None,
+            flags: None,
+            description: Some("Validate date format".to_string()),
+            enabled: Some(true),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    let mut processor = StreamProcessor::new(config).unwrap();
+    let reader = Cursor::new(input_data);
+    let mut output = Vec::new();
+
+    let result = processor.process_stream(reader, &mut output).unwrap();
+    let output_str = String::from_utf8(output).unwrap();
+
+    // Should have validation errors for invalid line
+    assert!(!result.errors.is_empty());
+
+    // Only valid lines should be in output
+    let lines: Vec<&str> = output_str.lines().filter(|s| !s.is_empty()).collect();
+    assert_eq!(lines.len(), 2);
+    assert!(lines.iter().all(|line| line.starts_with("2025-01-")));
+}
+
+/// Test multiple consecutive CRLF (blank lines)
+#[test]
+fn test_crlf_consecutive_blank_lines() {
+    let input_data = "Line 1: 100\r\n\r\n\r\nLine 2: 200\r\n";
+
+    let config = PipelineConfig::from_inline_pattern(r"\d+", Some("[NUM]"));
+    let mut processor = StreamProcessor::new(config).unwrap();
+
+    let reader = Cursor::new(input_data);
+    let mut output = Vec::new();
+
+    let result = processor.process_stream(reader, &mut output).unwrap();
+    let output_str = String::from_utf8(output).unwrap();
+
+    // Should handle blank lines gracefully
+    assert_eq!(result.lines_processed, 4); // 2 content lines + 2 blank lines
+    assert!(output_str.contains("[NUM]"));
+}
+
+/// Test CRLF with Unicode content
+#[test]
+fn test_crlf_unicode_content() {
+    let input_data = "Hello 世界 123\r\nTest café 456\r\n";
+
+    let config = PipelineConfig::from_inline_pattern(r"\d+", Some("[X]"));
+    let mut processor = StreamProcessor::new(config).unwrap();
+
+    let reader = Cursor::new(input_data);
+    let mut output = Vec::new();
+
+    let result = processor.process_stream(reader, &mut output).unwrap();
+    let output_str = String::from_utf8(output).unwrap();
+
+    // Should handle Unicode with CRLF
+    assert_eq!(result.lines_processed, 2);
+    assert!(output_str.contains("世界"));
+    assert!(output_str.contains("café"));
+    assert!(output_str.contains("[X]"));
+}
+
+/// Test lone CR (old Mac line endings) - edge case
+#[test]
+fn test_lone_cr_line_endings() {
+    // Old Mac-style line endings (CR only, no LF)
+    let input_data = "Line 1: 123\rLine 2: 456\rLine 3: 789\r";
+
+    let config = PipelineConfig::from_inline_pattern(r"\d+", Some("[N]"));
+    let mut processor = StreamProcessor::new(config).unwrap();
+
+    let reader = Cursor::new(input_data);
+    let mut output = Vec::new();
+
+    let result = processor.process_stream(reader, &mut output).unwrap();
+    let output_str = String::from_utf8(output).unwrap();
+
+    // Should process (behavior may vary - lone CR typically treated as one line by Rust)
+    assert!(result.lines_processed >= 1);
+    assert!(output_str.contains("[N]"));
+}
+
+/// Test CRLF with global flag replacement
+#[test]
+fn test_crlf_global_replacement() {
+    let input_data = "a1b2c3\r\nd4e5f6\r\n";
+
+    let config = PipelineConfig {
+        name: Some("CRLF Global Replace Test".to_string()),
+        description: None,
+        version: None,
+        patterns_include: Vec::new(),
+        settings: PipelineSettings::default(),
+        step: vec![PipelineStep {
+            step_type: StepType::Substitute,
+            pattern: r"\d".to_string(),
+            replacement: Some("X".to_string()),
+            action: None,
+            transform: None,
+            flags: Some(vec![RegexFlag::Global]),
+            description: None,
+            enabled: Some(true),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    let mut processor = StreamProcessor::new(config).unwrap();
+    let reader = Cursor::new(input_data);
+    let mut output = Vec::new();
+
+    let result = processor.process_stream(reader, &mut output).unwrap();
+    let output_str = String::from_utf8(output).unwrap();
+
+    // All digits should be replaced (transformations counted per-line, not per-match)
+    assert!(result.transformations_applied >= 2);
+    assert!(output_str.contains("aXbXcX"));
+    assert!(output_str.contains("dXeXfX"));
+    // Verify no digits remain
+    assert!(!output_str.chars().any(|c| c.is_ascii_digit()));
 }

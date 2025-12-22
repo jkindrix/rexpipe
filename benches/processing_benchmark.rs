@@ -429,11 +429,14 @@ fn benchmark_long_lines(c: &mut Criterion) {
         let base = "word123 ";
         let repeat_count = line_length / base.len();
         let long_line = base.repeat(repeat_count);
-        (0..line_count).map(|_| long_line.clone()).collect::<Vec<_>>().join("\n")
+        (0..line_count)
+            .map(|_| long_line.clone())
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
-    let short_lines = generate_long_line_data(100, 1000);   // 100 chars x 1000 lines
-    let long_lines = generate_long_line_data(10_000, 100);  // 10KB lines x 100
+    let short_lines = generate_long_line_data(100, 1000); // 100 chars x 1000 lines
+    let long_lines = generate_long_line_data(10_000, 100); // 10KB lines x 100
 
     let config = PipelineConfig::from_inline_pattern(r"\d+", Some("[X]"));
 
@@ -467,11 +470,14 @@ fn benchmark_many_matches(c: &mut Criterion) {
             .map(|i| format!("num{}", i))
             .collect::<Vec<_>>()
             .join(" ");
-        (0..lines).map(|_| line.clone()).collect::<Vec<_>>().join("\n")
+        (0..lines)
+            .map(|_| line.clone())
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
-    let sparse_data = generate_dense_match_data(2, 500);    // 2 matches per line
-    let dense_data = generate_dense_match_data(50, 100);    // 50 matches per line
+    let sparse_data = generate_dense_match_data(2, 500); // 2 matches per line
+    let dense_data = generate_dense_match_data(50, 100); // 50 matches per line
 
     let config = PipelineConfig::from_inline_pattern(r"num\d+", Some("[REPLACED]"));
 
@@ -504,15 +510,13 @@ fn benchmark_pattern_complexity(c: &mut Criterion) {
     let simple_config = PipelineConfig::from_inline_pattern("ERROR", Some("ERR"));
 
     // Alternation pattern
-    let alternation_config = PipelineConfig::from_inline_pattern(
-        r"ERROR|WARN|INFO|DEBUG",
-        Some("[LEVEL]")
-    );
+    let alternation_config =
+        PipelineConfig::from_inline_pattern(r"ERROR|WARN|INFO|DEBUG", Some("[LEVEL]"));
 
     // Complex pattern with groups and lookarounds (anchors)
     let complex_config = PipelineConfig::from_inline_pattern(
         r"(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})",
-        Some("${1}/${2}/${3} ${4}:${5}:${6}")
+        Some("${1}/${2}/${3} ${4}:${5}:${6}"),
     );
 
     group.bench_function("simple_literal", |b| {
@@ -584,14 +588,18 @@ fn benchmark_discovery_and_filtering(c: &mut Criterion) {
     group.bench_function("discover_unfiltered", |b| {
         let processor = MultiFileProcessor::new(config.clone(), options_nofilter.clone());
         b.iter(|| {
-            processor.discover_files(&[temp_dir.path().to_path_buf()]).unwrap();
+            processor
+                .discover_files(&[temp_dir.path().to_path_buf()])
+                .unwrap();
         })
     });
 
     group.bench_function("discover_with_exclude", |b| {
         let processor = MultiFileProcessor::new(config.clone(), options_exclude.clone());
         b.iter(|| {
-            processor.discover_files(&[temp_dir.path().to_path_buf()]).unwrap();
+            processor
+                .discover_files(&[temp_dir.path().to_path_buf()])
+                .unwrap();
         })
     });
 

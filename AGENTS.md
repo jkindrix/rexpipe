@@ -55,16 +55,13 @@ src/
 ├── library.rs       # Pattern library loading
 ├── error.rs         # Structured error types
 ├── json_schema.rs   # JSON output schemas (version 1.0)
-├── stream.rs        # URI-based streaming sources/sinks
 ├── plugin.rs        # Plugin system for custom transforms
-├── server.rs        # Pipeline server mode
-├── audit.rs         # Cryptographic audit trails
 ├── bidirectional.rs # Reversible transformations
 ├── checkpoint.rs    # Incremental processing state
 ├── crossfile.rs     # Cross-file relationship rules
 ├── learn.rs         # Pattern inference from examples
 ├── testing.rs       # Pipeline test framework
-└── data.rs          # Structured data format handling
+└── syntax.rs        # Tree-sitter syntax-aware processing
 ```
 
 ## Key Patterns
@@ -125,7 +122,9 @@ These flags are designed for scripting and automation:
 
 ## Security Considerations
 
-- `--no-shell` disables shell transforms (prevents command injection)
+- Shell transforms are **disabled by default** for security
+- `--allow-shell` explicitly enables shell command execution in transforms
+- Shell commands are validated for dangerous patterns (rm, curl, sudo, etc.)
 - `--strict` enables ReDoS pattern rejection
 - Atomic file writes prevent corruption
 - Audit trails available with `--audit`

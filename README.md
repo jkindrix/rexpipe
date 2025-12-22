@@ -1,20 +1,49 @@
 # rexpipe
 
-**A modern regex pipeline processor for automated text processing.**
+**A transformation recipe system for repeatable, shareable text processing.**
 
-rexpipe consolidates complex regex workflows into a single, efficient tool. It replaces fragile `grep | sed | awk` chains with unified, configurable pipelines that are faster, safer, and easier to maintain.
+rexpipe is not a sed replacement—it's a system for defining, sharing, and composing multi-stage text transformations as version-controlled configuration files. Where sed excels at one-liners, rexpipe excels at 10-50 step pipelines that need to be maintained, shared, and composed.
+
+## The Core Idea
+
+```bash
+# Instead of this fragile, unmaintainable chain:
+cat log.txt | grep -v DEBUG | sed 's/ERROR/ERR/g' | awk '{print $1,$3}' | ...
+
+# Define a transformation recipe:
+rexpipe -c pipelines/normalize-logs.toml < log.txt
+
+# The recipe is:
+# - Self-documenting (TOML with descriptions)
+# - Version-controllable (commit it, review changes)
+# - Shareable (drop into any project)
+# - Composable (chain recipes together)
+# - Testable (dry-run, explain modes)
+```
+
+## When to Use rexpipe
+
+✅ **Use rexpipe for:**
+- Multi-step transformations (5+ regex operations)
+- Transformations you'll run repeatedly
+- Pipelines shared across team/projects
+- Audit-sensitive data processing
+- Complex log normalization, data cleaning, redaction
+
+❌ **Use sed/awk for:**
+- Quick one-off substitutions
+- Interactive exploration
+- Simple single-pattern matches
 
 ## Why rexpipe?
 
-Traditional Unix text tools work well for interactive use but fall short in automated pipelines:
-
 | Traditional Tools | rexpipe |
 |-------------------|---------|
-| Multiple processes, piping overhead | Single process, streaming |
-| Implicit failures, cryptic errors | Structured errors with suggestions |
-| Text-only output | JSON or text output |
-| Easy to accidentally modify files | Safe-by-default with `--apply` |
-| Ad-hoc one-liners | Reusable TOML configurations |
+| Cryptic one-liners | Self-documenting TOML recipes |
+| Copy-paste to share | `git clone` + run |
+| Regex from scratch | Pattern libraries with `${email}`, `${ipv4}` |
+| Silent failures | Structured errors with fix suggestions |
+| No audit trail | Verification and provenance tracking |
 
 ## Key Features
 
@@ -136,6 +165,44 @@ flags = ["global"]
 enabled = true
 ```
 
+### Configuration Inheritance
+
+Pipelines can extend base configurations using the `extends` field. This enables DRY configuration by defining common settings in a base file:
+
+```toml
+# base.toml - Base configuration with common settings
+name = "Base Pipeline"
+version = "1.0.0"
+
+[settings]
+pcre_mode = true
+strict_mode = true
+
+[[step]]
+type = "substitute"
+pattern = '\s+$'
+replacement = ''
+description = "Trim trailing whitespace"
+```
+
+```toml
+# production.toml - Extends base with additional steps
+extends = "base.toml"
+name = "Production Pipeline"
+
+[[step]]
+type = "substitute"
+pattern = 'DEBUG:.*\n'
+replacement = ''
+description = "Remove debug lines"
+```
+
+When loaded, the child config:
+- Inherits settings from base (child settings override if explicitly set)
+- Prepends base steps to its own steps
+- Merges pattern includes
+- Can override name, description, and version
+
 ## Pattern Libraries
 
 Pattern libraries allow you to define reusable regex patterns in separate files and reference them across multiple pipelines using `${pattern.name}` syntax.
@@ -177,9 +244,35 @@ action = "keep_line"
 
 ### Library Location Resolution
 
-Pattern libraries are searched in order:
-1. Relative to the pipeline configuration file
-2. Global directory: `~/.rexpipe/patterns/`
+Pattern libraries are resolved in this order:
+
+1. **Absolute path**: If the path starts with `/` or contains a drive letter (Windows)
+2. **Relative to pipeline config**: If a pipeline is loaded from `/path/to/pipeline.toml` and references `patterns/common.toml`, it looks for `/path/to/patterns/common.toml`
+3. **Current working directory**: `./patterns/common.toml`
+4. **User config directory**: `~/.config/rexpipe/patterns/` (Linux/macOS) or `%APPDATA%\rexpipe\patterns\` (Windows)
+5. **Global patterns directory**: `~/.rexpipe/patterns/` (legacy)
+
+**Environment variable override:**
+```bash
+# Set custom patterns directory
+export REXPIPE_PATTERNS_DIR=/custom/patterns
+```
+
+**Resolution examples:**
+```
+# Pipeline in /home/user/project/config.toml
+patterns_include = ["common.toml"]
+# Checks: /home/user/project/common.toml → ~/.config/rexpipe/patterns/common.toml
+
+patterns_include = ["./patterns/custom.toml"]
+# Checks: /home/user/project/patterns/custom.toml
+
+patterns_include = ["/opt/shared/patterns.toml"]
+# Uses absolute path directly
+```
+
+**Circular include detection:**
+rexpipe detects and reports circular library includes (A includes B, B includes A).
 
 ### Nested Libraries
 
@@ -193,6 +286,26 @@ patterns_include = ["common.toml"]  # Include another library
 [patterns.custom]
 special = 'my-pattern'
 ```
+
+### Remote Libraries
+
+With the `remote` feature enabled, you can load pattern libraries from URLs:
+
+```toml
+# Include a remote library
+patterns_include = [
+    "https://example.com/patterns/common.toml",
+    "./local-patterns.toml"
+]
+```
+
+Install with remote support:
+
+```bash
+cargo install rexpipe --features remote
+```
+
+Remote libraries are cached for the duration of the process. They can include other remote libraries but cannot reference local files.
 
 ### CLI Commands for Libraries
 
@@ -224,6 +337,115 @@ rexpipe ships with two pattern libraries in `examples/patterns/`:
 - `app.java_exception`, `app.python_traceback`, `app.request_id`
 - `docker.container_prefix`, `docker.k8s_prefix`
 - `nginx.error_log`, `nginx.access_log`
+
+### Included Transformation Recipes
+
+rexpipe ships with ready-to-use pipelines in `examples/pipelines/`:
+
+| Recipe | Description |
+|--------|-------------|
+| `git-changelog.toml` | Transform git log into formatted changelog with conventional commit parsing |
+| `secrets-redact.toml` | Redact API keys, tokens, passwords, PII from logs/configs |
+| `csv-clean.toml` | Normalize whitespace, dates, null values in CSV data |
+| `build-triage.toml` | Categorize compiler errors/warnings for easier debugging |
+| `log-normalize.toml` | Unify timestamps and severity levels from mixed log sources |
+| `markdown-toc.toml` | Generate table of contents from markdown headers |
+| `stacktrace-clean.toml` | Remove framework noise from stack traces |
+| `sql-to-json.toml` | Transform SQL table output to JSON lines |
+| `env-to-docker.toml` | Convert .env files to Docker -e flags |
+| `log-stats.toml` | **Aggregation:** Analyze logs and produce statistics summary |
+| `api-audit.toml` | **Aggregation:** Audit API access logs with JSON report |
+| `code-lens-errors.toml` | View codebase through error-handling lens |
+| `code-lens-deps.toml` | Extract dependency graph from source imports |
+| `code-lens-api.toml` | Extract public API surface from source files |
+| `curl-to-api-doc.toml` | Transform curl verbose output into API documentation |
+| `meeting-notes.toml` | Extract action items and decisions from meeting notes |
+| `prose-stats.toml` | Analyze prose for readability issues |
+| `crontab-explain.toml` | Transform crontab entries into human-readable schedules |
+| `dependency-audit.toml` | Extract and normalize dependencies from package files |
+| `diff-to-changelog.toml` | Transform git diff into changelog-style summary |
+| `error-frequency.toml` | Extract unique error types for frequency analysis |
+| `http-access-stats.toml` | Transform HTTP access logs into status code summary |
+| `json-logs-to-text.toml` | Transform JSON log lines into human-readable format |
+| `k8s-sanitize.toml` | Sanitize Kubernetes manifests for sharing |
+| `secrets-redact-v2.toml` | Redact secrets using pattern library (cleaner version) |
+| `shell-history-audit.toml` | Analyze shell history for security review |
+| `sql-format.toml` | Format messy SQL queries for readability |
+| `stats-collector.toml` | Collect and deduplicate statistics from logs |
+| `todo-extract.toml` | Extract TODO/FIXME/HACK comments from source code |
+| `code-lens-complexity.toml` | Find complexity hotspots - deeply nested code |
+
+**Usage:**
+```bash
+# Generate changelog from recent commits
+git log --oneline -20 | rexpipe -c examples/pipelines/git-changelog.toml
+
+# Redact secrets before sharing logs
+cat app.log | rexpipe -c examples/pipelines/secrets-redact.toml
+
+# Chain recipes together
+cat data.csv | rexpipe -c examples/pipelines/csv-clean.toml \
+             | rexpipe -c examples/pipelines/secrets-redact.toml
+```
+
+## Script-Based Plugins
+
+Extend rexpipe with custom script-based plugins that can be used as transform actions.
+
+### Plugin Directories
+
+rexpipe automatically loads plugins from these directories (in order):
+
+1. `./plugins/` (current directory)
+2. `~/.config/rexpipe/plugins/`
+3. `/usr/local/share/rexpipe/plugins/` (Unix)
+4. `$REXPIPE_PLUGIN_DIR` (if set)
+
+You can also specify a custom directory:
+
+```bash
+rexpipe --plugin-dir ./my-plugins -c config.toml < input.txt
+```
+
+### Creating a Plugin
+
+Plugins are scripts that receive input via stdin and output the transformed result:
+
+```bash
+#!/bin/bash
+# ~/.config/rexpipe/plugins/rot13.sh
+# ROT13 cipher transform
+tr 'A-Za-z' 'N-ZA-Mn-za-m'
+```
+
+```python
+#!/usr/bin/env python3
+# ~/.config/rexpipe/plugins/word_count.py
+# Count words in the input
+import sys
+text = sys.stdin.read()
+print(len(text.split()))
+```
+
+### Supported Script Types
+
+| Extension | Interpreter |
+|-----------|-------------|
+| `.sh`     | `sh`        |
+| `.py`     | `python3`   |
+| `.rb`     | `ruby`      |
+| `.pl`     | `perl`      |
+| (none)    | executable  |
+
+### Using Plugins in Pipelines
+
+```toml
+[[step]]
+type = "transform"
+pattern = '\w+'
+transform_action = { plugin = { name = "rot13" } }
+description = "Apply ROT13 cipher to words"
+```
 
 ## Step Types
 
@@ -309,6 +531,91 @@ timeout_ms = 5000
 pcre_mode = true
 timeout_ms = 5000
 strict_mode = true
+```
+
+### Finalize Section (Aggregation)
+
+The `[finalize]` section enables post-processing aggregation after all lines are processed. Use this to count matches, collect unique values, and produce summary reports.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `template` | string | `null` | Output template with `${count:NAME}` placeholders |
+| `output_format` | string | `"text"` | Output format: `"text"` or `"json"` |
+| `suppress_output` | bool | `false` | If true, only show finalize output (not processed lines) |
+| `shell` | string | `null` | Shell command to run after processing (receives JSON input) |
+| `counters` | array | `[]` | Counter definitions (see below) |
+
+**Counter Definition:**
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `name` | string | **Required** | Counter name (referenced as `${count:NAME}`) |
+| `pattern` | string | **Required** | Regex pattern to match |
+| `deduplicate` | bool | `false` | Only count unique matched values |
+| `collect_values` | bool | `false` | Store matched values (available in JSON output) |
+| `max_collected_values` | int | `1000` | Maximum values to collect |
+| `description` | string | `null` | Description of what this counter tracks |
+
+**Template Variables:**
+- `${count:NAME}` - Value of counter named NAME
+- `${lines}` - Total lines processed
+- `${matches}` - Total pattern matches across all steps
+- `${transformations}` - Total transformations applied
+
+**Example:**
+```toml
+name = "log-stats"
+
+[[step]]
+type = "filter"
+pattern = "."
+action = "keep_line"
+
+[finalize]
+template = """
+=== Summary ===
+Errors: ${count:errors}
+Unique IPs: ${count:ips}
+Total lines: ${lines}
+"""
+suppress_output = true
+
+[[finalize.counters]]
+name = "errors"
+pattern = "ERROR|FATAL"
+
+[[finalize.counters]]
+name = "ips"
+pattern = "^(\\d+\\.\\d+\\.\\d+\\.\\d+)"
+deduplicate = true
+```
+
+**JSON Output Mode:**
+```toml
+[finalize]
+output_format = "json"
+suppress_output = true
+
+[[finalize.counters]]
+name = "clients"
+pattern = "^(\\d+\\.\\d+\\.\\d+\\.\\d+)"
+deduplicate = true
+collect_values = true
+```
+
+Output:
+```json
+{
+  "lines_processed": 100,
+  "total_matches": 42,
+  "counters": {
+    "clients": {
+      "count": 15,
+      "unique": true,
+      "values": ["192.168.1.1", "192.168.1.2", ...]
+    }
+  }
+}
 ```
 
 ### Step Definition
@@ -560,6 +867,23 @@ OPTIONS:
     -V, --version                 Print version information
 ```
 
+## Watch Mode
+
+With the `watch` feature, rexpipe can monitor files for changes and automatically re-run the pipeline:
+
+```bash
+# Install with watch support
+cargo install rexpipe --features watch
+
+# Watch log files for changes
+rexpipe -c config.toml --watch ./logs/*.log
+
+# Watch and apply in-place edits
+rexpipe -c config.toml --watch --in-place ./data/*.txt
+```
+
+Press Ctrl+C to exit watch mode.
+
 ## JSON Output
 
 All JSON output uses a standardized schema with metadata for forward compatibility:
@@ -787,6 +1111,32 @@ cargo bench -- --noplot
 # Benchmarks are in benches/processing_benchmark.rs
 ```
 
+### Comparison with Other Tools
+
+Compare rexpipe against sed, awk, and ripgrep:
+
+```bash
+# Requires hyperfine: cargo install hyperfine
+./benches/compare_tools.sh
+
+# The script tests:
+# 1. Simple substitution (replacing digits)
+# 2. Line filtering (grep-like matching)
+# 3. Multi-step pipelines (3 transformations)
+# 4. IP anonymization (complex patterns)
+# 5. Capture group substitution (date reformatting)
+```
+
+**Performance characteristics:**
+
+| Scenario | rexpipe vs alternatives |
+|----------|------------------------|
+| Simple patterns | Comparable (I/O bound) |
+| Multi-step pipelines | Faster (single process, no pipes) |
+| Complex regex | Comparable to ripgrep (Rust regex crate) |
+| Large files | Constant memory (streaming) |
+| Many small files | Faster with `-j` (parallel processing) |
+
 For profiling with perf (Linux):
 
 ```bash
@@ -895,8 +1245,27 @@ This section documents how rexpipe handles various edge cases.
 
 ### Parallel Processing Thresholds
 
-- Parallel processing (`-j`) is only used when file count exceeds a threshold
+- Parallel processing (`-j`) is only used when file count exceeds a threshold (default: 4 files)
 - This avoids overhead for small file sets where sequential is faster
+
+### Streaming Architecture
+
+rexpipe uses a **file-level parallelism** model rather than intra-file streaming:
+
+- **Line-by-line processing**: Each file is processed line-by-line with constant memory
+- **Parallel at file level**: Multiple files can be processed concurrently with `-j`
+- **Sequential within files**: Lines within a single file are processed sequentially
+
+This design provides:
+- **Predictable memory usage**: O(max_line_length), not O(file_size)
+- **Simple error handling**: Errors are scoped to individual files
+- **Correctness for multi-line patterns**: Block processing requires seeing lines in order
+- **Efficient for typical workloads**: Most text processing is I/O-bound, not CPU-bound
+
+For extremely large single files (multi-GB), consider:
+- Using `split` to divide the file if patterns don't span lines
+- Using `--stream` mode for continuous processing
+- Piping through `parallel` for chunk-based processing
 
 ### Symlinks and Path Traversal
 
@@ -909,6 +1278,26 @@ This design prevents:
 - Infinite loops from circular symlinks
 - Accidental modification of files outside the working tree
 - Directory escape attacks via crafted symlinks
+
+### Stdin Behavior
+
+When reading from stdin without piped input:
+- rexpipe shows a helpful message: "Reading from stdin..."
+- Press Ctrl+D (Unix) or Ctrl+Z (Windows) to signal end of input
+- Press Ctrl+C to cancel
+
+**For scripts that need to fail fast on empty stdin:**
+```bash
+# Use timeout command (Unix)
+timeout 5s rexpipe -p '\d+' -r 'X' < /dev/stdin || echo "No input received"
+
+# Check if stdin has data before processing
+if [ -t 0 ]; then
+    echo "Error: No input piped to stdin" >&2
+    exit 1
+fi
+rexpipe -p '\d+' -r 'X'
+```
 
 ### Graceful Shutdown
 

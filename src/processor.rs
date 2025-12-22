@@ -212,6 +212,170 @@ pub struct StreamProcessor {
     dedup_extract_seen: HashMap<usize, std::collections::HashSet<String>>,
     /// Track whether CSV header has been written for each step (step_index -> header_written)
     csv_header_written: HashMap<usize, bool>,
+    /// State for finalize section (aggregation counters)
+    finalize_state: Option<FinalizeState>,
+}
+
+/// State for finalize section - tracks counters and collected values during processing.
+#[derive(Debug, Clone)]
+pub struct FinalizeState {
+    /// Compiled counter patterns with their state
+    pub counters: Vec<CompiledCounter>,
+    /// Total lines processed
+    pub lines_processed: u64,
+    /// Total matches across all steps
+    pub total_matches: u64,
+    /// Total transformations applied
+    pub total_transformations: u64,
+}
+
+/// A compiled counter with its pattern and current state.
+#[derive(Debug, Clone)]
+pub struct CompiledCounter {
+    /// Counter name (for template reference)
+    pub name: String,
+    /// Compiled pattern for matching
+    pub pattern: CompiledPattern,
+    /// Current counter value
+    pub count: u64,
+    /// Whether to deduplicate (count unique values only)
+    pub deduplicate: bool,
+    /// Set of seen values (used when deduplicate is true)
+    pub seen_values: std::collections::HashSet<String>,
+    /// Whether to collect matched values
+    pub collect_values: bool,
+    /// Maximum values to collect
+    pub max_collected_values: usize,
+    /// Collected values (when collect_values is true)
+    pub collected: Vec<String>,
+}
+
+impl FinalizeState {
+    /// Create a new FinalizeState from FinalizeConfig
+    pub fn new(
+        config: &crate::pipeline::FinalizeConfig,
+        settings: &crate::pipeline::PipelineSettings,
+    ) -> Result<Self> {
+        let mut counters = Vec::new();
+
+        for counter_config in &config.counters {
+            let pattern = StreamProcessor::build_pattern(
+                &counter_config.pattern,
+                &counter_config.flags,
+                settings,
+            )?;
+
+            counters.push(CompiledCounter {
+                name: counter_config.name.clone(),
+                pattern,
+                count: 0,
+                deduplicate: counter_config.deduplicate,
+                seen_values: std::collections::HashSet::new(),
+                collect_values: counter_config.collect_values,
+                max_collected_values: counter_config.max_collected_values,
+                collected: Vec::new(),
+            });
+        }
+
+        Ok(Self {
+            counters,
+            lines_processed: 0,
+            total_matches: 0,
+            total_transformations: 0,
+        })
+    }
+
+    /// Update counters for a line
+    pub fn process_line(&mut self, line: &str) {
+        self.lines_processed += 1;
+
+        for counter in &mut self.counters {
+            // Check if pattern matches
+            if let Some(matched) = counter.pattern.find(line) {
+                let value = matched.as_str().to_string();
+
+                if counter.deduplicate {
+                    // Only count if we haven't seen this value
+                    if !counter.seen_values.contains(&value) {
+                        counter.seen_values.insert(value.clone());
+                        counter.count += 1;
+
+                        if counter.collect_values
+                            && counter.collected.len() < counter.max_collected_values
+                        {
+                            counter.collected.push(value);
+                        }
+                    }
+                } else {
+                    // Count all matches
+                    counter.count += 1;
+
+                    if counter.collect_values
+                        && counter.collected.len() < counter.max_collected_values
+                    {
+                        counter.collected.push(value);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Get counter value by name
+    pub fn get_counter(&self, name: &str) -> u64 {
+        self.counters
+            .iter()
+            .find(|c| c.name == name)
+            .map(|c| c.count)
+            .unwrap_or(0)
+    }
+
+    /// Render the finalize template with counter values
+    pub fn render_template(&self, template: &str) -> String {
+        let mut result = template.to_string();
+
+        // Replace ${count:NAME} placeholders
+        for counter in &self.counters {
+            let placeholder = format!("${{count:{}}}", counter.name);
+            result = result.replace(&placeholder, &counter.count.to_string());
+        }
+
+        // Replace built-in variables
+        result = result.replace("${lines}", &self.lines_processed.to_string());
+        result = result.replace("${matches}", &self.total_matches.to_string());
+        result = result.replace(
+            "${transformations}",
+            &self.total_transformations.to_string(),
+        );
+
+        result
+    }
+
+    /// Convert to JSON for JSON output mode
+    pub fn to_json(&self) -> serde_json::Value {
+        let mut counters_obj = serde_json::Map::new();
+
+        for counter in &self.counters {
+            let mut counter_data = serde_json::Map::new();
+            counter_data.insert("count".to_string(), serde_json::json!(counter.count));
+
+            if counter.collect_values && !counter.collected.is_empty() {
+                counter_data.insert("values".to_string(), serde_json::json!(counter.collected));
+            }
+
+            if counter.deduplicate {
+                counter_data.insert("unique".to_string(), serde_json::json!(true));
+            }
+
+            counters_obj.insert(counter.name.clone(), serde_json::Value::Object(counter_data));
+        }
+
+        serde_json::json!({
+            "lines_processed": self.lines_processed,
+            "total_matches": self.total_matches,
+            "total_transformations": self.total_transformations,
+            "counters": counters_obj
+        })
+    }
 }
 
 /// Abstraction over different regex engines.
@@ -260,6 +424,19 @@ impl std::fmt::Debug for CompiledPattern {
     }
 }
 
+/// A simple match result containing the matched text.
+#[derive(Debug, Clone)]
+pub struct PatternMatch {
+    matched: String,
+}
+
+impl PatternMatch {
+    /// Get the matched text as a string slice
+    pub fn as_str(&self) -> &str {
+        &self.matched
+    }
+}
+
 impl CompiledPattern {
     pub fn is_match(&self, text: &str) -> bool {
         match self {
@@ -267,6 +444,52 @@ impl CompiledPattern {
             CompiledPattern::Fixed(s) => text.contains(s),
             #[cfg(feature = "pcre")]
             CompiledPattern::Pcre(re) => re.is_match(text).unwrap_or(false),
+        }
+    }
+
+    /// Find the first match in the text.
+    ///
+    /// Returns Some(PatternMatch) if a match is found, None otherwise.
+    /// For capture groups, the first capture group is returned if present,
+    /// otherwise the full match is returned.
+    pub fn find(&self, text: &str) -> Option<PatternMatch> {
+        match self {
+            CompiledPattern::Standard(re) => {
+                // Check for capture groups - if present, use first group
+                if let Some(caps) = re.captures(text) {
+                    // Return first capture group if exists, otherwise full match
+                    let matched = caps
+                        .get(1)
+                        .or_else(|| caps.get(0))
+                        .map(|m| m.as_str().to_string())?;
+                    Some(PatternMatch { matched })
+                } else {
+                    None
+                }
+            }
+            CompiledPattern::Fixed(s) => {
+                if text.contains(s) {
+                    Some(PatternMatch {
+                        matched: s.clone(),
+                    })
+                } else {
+                    None
+                }
+            }
+            #[cfg(feature = "pcre")]
+            CompiledPattern::Pcre(re) => {
+                // Check for capture groups - if present, use first group
+                if let Ok(Some(caps)) = re.captures(text) {
+                    // Return first capture group if exists, otherwise full match
+                    let matched = caps
+                        .get(1)
+                        .or_else(|| caps.get(0))
+                        .map(|m| m.as_str().to_string())?;
+                    Some(PatternMatch { matched })
+                } else {
+                    None
+                }
+            }
         }
     }
 
@@ -543,7 +766,6 @@ impl ProcessorStats {
     }
 }
 
-
 /// Detailed information about a single regex match.
 ///
 /// This struct provides comprehensive information about where a pattern matched,
@@ -685,10 +907,7 @@ impl StreamProcessor {
     /// assert!(output_str.contains("NUM"));
     /// ```
     pub fn new(config: PipelineConfig) -> Result<Self> {
-        debug!(
-            "Creating StreamProcessor with {} steps",
-            config.step.len()
-        );
+        debug!("Creating StreamProcessor with {} steps", config.step.len());
 
         // If bidirectional reverse mode is enabled, generate reversed pipeline
         let config = if config.bidirectional.enabled
@@ -697,7 +916,10 @@ impl StreamProcessor {
             debug!("Bidirectional reverse mode enabled, generating reversed pipeline");
             match generate_reverse_pipeline(&config) {
                 Ok(reversed) => {
-                    debug!("Successfully generated reversed pipeline with {} steps", reversed.step.len());
+                    debug!(
+                        "Successfully generated reversed pipeline with {} steps",
+                        reversed.step.len()
+                    );
                     reversed
                 }
                 Err(e) => {
@@ -722,13 +944,21 @@ impl StreamProcessor {
         }
 
         let compiled_steps = Self::compile_steps(&config)?;
-        debug!(
-            "Compiled {} enabled steps",
-            compiled_steps.len()
-        );
+        debug!("Compiled {} enabled steps", compiled_steps.len());
 
         // Initialize block states for Block step types
         let block_states = vec![false; compiled_steps.len()];
+
+        // Initialize finalize state if configured
+        let finalize_state = if config.finalize.is_configured() {
+            debug!(
+                "Initializing finalize state with {} counters",
+                config.finalize.counters.len()
+            );
+            Some(FinalizeState::new(&config.finalize, &config.settings)?)
+        } else {
+            None
+        };
 
         Ok(Self {
             config,
@@ -744,6 +974,7 @@ impl StreamProcessor {
             block_overlap_buffer: HashMap::new(),
             dedup_extract_seen: HashMap::new(),
             csv_header_written: HashMap::new(),
+            finalize_state,
         })
     }
 
@@ -894,9 +1125,14 @@ impl StreamProcessor {
                 tweak_file,
                 radix,
             } => {
-                let resolved_key = Self::resolve_secret(key.as_deref(), key_file.as_deref(), "key")?;
+                let resolved_key =
+                    Self::resolve_secret(key.as_deref(), key_file.as_deref(), "key")?;
                 let resolved_tweak = Self::resolve_secret(
-                    if tweak.is_empty() { None } else { Some(tweak.as_str()) },
+                    if tweak.is_empty() {
+                        None
+                    } else {
+                        Some(tweak.as_str())
+                    },
                     tweak_file.as_deref(),
                     "tweak",
                 )?;
@@ -916,9 +1152,14 @@ impl StreamProcessor {
                 tweak_file,
                 radix,
             } => {
-                let resolved_key = Self::resolve_secret(key.as_deref(), key_file.as_deref(), "key")?;
+                let resolved_key =
+                    Self::resolve_secret(key.as_deref(), key_file.as_deref(), "key")?;
                 let resolved_tweak = Self::resolve_secret(
-                    if tweak.is_empty() { None } else { Some(tweak.as_str()) },
+                    if tweak.is_empty() {
+                        None
+                    } else {
+                        Some(tweak.as_str())
+                    },
                     tweak_file.as_deref(),
                     "tweak",
                 )?;
@@ -963,8 +1204,9 @@ impl StreamProcessor {
         match (inline_value, file_path) {
             (Some(value), None) => Ok(value.to_string()),
             (None, Some(path)) => {
-                let content = std::fs::read_to_string(path)
-                    .with_context(|| format!("Failed to read {} from file: {}", secret_name, path))?;
+                let content = std::fs::read_to_string(path).with_context(|| {
+                    format!("Failed to read {} from file: {}", secret_name, path)
+                })?;
                 Ok(content.trim().to_string())
             }
             (Some(_), Some(_)) => {
@@ -1095,8 +1337,7 @@ impl StreamProcessor {
     fn check_zero_width_pattern(pattern: &str) -> Option<String> {
         // Patterns that are purely positional assertions
         let pure_zero_width = [
-            "^", "$", r"\b", r"\B", r"\A", r"\z", r"\Z",
-            "^$", r"^\b", r"\b$",
+            "^", "$", r"\b", r"\B", r"\A", r"\z", r"\Z", "^$", r"^\b", r"\b$",
         ];
 
         // Check for pure zero-width patterns
@@ -1112,8 +1353,8 @@ impl StreamProcessor {
 
         // Check for patterns that can match empty strings
         let can_match_empty = [
-            ".*", ".?", "\\s*", "\\S*", "\\d*", "\\D*", "\\w*", "\\W*",
-            "[^a]*", "()*", "()?", "(?:)*", "(?:)?",
+            ".*", ".?", "\\s*", "\\S*", "\\d*", "\\D*", "\\w*", "\\W*", "[^a]*", "()*", "()?",
+            "(?:)*", "(?:)?",
         ];
 
         for empty_pattern in &can_match_empty {
@@ -1128,10 +1369,13 @@ impl StreamProcessor {
         }
 
         // Check for lookahead/lookbehind only patterns
-        if (pattern.starts_with("(?=") || pattern.starts_with("(?!") ||
-            pattern.starts_with("(?<=") || pattern.starts_with("(?<!")) &&
-            pattern.ends_with(")") &&
-            pattern.matches("(?").count() == 1 {
+        if (pattern.starts_with("(?=")
+            || pattern.starts_with("(?!")
+            || pattern.starts_with("(?<=")
+            || pattern.starts_with("(?<!"))
+            && pattern.ends_with(")")
+            && pattern.matches("(?").count() == 1
+        {
             return Some(format!(
                 "Warning: Pattern '{}' is a pure lookahead/lookbehind assertion.\n  \
                  It matches positions, not characters. In replacement mode, this will\n  \
@@ -1278,14 +1522,27 @@ impl StreamProcessor {
         let max_line_length = self.config.settings.max_line_length;
         let max_line_action = self.config.settings.max_line_action;
 
+        // Check if we should suppress normal output (finalize-only mode)
+        let suppress_output = self.config.finalize.suppress_output;
+
         while reader.read_line(&mut line_buffer)? > 0 {
             line_number += 1;
             self.stats.lines_read += 1;
             self.stats.bytes_processed += line_buffer.len() as u64;
 
+            // Update finalize counters with original line content (before processing)
+            if let Some(ref mut finalize_state) = self.finalize_state {
+                finalize_state.process_line(&line_buffer);
+            }
+
             // Check for lines exceeding the maximum length
             if max_line_length > 0 && line_buffer.len() > max_line_length {
-                match handle_long_line(&mut line_buffer, line_number, max_line_length, max_line_action) {
+                match handle_long_line(
+                    &mut line_buffer,
+                    line_number,
+                    max_line_length,
+                    max_line_action,
+                ) {
                     LongLineResult::Error(msg) => {
                         return Err(anyhow::anyhow!(msg));
                     }
@@ -1312,8 +1569,8 @@ impl StreamProcessor {
             // Strip both \r\n and \n when extracting content
             let line_content = line_buffer.trim_end_matches(['\r', '\n']).to_string();
 
-            if use_context {
-                // Handle context-aware output
+            if use_context && !suppress_output {
+                // Handle context-aware output (unless suppressed for finalize-only mode)
                 if let Some(output) = processed_line {
                     // This line matched - output before-context, then this line
                     // Output before-context lines that haven't been output yet
@@ -1354,11 +1611,23 @@ impl StreamProcessor {
                 while self.context_before_buffer.len() > context_before {
                     self.context_before_buffer.pop_front();
                 }
+            } else if use_context {
+                // Context mode but output suppressed - still track context for finalize processing
+                self.context_before_buffer.push_back(ContextLine {
+                    line_number,
+                    content: line_content,
+                    line_ending,
+                });
+                while self.context_before_buffer.len() > context_before {
+                    self.context_before_buffer.pop_front();
+                }
             } else {
-                // No context - simple output
-                if let Some(output) = processed_line {
-                    writer.write_all(output.as_bytes())?;
-                    self.write_line_ending(&mut writer, &output, line_ending)?;
+                // No context - simple output (unless suppressed for finalize-only mode)
+                if !suppress_output {
+                    if let Some(output) = processed_line {
+                        writer.write_all(output.as_bytes())?;
+                        self.write_line_ending(&mut writer, &output, line_ending)?;
+                    }
                 }
             }
 
@@ -1367,14 +1636,93 @@ impl StreamProcessor {
 
         result.lines_processed = line_number;
 
+        // Update finalize state with final match/transformation counts
+        if let Some(ref mut finalize_state) = self.finalize_state {
+            finalize_state.total_matches = result.matches_found;
+            finalize_state.total_transformations = result.transformations_applied;
+        }
+
+        // Output finalize section if configured
+        self.write_finalize_output(&mut writer)?;
+
         debug!(
             "Processing complete: {} lines, {} matches, {} transformations",
-            result.lines_processed,
-            result.matches_found,
-            result.transformations_applied
+            result.lines_processed, result.matches_found, result.transformations_applied
         );
 
         Ok(result)
+    }
+
+    /// Write finalize output after all lines have been processed
+    fn write_finalize_output<W: Write>(&self, writer: &mut W) -> Result<()> {
+        if !self.config.finalize.is_configured() {
+            return Ok(());
+        }
+
+        let finalize_state = match &self.finalize_state {
+            Some(state) => state,
+            None => return Ok(()),
+        };
+
+        // Determine output format
+        let output_format = self
+            .config
+            .finalize
+            .output_format
+            .as_ref()
+            .cloned()
+            .unwrap_or_default();
+
+        match output_format {
+            crate::pipeline::FinalizeOutputFormat::Json => {
+                // Output as JSON
+                let json = finalize_state.to_json();
+                writeln!(writer, "{}", serde_json::to_string_pretty(&json)?)?;
+            }
+            crate::pipeline::FinalizeOutputFormat::Text => {
+                // Render template if provided
+                if let Some(ref template) = self.config.finalize.template {
+                    let output = finalize_state.render_template(template);
+                    write!(writer, "{}", output)?;
+                    // Ensure trailing newline
+                    if !output.ends_with('\n') {
+                        writeln!(writer)?;
+                    }
+                }
+            }
+        }
+
+        // Execute shell command if configured
+        if let Some(ref shell_cmd) = self.config.finalize.shell {
+            if self.config.settings.allow_shell {
+                // Execute shell command with finalize state as JSON input
+                let json_input = serde_json::to_string(&finalize_state.to_json())?;
+                match crate::plugin::PluginRegistry::execute_shell_with_timeout(
+                    shell_cmd,
+                    &json_input,
+                    self.config.settings.shell_timeout_secs,
+                ) {
+                    Ok(output) => {
+                        write!(writer, "{}", output)?;
+                        if !output.ends_with('\n') && !output.is_empty() {
+                            writeln!(writer)?;
+                        }
+                    }
+                    Err(e) => {
+                        debug!("Finalize shell command failed: {}", e);
+                        // Write error to output so user knows something went wrong
+                        writeln!(writer, "[finalize shell error: {}]", e)?;
+                    }
+                }
+            } else {
+                debug!(
+                    "Finalize shell command skipped: allow_shell is false. \
+                     Set settings.allow_shell = true to enable."
+                );
+            }
+        }
+
+        Ok(())
     }
 
     /// Write a context line with its preserved line ending
@@ -1465,9 +1813,12 @@ impl StreamProcessor {
                             StepAction::DeduplicateByPrefix => {
                                 // Deduplicate by prefix: extract prefix from first capture group
                                 // Pattern like "^(.{50}).*$" captures first 50 chars as prefix
-                                let prefix = if let Some(cap) = compiled_step.pattern.captures_iter(&current_line).first() {
+                                let prefix = if let Some(cap) =
+                                    compiled_step.pattern.captures_iter(&current_line).first()
+                                {
                                     // Use first capture group as prefix
-                                    cap.groups.get(1)
+                                    cap.groups
+                                        .get(1)
                                         .and_then(|g| g.clone())
                                         .unwrap_or_else(|| current_line.clone())
                                 } else {
@@ -1476,9 +1827,7 @@ impl StreamProcessor {
                                 };
 
                                 // Get or create the set for this step
-                                let seen_set = self.dedup_prefix_seen
-                                    .entry(step_idx)
-                                    .or_default();
+                                let seen_set = self.dedup_prefix_seen.entry(step_idx).or_default();
 
                                 // If we've seen this prefix before, drop the line
                                 if seen_set.contains(&prefix) {
@@ -1499,7 +1848,8 @@ impl StreamProcessor {
                 }
                 StepType::Extract => {
                     // Extract all matched content with capture group support
-                    let captures: Vec<CaptureGroup> = compiled_step.pattern.captures_iter(&current_line);
+                    let captures: Vec<CaptureGroup> =
+                        compiled_step.pattern.captures_iter(&current_line);
 
                     if captures.is_empty() {
                         // No matches, keep current line as-is (or empty depending on mode)
@@ -1523,7 +1873,8 @@ impl StreamProcessor {
                         let output = match &compiled_step.output_format {
                             Some(ExtractOutputFormat::Json) => {
                                 // Output as JSON array of objects with capture group names
-                                let results: Vec<serde_json::Value> = captures_to_process.iter()
+                                let results: Vec<serde_json::Value> = captures_to_process
+                                    .iter()
                                     .map(|cap| {
                                         let mut obj = serde_json::Map::new();
                                         if let Some(ref names) = compiled_step.capture_names {
@@ -1531,14 +1882,20 @@ impl StreamProcessor {
                                             for (i, name) in names.iter().enumerate() {
                                                 let group_idx = i + 1; // Skip group 0 (full match)
                                                 if let Some(Some(val)) = cap.groups.get(group_idx) {
-                                                    obj.insert(name.clone(), serde_json::Value::String(val.clone()));
+                                                    obj.insert(
+                                                        name.clone(),
+                                                        serde_json::Value::String(val.clone()),
+                                                    );
                                                 }
                                             }
                                         } else {
                                             // Use numeric indices
                                             for (i, group) in cap.groups.iter().enumerate() {
                                                 if let Some(val) = group {
-                                                    obj.insert(format!("group_{}", i), serde_json::Value::String(val.clone()));
+                                                    obj.insert(
+                                                        format!("group_{}", i),
+                                                        serde_json::Value::String(val.clone()),
+                                                    );
                                                 }
                                             }
                                         }
@@ -1549,20 +1906,27 @@ impl StreamProcessor {
                             }
                             Some(ExtractOutputFormat::Jsonl) => {
                                 // Output as JSON Lines (one JSON object per match)
-                                captures_to_process.iter()
+                                captures_to_process
+                                    .iter()
                                     .filter_map(|cap| {
                                         let mut obj = serde_json::Map::new();
                                         if let Some(ref names) = compiled_step.capture_names {
                                             for (i, name) in names.iter().enumerate() {
                                                 let group_idx = i + 1;
                                                 if let Some(Some(val)) = cap.groups.get(group_idx) {
-                                                    obj.insert(name.clone(), serde_json::Value::String(val.clone()));
+                                                    obj.insert(
+                                                        name.clone(),
+                                                        serde_json::Value::String(val.clone()),
+                                                    );
                                                 }
                                             }
                                         } else {
                                             for (i, group) in cap.groups.iter().enumerate() {
                                                 if let Some(val) = group {
-                                                    obj.insert(format!("group_{}", i), serde_json::Value::String(val.clone()));
+                                                    obj.insert(
+                                                        format!("group_{}", i),
+                                                        serde_json::Value::String(val.clone()),
+                                                    );
                                                 }
                                             }
                                         }
@@ -1576,9 +1940,8 @@ impl StreamProcessor {
                                 let mut lines = Vec::new();
 
                                 // Add header row only on first output for this step
-                                let header_written = self.csv_header_written
-                                    .entry(step_idx)
-                                    .or_insert(false);
+                                let header_written =
+                                    self.csv_header_written.entry(step_idx).or_insert(false);
                                 if !*header_written {
                                     if let Some(ref names) = compiled_step.capture_names {
                                         lines.push(names.join(","));
@@ -1587,34 +1950,56 @@ impl StreamProcessor {
                                 }
 
                                 for cap in &captures_to_process {
-                                    let values: Vec<String> = if let Some(ref names) = compiled_step.capture_names {
-                                        names.iter().enumerate().map(|(i, _)| {
-                                            let group_idx = i + 1;
-                                            cap.groups.get(group_idx)
-                                                .and_then(|g| g.clone())
-                                                .map(|v| {
-                                                    // CSV escape: quote if contains comma, quote, or newline
-                                                    if v.contains(',') || v.contains('"') || v.contains('\n') {
-                                                        format!("\"{}\"", v.replace('"', "\"\""))
-                                                    } else {
-                                                        v
-                                                    }
+                                    let values: Vec<String> =
+                                        if let Some(ref names) = compiled_step.capture_names {
+                                            names
+                                                .iter()
+                                                .enumerate()
+                                                .map(|(i, _)| {
+                                                    let group_idx = i + 1;
+                                                    cap.groups
+                                                        .get(group_idx)
+                                                        .and_then(|g| g.clone())
+                                                        .map(|v| {
+                                                            // CSV escape: quote if contains comma, quote, or newline
+                                                            if v.contains(',')
+                                                                || v.contains('"')
+                                                                || v.contains('\n')
+                                                            {
+                                                                format!(
+                                                                    "\"{}\"",
+                                                                    v.replace('"', "\"\"")
+                                                                )
+                                                            } else {
+                                                                v
+                                                            }
+                                                        })
+                                                        .unwrap_or_default()
                                                 })
-                                                .unwrap_or_default()
-                                        }).collect()
-                                    } else {
-                                        cap.groups.iter().skip(1).map(|g| {
-                                            g.clone()
-                                                .map(|v| {
-                                                    if v.contains(',') || v.contains('"') || v.contains('\n') {
-                                                        format!("\"{}\"", v.replace('"', "\"\""))
-                                                    } else {
-                                                        v
-                                                    }
+                                                .collect()
+                                        } else {
+                                            cap.groups
+                                                .iter()
+                                                .skip(1)
+                                                .map(|g| {
+                                                    g.clone()
+                                                        .map(|v| {
+                                                            if v.contains(',')
+                                                                || v.contains('"')
+                                                                || v.contains('\n')
+                                                            {
+                                                                format!(
+                                                                    "\"{}\"",
+                                                                    v.replace('"', "\"\"")
+                                                                )
+                                                            } else {
+                                                                v
+                                                            }
+                                                        })
+                                                        .unwrap_or_default()
                                                 })
-                                                .unwrap_or_default()
-                                        }).collect()
-                                    };
+                                                .collect()
+                                        };
                                     lines.push(values.join(","));
                                 }
                                 lines.join("\n")
@@ -1623,17 +2008,24 @@ impl StreamProcessor {
                                 // Check for output_template
                                 if let Some(ref template) = compiled_step.output_template {
                                     // Apply template with capture group substitution
-                                    captures_to_process.iter()
+                                    captures_to_process
+                                        .iter()
                                         .map(|cap| {
                                             let mut result = template.clone();
                                             // Replace $0, $1, $2, etc. with capture groups
                                             for (i, group) in cap.groups.iter().enumerate() {
                                                 if let Some(val) = group {
-                                                    result = result.replace(&format!("${}", i), val);
+                                                    result =
+                                                        result.replace(&format!("${}", i), val);
                                                     // Also support ${name} format if capture_names provided
-                                                    if let Some(ref names) = compiled_step.capture_names {
+                                                    if let Some(ref names) =
+                                                        compiled_step.capture_names
+                                                    {
                                                         if i > 0 && i <= names.len() {
-                                                            result = result.replace(&format!("${{{}}}", names[i - 1]), val);
+                                                            result = result.replace(
+                                                                &format!("${{{}}}", names[i - 1]),
+                                                                val,
+                                                            );
                                                         }
                                                     }
                                                 }
@@ -1644,10 +2036,14 @@ impl StreamProcessor {
                                         .join("\n")
                                 } else {
                                     // Default: extract full matches, join with separator
-                                    let matches: Vec<String> = captures_to_process.iter()
-                                        .filter_map(|cap| cap.full_match.as_ref().map(|(_, _, m)| m.clone()))
+                                    let matches: Vec<String> = captures_to_process
+                                        .iter()
+                                        .filter_map(|cap| {
+                                            cap.full_match.as_ref().map(|(_, _, m)| m.clone())
+                                        })
                                         .collect();
-                                    let separator = compiled_step.replacement.as_deref().unwrap_or("\t");
+                                    let separator =
+                                        compiled_step.replacement.as_deref().unwrap_or("\t");
                                     matches.join(separator)
                                 }
                             }
@@ -1656,21 +2052,20 @@ impl StreamProcessor {
                         // Apply cross-line deduplication if requested
                         let final_output = if compiled_step.deduplicate {
                             // Get or create the seen set for this step
-                            let seen_set = self.dedup_extract_seen
-                                .entry(step_idx)
-                                .or_default();
+                            let seen_set = self.dedup_extract_seen.entry(step_idx).or_default();
 
                             // Filter out lines we've already seen across the entire stream
                             let lines: Vec<&str> = output.split('\n').collect();
-                            let unique: Vec<&str> = lines.into_iter()
+                            let unique: Vec<&str> = lines
+                                .into_iter()
                                 .filter(|line| {
                                     if line.is_empty() {
-                                        true  // Always keep empty lines (formatting)
+                                        true // Always keep empty lines (formatting)
                                     } else if seen_set.contains(*line) {
-                                        false  // Skip duplicate
+                                        false // Skip duplicate
                                     } else {
                                         seen_set.insert(line.to_string());
-                                        true  // Keep new value
+                                        true // Keep new value
                                     }
                                 })
                                 .collect();
@@ -1761,7 +2156,9 @@ impl StreamProcessor {
                         .unwrap_or(false);
 
                     // Convert StepAction to BlockAction for block-specific handling
-                    let block_action_clone = compiled_step.action.as_ref()
+                    let block_action_clone = compiled_step
+                        .action
+                        .as_ref()
                         .and_then(BlockAction::from_step_action);
                     let block_context_clone = compiled_step.block_context.clone();
 
@@ -1814,7 +2211,8 @@ impl StreamProcessor {
                                 // For line-based overlap, we'd need to track previous lines
                                 // This is more complex as it requires buffering multiple lines
                                 // For now, save the entire current line as a simple implementation
-                                self.block_overlap_buffer.insert(step_idx, current_line.clone());
+                                self.block_overlap_buffer
+                                    .insert(step_idx, current_line.clone());
                             }
                         }
                     }
@@ -1838,13 +2236,14 @@ impl StreamProcessor {
                                     current_line = format!("{}{}", marker, current_line);
                                     step_result.add_transformation();
                                 }
-                                BlockAction::SubstituteInBlock { pattern, replacement } => {
+                                BlockAction::SubstituteInBlock {
+                                    pattern,
+                                    replacement,
+                                } => {
                                     // Apply substitution only within block
-                                    if let Ok(sub_pattern) =
-                                        regex::Regex::new(pattern)
-                                    {
-                                        let new_line =
-                                            sub_pattern.replace_all(&current_line, replacement.as_str());
+                                    if let Ok(sub_pattern) = regex::Regex::new(pattern) {
+                                        let new_line = sub_pattern
+                                            .replace_all(&current_line, replacement.as_str());
                                         if new_line != current_line {
                                             current_line = new_line.to_string();
                                             step_result.add_transformation();
@@ -1859,7 +2258,8 @@ impl StreamProcessor {
                                 }
                                 BlockAction::Deduplicate => {
                                     // Buffer line for block-level deduplication
-                                    if let Some(buffer) = self.dedup_block_buffer.get_mut(&step_idx) {
+                                    if let Some(buffer) = self.dedup_block_buffer.get_mut(&step_idx)
+                                    {
                                         buffer.push(current_line.clone());
                                     }
                                     step_result.add_match();
@@ -1869,17 +2269,15 @@ impl StreamProcessor {
                                 }
                             }
                         }
-                    } else if matches!(
-                        block_action_clone,
-                        Some(BlockAction::KeepBlock)
-                    ) {
+                    } else if matches!(block_action_clone, Some(BlockAction::KeepBlock)) {
                         // KeepBlock: drop lines outside blocks
                         should_output = false;
                         break;
                     }
 
                     // Handle block exit for Deduplicate action
-                    if exiting_block && matches!(block_action_clone, Some(BlockAction::Deduplicate)) {
+                    if exiting_block && matches!(block_action_clone, Some(BlockAction::Deduplicate))
+                    {
                         // Add the until line to buffer before processing
                         if let Some(buffer) = self.dedup_block_buffer.get_mut(&step_idx) {
                             buffer.push(current_line.clone());
@@ -1893,9 +2291,7 @@ impl StreamProcessor {
                             let block_hash = hasher.finish();
 
                             // Check if we've seen this block before
-                            let seen_set = self.dedup_block_seen
-                                .entry(step_idx)
-                                .or_default();
+                            let seen_set = self.dedup_block_seen.entry(step_idx).or_default();
 
                             if !seen_set.contains(&block_hash) {
                                 // New unique block - output all buffered lines
@@ -2004,10 +2400,12 @@ impl StreamProcessor {
                 })
             }
             TransformAction::Plugin { name, args } => {
-                crate::plugin::PluginRegistry::global().execute(name, matched, args).unwrap_or_else(|e| {
-                    eprintln!("Plugin error: {}", e);
-                    matched.to_string()
-                })
+                crate::plugin::PluginRegistry::global_execute(name, matched, args).unwrap_or_else(
+                    |e| {
+                        eprintln!("Plugin error: {}", e);
+                        matched.to_string()
+                    },
+                )
             }
             TransformAction::Base64Encode => {
                 use std::io::Write;
@@ -2093,7 +2491,13 @@ impl StreamProcessor {
             } => {
                 // seed is resolved during compile_steps, so it's always Some
                 let seed = seed.as_ref().expect("Mask seed should be resolved");
-                mask_deterministic(matched, seed, *preserve_prefix, *preserve_suffix, *mask_char)
+                mask_deterministic(
+                    matched,
+                    seed,
+                    *preserve_prefix,
+                    *preserve_suffix,
+                    *mask_char,
+                )
             }
         }
     }
@@ -2129,7 +2533,8 @@ impl StreamProcessor {
 
             let shell_timeout = self.config.settings.shell_timeout_secs;
             for (start, end, matched) in pattern.find_iter(input) {
-                let transformed = Self::transform_match(&matched, action, extra_text, shell_timeout);
+                let transformed =
+                    Self::transform_match(&matched, action, extra_text, shell_timeout);
                 let adj_start = (start as i64 + offset) as usize;
                 let adj_end = (end as i64 + offset) as usize;
 
@@ -2623,10 +3028,7 @@ fn fpe_encrypt(input: &str, key: &str, tweak: &str, radix: &str) -> Result<Strin
         } else {
             // Character not in radix - pass through unchanged
             // For now, we'll error on this
-            return Err(format!(
-                "Character '{}' not in radix '{}'",
-                c, radix
-            ));
+            return Err(format!("Character '{}' not in radix '{}'", c, radix));
         }
     }
 
@@ -2639,7 +3041,8 @@ fn fpe_encrypt(input: &str, key: &str, tweak: &str, radix: &str) -> Result<Strin
         .map_err(|e| format!("FF1 initialization error: {:?}", e))?;
 
     // Encrypt
-    let bns = BinaryNumeralString::from_bytes_le(&numerals.iter().map(|&n| n as u8).collect::<Vec<_>>());
+    let bns =
+        BinaryNumeralString::from_bytes_le(&numerals.iter().map(|&n| n as u8).collect::<Vec<_>>());
     let encrypted = ff1
         .encrypt(&tweak_bytes, &bns)
         .map_err(|e| format!("Encryption error: {:?}", e))?;
@@ -2690,10 +3093,7 @@ fn fpe_decrypt(input: &str, key: &str, tweak: &str, radix: &str) -> Result<Strin
         if let Some(idx) = radix_chars.iter().position(|&r| r == c) {
             numerals.push(idx as u16);
         } else {
-            return Err(format!(
-                "Character '{}' not in radix '{}'",
-                c, radix
-            ));
+            return Err(format!("Character '{}' not in radix '{}'", c, radix));
         }
     }
 
@@ -2706,7 +3106,8 @@ fn fpe_decrypt(input: &str, key: &str, tweak: &str, radix: &str) -> Result<Strin
         .map_err(|e| format!("FF1 initialization error: {:?}", e))?;
 
     // Decrypt
-    let bns = BinaryNumeralString::from_bytes_le(&numerals.iter().map(|&n| n as u8).collect::<Vec<_>>());
+    let bns =
+        BinaryNumeralString::from_bytes_le(&numerals.iter().map(|&n| n as u8).collect::<Vec<_>>());
     let decrypted = ff1
         .decrypt(&tweak_bytes, &bns)
         .map_err(|e| format!("Decryption error: {:?}", e))?;
@@ -2833,7 +3234,10 @@ mod tests {
         assert_eq!(output_str.trim(), "Test NUMBER and NUMBER");
         assert_eq!(result.lines_processed, 1);
         // Each substitution (123→NUMBER, 456→NUMBER) counts as one transformation
-        assert_eq!(result.transformations_applied, 1, "One substitution step applied");
+        assert_eq!(
+            result.transformations_applied, 1,
+            "One substitution step applied"
+        );
         assert_eq!(result.matches_found, 2, "Two digit sequences matched");
     }
 
@@ -3018,10 +3422,7 @@ mod tests {
         // Should not have bare LF without CR
         let output_str = String::from_utf8(output_bytes).unwrap();
         let lines: Vec<&str> = output_str.split("\r\n").collect();
-        assert!(
-            lines.len() >= 3,
-            "Expected at least 3 CRLF-delimited lines"
-        );
+        assert!(lines.len() >= 3, "Expected at least 3 CRLF-delimited lines");
     }
 
     #[test]
@@ -3126,7 +3527,10 @@ mod tests {
         let result = processor.process_stream(reader, &mut output);
         assert!(result.is_err(), "Expected error for long line");
         assert!(
-            result.unwrap_err().to_string().contains("exceeds maximum length"),
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("exceeds maximum length"),
             "Error should mention exceeding max length"
         );
     }
@@ -3226,8 +3630,14 @@ mod tests {
         assert!(output_str.contains("inside 1"), "Should include inside 1");
         assert!(output_str.contains("inside 2"), "Should include inside 2");
         // Lines outside block should be dropped
-        assert!(!output_str.contains("outside 1"), "Should not include outside 1");
-        assert!(!output_str.contains("outside 2"), "Should not include outside 2");
+        assert!(
+            !output_str.contains("outside 1"),
+            "Should not include outside 1"
+        );
+        assert!(
+            !output_str.contains("outside 2"),
+            "Should not include outside 2"
+        );
     }
 
     #[test]
@@ -3312,10 +3722,15 @@ mod tests {
 
         // Lines inside block should be marked
         assert!(output_str.contains(">>> START"), "START should be marked");
-        assert!(output_str.contains(">>> marked line"), "marked line should be marked");
+        assert!(
+            output_str.contains(">>> marked line"),
+            "marked line should be marked"
+        );
         // Lines outside block should not be marked
-        assert!(output_str.contains("\nnormal\n") || output_str.starts_with("normal\n"),
-                "normal should not be marked");
+        assert!(
+            output_str.contains("\nnormal\n") || output_str.starts_with("normal\n"),
+            "normal should not be marked"
+        );
     }
 
     #[test]
@@ -3324,31 +3739,238 @@ mod tests {
         let result1 = mask_deterministic("123456789", "seed123", 0, 0, '*');
         let result2 = mask_deterministic("123456789", "seed123", 0, 0, '*');
         // Same input + seed should produce same output
-        assert_eq!(result1, result2, "Deterministic masking should be consistent");
+        assert_eq!(
+            result1, result2,
+            "Deterministic masking should be consistent"
+        );
 
         // Different seed should produce different output
         let result3 = mask_deterministic("123456789", "different_seed", 0, 0, '*');
-        assert_ne!(result1, result3, "Different seeds should produce different results");
+        assert_ne!(
+            result1, result3,
+            "Different seeds should produce different results"
+        );
 
         // Test prefix preservation
         let result4 = mask_deterministic("123456789", "seed123", 4, 0, 'X');
-        assert!(result4.starts_with("1234"), "Should preserve first 4 chars: {}", result4);
-        assert!(result4.chars().skip(4).all(|c| c == 'X'), "Rest should be masked with X");
+        assert!(
+            result4.starts_with("1234"),
+            "Should preserve first 4 chars: {}",
+            result4
+        );
+        assert!(
+            result4.chars().skip(4).all(|c| c == 'X'),
+            "Rest should be masked with X"
+        );
 
         // Test suffix preservation
         let result5 = mask_deterministic("123456789", "seed123", 0, 4, 'X');
-        assert!(result5.ends_with("6789"), "Should preserve last 4 chars: {}", result5);
+        assert!(
+            result5.ends_with("6789"),
+            "Should preserve last 4 chars: {}",
+            result5
+        );
 
         // Test both prefix and suffix
         let result6 = mask_deterministic("1234-5678-9012", "seed", 4, 4, '*');
         assert!(result6.starts_with("1234"), "Should preserve prefix");
-        assert!(result6.ends_with("9012"), "Should preserve suffix: {}", result6);
+        assert!(
+            result6.ends_with("9012"),
+            "Should preserve suffix: {}",
+            result6
+        );
+    }
+
+    #[test]
+    fn test_finalize_basic_counter() {
+        let toml = r#"
+name = "Test Finalize"
+
+# Need at least one step for validation
+[[step]]
+type = "filter"
+pattern = "."
+action = "keep_line"
+
+[finalize]
+template = "Errors: ${count:errors}"
+suppress_output = true
+
+[[finalize.counters]]
+name = "errors"
+pattern = "ERROR"
+"#;
+        let config: PipelineConfig = toml::from_str(toml).unwrap();
+        let mut processor = StreamProcessor::new(config).unwrap();
+
+        let input = "INFO: Started\nERROR: Failed\nINFO: Retrying\nERROR: Failed again\n";
+        let reader = Cursor::new(input);
+        let mut output = Vec::new();
+
+        let _result = processor.process_stream(reader, &mut output).unwrap();
+        let output_str = String::from_utf8(output).unwrap();
+
+        assert!(
+            output_str.contains("Errors: 2"),
+            "Expected 'Errors: 2', got: {}",
+            output_str
+        );
+    }
+
+    #[test]
+    fn test_finalize_deduplicate_counter() {
+        let toml = r#"
+name = "Test Unique IPs"
+
+[[step]]
+type = "filter"
+pattern = "."
+action = "keep_line"
+
+[finalize]
+template = "Unique IPs: ${count:ips}"
+suppress_output = true
+
+[[finalize.counters]]
+name = "ips"
+pattern = "^(\\d+\\.\\d+\\.\\d+\\.\\d+)"
+deduplicate = true
+"#;
+        let config: PipelineConfig = toml::from_str(toml).unwrap();
+        let mut processor = StreamProcessor::new(config).unwrap();
+
+        let input = "192.168.1.1 - request 1\n192.168.1.2 - request 2\n192.168.1.1 - request 3\n";
+        let reader = Cursor::new(input);
+        let mut output = Vec::new();
+
+        let _result = processor.process_stream(reader, &mut output).unwrap();
+        let output_str = String::from_utf8(output).unwrap();
+
+        assert!(
+            output_str.contains("Unique IPs: 2"),
+            "Expected 'Unique IPs: 2' (deduplicated), got: {}",
+            output_str
+        );
+    }
+
+    #[test]
+    fn test_finalize_json_output() {
+        let toml = r#"
+name = "Test JSON Output"
+
+[[step]]
+type = "filter"
+pattern = "."
+action = "keep_line"
+
+[finalize]
+output_format = "json"
+suppress_output = true
+
+[[finalize.counters]]
+name = "errors"
+pattern = "ERROR"
+"#;
+        let config: PipelineConfig = toml::from_str(toml).unwrap();
+        let mut processor = StreamProcessor::new(config).unwrap();
+
+        let input = "ERROR: test\nINFO: ok\n";
+        let reader = Cursor::new(input);
+        let mut output = Vec::new();
+
+        let _result = processor.process_stream(reader, &mut output).unwrap();
+        let output_str = String::from_utf8(output).unwrap();
+
+        // Should be valid JSON
+        let json: serde_json::Value = serde_json::from_str(&output_str).unwrap();
+        assert_eq!(json["counters"]["errors"]["count"], 1);
+        assert_eq!(json["lines_processed"], 2);
+    }
+
+    #[test]
+    fn test_finalize_with_processing() {
+        // Test that finalize works alongside normal processing
+        let toml = r#"
+name = "Test Combined"
+
+[[step]]
+type = "substitute"
+pattern = "foo"
+replacement = "bar"
+flags = ["global"]
+
+[finalize]
+template = "Substitutions: ${transformations}"
+"#;
+        let config: PipelineConfig = toml::from_str(toml).unwrap();
+        let mut processor = StreamProcessor::new(config).unwrap();
+
+        let input = "foo is foo\n";
+        let reader = Cursor::new(input);
+        let mut output = Vec::new();
+
+        let result = processor.process_stream(reader, &mut output).unwrap();
+        let output_str = String::from_utf8(output).unwrap();
+
+        // Should have both transformed output AND finalize summary
+        assert!(
+            output_str.contains("bar is bar"),
+            "Should transform foo->bar, got: {}",
+            output_str
+        );
+        assert!(
+            output_str.contains("Substitutions: 1"),
+            "Should show substitution count, got: {}",
+            output_str
+        );
+        assert_eq!(result.transformations_applied, 1);
+    }
+
+    #[test]
+    fn test_finalize_multiple_counters() {
+        let toml = r#"
+name = "Test Multiple Counters"
+
+[[step]]
+type = "filter"
+pattern = "."
+action = "keep_line"
+
+[finalize]
+template = """
+Errors: ${count:errors}
+Warnings: ${count:warnings}
+Total lines: ${lines}
+"""
+suppress_output = true
+
+[[finalize.counters]]
+name = "errors"
+pattern = "ERROR"
+
+[[finalize.counters]]
+name = "warnings"
+pattern = "WARN"
+"#;
+        let config: PipelineConfig = toml::from_str(toml).unwrap();
+        let mut processor = StreamProcessor::new(config).unwrap();
+
+        let input = "ERROR: fail\nWARN: issue\nERROR: fail2\nINFO: ok\n";
+        let reader = Cursor::new(input);
+        let mut output = Vec::new();
+
+        let _result = processor.process_stream(reader, &mut output).unwrap();
+        let output_str = String::from_utf8(output).unwrap();
+
+        assert!(output_str.contains("Errors: 2"), "Expected 2 errors");
+        assert!(output_str.contains("Warnings: 1"), "Expected 1 warning");
+        assert!(output_str.contains("Total lines: 4"), "Expected 4 lines");
     }
 }
 
 #[cfg(test)]
 mod on_mismatch_tests {
-    use crate::pipeline::{PipelineConfig, OnMismatch};
+    use crate::pipeline::{OnMismatch, PipelineConfig};
 
     #[test]
     fn test_on_mismatch_parsing() {
@@ -3367,7 +3989,7 @@ on_mismatch = "warn"
 
 #[cfg(test)]
 mod on_mismatch_behavior_tests {
-    use crate::pipeline::{PipelineConfig, PipelineStep, StepType, OnMismatch};
+    use crate::pipeline::{OnMismatch, PipelineConfig, PipelineStep, StepType};
     use crate::processor::StreamProcessor;
     use std::io::Cursor;
 
@@ -3387,16 +4009,19 @@ mod on_mismatch_behavior_tests {
         let mut processor = StreamProcessor::new(config).unwrap();
         let input = Cursor::new("ok line\nbad line\nok again\n");
         let mut output = Vec::new();
-        
+
         processor.process_stream(input, &mut output).unwrap();
         let output_str = String::from_utf8(output).unwrap();
-        
+
         // With on_mismatch = warn, ALL lines should be output
         assert!(output_str.contains("ok line"), "Should contain ok line");
-        assert!(output_str.contains("bad line"), "Should contain bad line (warn mode)");
+        assert!(
+            output_str.contains("bad line"),
+            "Should contain bad line (warn mode)"
+        );
         assert!(output_str.contains("ok again"), "Should contain ok again");
     }
-    
+
     #[test]
     fn test_on_mismatch_skip_drops_line() {
         let config = PipelineConfig {
@@ -3413,13 +4038,16 @@ mod on_mismatch_behavior_tests {
         let mut processor = StreamProcessor::new(config).unwrap();
         let input = Cursor::new("ok line\nbad line\nok again\n");
         let mut output = Vec::new();
-        
+
         processor.process_stream(input, &mut output).unwrap();
         let output_str = String::from_utf8(output).unwrap();
-        
+
         // With on_mismatch = skip, only valid lines should be output
         assert!(output_str.contains("ok line"), "Should contain ok line");
-        assert!(!output_str.contains("bad line"), "Should NOT contain bad line (skip mode)");
+        assert!(
+            !output_str.contains("bad line"),
+            "Should NOT contain bad line (skip mode)"
+        );
         assert!(output_str.contains("ok again"), "Should contain ok again");
     }
 }

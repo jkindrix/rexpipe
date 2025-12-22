@@ -104,7 +104,11 @@ pub struct TestCase {
 
 impl TestCase {
     /// Create a new positive test case.
-    pub fn new(name: impl Into<String>, input: impl Into<String>, expected: impl Into<String>) -> Self {
+    pub fn new(
+        name: impl Into<String>,
+        input: impl Into<String>,
+        expected: impl Into<String>,
+    ) -> Self {
         Self {
             name: name.into(),
             input: input.into(),
@@ -180,7 +184,12 @@ pub struct TestResult {
 
 impl TestResult {
     /// Create a passed result.
-    pub fn passed(name: impl Into<String>, duration: Duration, matches: u64, transformations: u64) -> Self {
+    pub fn passed(
+        name: impl Into<String>,
+        duration: Duration,
+        matches: u64,
+        transformations: u64,
+    ) -> Self {
         Self {
             name: name.into(),
             passed: true,
@@ -431,7 +440,10 @@ impl TestRunner {
                     if transformations != expected_trans {
                         return TestResult::failed(
                             &test.name,
-                            format!("Expected {} transformations, got {}", expected_trans, transformations),
+                            format!(
+                                "Expected {} transformations, got {}",
+                                expected_trans, transformations
+                            ),
                             duration,
                         );
                     }
@@ -480,7 +492,10 @@ impl TestRunner {
     fn matches_filters(&self, test: &TestCase) -> bool {
         // Check tag filter
         if !self.config.filter_tags.is_empty() {
-            let has_matching_tag = test.tags.iter().any(|t| self.config.filter_tags.contains(t));
+            let has_matching_tag = test
+                .tags
+                .iter()
+                .any(|t| self.config.filter_tags.contains(t));
             if !has_matching_tag {
                 return false;
             }
@@ -506,7 +521,11 @@ pub fn format_test_report(summary: &TestSummary) -> String {
     report.push_str("╚══════════════════════════════════════════════════════════════════╝\n\n");
 
     // Overall summary
-    let status = if summary.all_passed() { "PASSED" } else { "FAILED" };
+    let status = if summary.all_passed() {
+        "PASSED"
+    } else {
+        "FAILED"
+    };
     let status_indicator = if summary.all_passed() { "✓" } else { "✗" };
 
     report.push_str(&format!(
@@ -546,10 +565,7 @@ pub fn format_test_report(summary: &TestSummary) -> String {
 
         report.push_str(&format!(
             "  {} {} {} ({:?})\n",
-            indicator,
-            status_text,
-            result.name,
-            result.duration
+            indicator, status_text, result.name, result.duration
         ));
 
         if let Some(ref error) = result.error {
@@ -742,8 +758,14 @@ mod tests {
         summary.total = 2;
         summary.passed = 1;
         summary.failed = 1;
-        summary.results.push(TestResult::passed("test1", Duration::from_millis(10), 0, 0));
-        summary.results.push(TestResult::failed("test2", "assertion failed", Duration::from_millis(5)));
+        summary
+            .results
+            .push(TestResult::passed("test1", Duration::from_millis(10), 0, 0));
+        summary.results.push(TestResult::failed(
+            "test2",
+            "assertion failed",
+            Duration::from_millis(5),
+        ));
 
         let tap = format_tap_output(&summary);
         assert!(tap.contains("TAP version 14"));
@@ -756,7 +778,12 @@ mod tests {
         let mut summary = TestSummary::default();
         summary.total = 1;
         summary.passed = 1;
-        summary.results.push(TestResult::passed("test1", Duration::from_millis(100), 0, 0));
+        summary.results.push(TestResult::passed(
+            "test1",
+            Duration::from_millis(100),
+            0,
+            0,
+        ));
 
         let xml = format_junit_xml(&summary, "my-suite");
         assert!(xml.contains("<?xml version"));
