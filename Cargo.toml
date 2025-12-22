@@ -18,6 +18,7 @@ include = ["src/**/*", "examples/**/*", "benches/**/*", "tests/**/*", "LICENSE-*
 anyhow = "1.0"
 clap = { version = "4.5", features = ["derive"] }
 clap_complete = "4.5"
+clap_mangen = "0.2"
 ctrlc = "3.4"
 diffy = "0.4"
 dirs = "5.0"
@@ -51,6 +52,8 @@ tree-sitter-yaml = { version = "0.7", optional = true }
 tempfile = "3.14"
 criterion = "0.5"
 proptest = "1.9"
+assert_cmd = "2.0"
+predicates = "3.1"
 
 [features]
 default = []
@@ -76,3 +79,25 @@ path = "src/main.rs"
 [[bench]]
 name = "processing_benchmark"
 harness = false
+
+# Release profile optimizations for smaller, faster binaries
+[profile.release]
+lto = true              # Enable link-time optimization
+codegen-units = 1       # Single codegen unit for better optimization
+panic = "abort"         # Abort on panic for smaller binaries
+strip = true            # Strip symbols from binary
+opt-level = 3           # Maximum optimization level
+
+# Dev profile with faster builds
+[profile.dev]
+opt-level = 0
+debug = true
+
+# Test profile with some optimization for faster test runs
+[profile.test]
+opt-level = 1
+
+# Bench profile inherits from release
+[profile.bench]
+lto = true
+codegen-units = 1

@@ -57,8 +57,12 @@ pub struct PipelineSettings {
     /// Timeout in milliseconds for regex matching per line (0 = no timeout)
     #[serde(default)]
     pub timeout_ms: u64,
-    /// Allow shell command execution in transforms (set via --no-shell CLI flag)
-    /// Defaults to true for backwards compatibility
+    /// Allow shell command execution in transforms.
+    ///
+    /// **Security**: Defaults to `false` to prevent command injection when processing
+    /// untrusted input. Set to `true` explicitly in config or via CLI to enable shell
+    /// transforms. When enabled, shell commands receive input via stdin (not interpolation)
+    /// for safety, but the command string itself from the config is executed.
     #[serde(default = "default_allow_shell")]
     pub allow_shell: bool,
     /// Strict mode - reject patterns with potential ReDoS vulnerabilities
@@ -132,7 +136,9 @@ fn default_regex_size_limit() -> usize {
 }
 
 fn default_allow_shell() -> bool {
-    true
+    // Security: Shell transforms are disabled by default to prevent command injection
+    // when processing untrusted input. Enable explicitly with allow_shell = true in config.
+    false
 }
 
 /// Action to take when a line exceeds the maximum length

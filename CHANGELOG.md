@@ -47,6 +47,44 @@ scripting, pipelines, and programmatic use.
   - Removed `kafka` feature flag and rdkafka dependency
 - **TUI Feature**: Removed ratatui and crossterm dependencies
 
+### Advanced Features
+
+- **Audit Trail & Provenance Tracking** (`audit.rs`): Compliance-first data pipeline support
+  - Cryptographic verification with SHA-256 fingerprints of input/output data
+  - Immutable provenance manifests in JSON format for transformation history
+  - CLI: `--audit` flag enables audit trail, `--audit-dir` sets output directory
+- **Bidirectional Pipelines** (`bidirectional.rs`): Reversible text transformations
+  - Store transformation mappings for bidirectional recovery
+  - Run pipelines in forward or reverse mode
+  - CLI: `--reverse` runs in reverse mode, `--mapping-file` for mapping storage
+- **Checkpoint/Incremental Processing** (`checkpoint.rs`): Resume interrupted processing
+  - Save and restore processing state across runs
+  - Git integration: `--git-diff REF` processes only changed lines since a commit
+  - CLI: `--checkpoint FILE` enables incremental processing
+- **Cross-File Relationships** (`crossfile.rs`): Semantic relationship processing
+  - Define cross-file rules with trigger patterns and related file detection
+  - Violation actions: warn, error, fix
+- **Pattern Learning** (`learn.rs`): Infer regex patterns from examples
+  - Example-based learning from positive and negative examples
+  - Template matching for common patterns (email, URL, SSN, etc.)
+  - CLI: `--learn` with `--positive` and `--negative` example flags
+- **Pipeline Testing Framework** (`testing.rs`): First-class test support
+  - Define test cases in pipeline configuration with `[[tests]]` sections
+  - Multiple output formats: text, TAP, JUnit XML
+  - CLI: `--test` runs tests, `--test-format` selects output format
+- **Block Step Type**: Cross-line state machine processing for multi-line patterns
+  - Define block boundaries with `pattern` and `until` patterns
+  - Block actions: `keep_block`, `drop_block`, `collect_block`
+- **Format-Preserving Encryption** (requires `--features fpe`):
+  - `fpe_encrypt`/`fpe_decrypt` transforms using NIST FF1 algorithm
+  - Preserves data format (encrypted digits remain digits)
+- **Syntax-Aware Processing** (requires `--features tree-sitter`):
+  - Structure-aware pattern matching using tree-sitter parsing
+  - Scopes: `code`, `strings`, `comments`, `functions`, `tests`
+  - 7 languages: Rust, Python, JavaScript, TypeScript, Go, JSON, YAML
+- **Streaming Pipeline Server**: `--server` mode for network-based processing
+- **Continuous Streaming Mode**: `--stream` with URI-based sources and sinks
+
 ### Technical Notes
 - All 256 tests continue to pass
 - Zero clippy warnings
@@ -56,98 +94,21 @@ scripting, pipelines, and programmatic use.
 ## [Unreleased]
 
 ### Added
-- **Audit Trail & Provenance Tracking** (`audit.rs`): Compliance-first data pipeline support
-  - Cryptographic verification with SHA-256 fingerprints of input/output data
-  - Immutable provenance manifests in JSON format for transformation history
-  - Optional digital signatures for audit records
-  - Human-readable compliance reports for GDPR, HIPAA, PCI-DSS requirements
-  - CLI: `--audit` flag enables audit trail, `--audit-dir` sets output directory
-- **Bidirectional Pipelines** (`bidirectional.rs`): Reversible text transformations
-  - Store transformation mappings for bidirectional recovery
-  - Run pipelines in forward or reverse mode
-  - Reversibility analysis for pipeline steps
-  - CLI: `--reverse` runs in reverse mode, `--mapping-file` for mapping storage
-- **Checkpoint/Incremental Processing** (`checkpoint.rs`): Resume interrupted processing
-  - Save and restore processing state across runs
-  - Track file positions and content hashes
-  - Git integration: `--git-diff REF` processes only changed lines since a commit
-  - CLI: `--checkpoint FILE` enables incremental processing
-- **Cross-File Relationships** (`crossfile.rs`): Semantic relationship processing
-  - Define cross-file rules with trigger patterns and related file detection
-  - File grouping with glob patterns
-  - Violation actions: warn, error, fix
-  - Ensure consistency across related files (e.g., header and source files)
-- **Pattern Learning** (`learn.rs`): Infer regex patterns from examples
-  - Example-based learning from positive and negative examples
-  - Pattern generalization with confidence scoring
-  - Template matching for common patterns (email, URL, SSN, etc.)
-  - CLI: `--learn` with `--positive` and `--negative` example flags
-- **Pipeline Testing Framework** (`testing.rs`): First-class test support
-  - Define test cases in pipeline configuration with `[[tests]]` sections
-  - Test expected output, match counts, and transformation counts
-  - Multiple output formats: text, TAP, JUnit XML
-  - CLI: `--test` runs tests, `--test-format` selects output format
-- **Block Step Type**: Cross-line state machine processing for multi-line patterns
-  - Define block boundaries with trigger (`pattern`) and `until` patterns
-  - Block actions: `keep_block`, `drop_block`, `mark_block`, `substitute_in_block`, `collect_block`
-  - Enables extraction of stack traces, log entries, code blocks, or delimited records
-- **Git Filter Integration**: `--git-filter-setup <name>` generates git clean/smudge configuration
-  - Automatic file transformation on commit/checkout
-  - Integration with .gitattributes for pattern-based file matching
-- **Pattern Discovery Mode**: `--discover` analyzes input to detect common patterns
-  - Frequency analysis for 13 pattern types (email, IP, dates, URLs, etc.)
-  - Generates suggested pipeline configuration for detected patterns
-  - Bootstrap configuration from unknown log formats
-- **Format-Preserving Encryption** (requires `--features fpe`):
-  - `fpe_encrypt` transform using NIST FF1 algorithm (AES-128/192/256)
-  - `fpe_decrypt` transform for reversible encryption
-  - Preserves data format (encrypted digits remain digits)
-  - Configurable radix (character set) for encryption
-  - Support for external key files via `key_file` and `tweak_file` parameters
-- **Deterministic Masking**: `mask_deterministic` transform for consistent masking
-  - Same input+seed always produces same output
-  - Preserve prefix/suffix characters (e.g., first 4 and last 4)
-  - Support for external seed files via `seed_file` parameter
-  - Useful for joining masked datasets or consistent test data
-- **Syntax-Aware Processing** (requires `--features tree-sitter`):
-  - Structure-aware pattern matching using tree-sitter parsing
-  - Basic scopes: `code`, `strings`, `comments`, `functions`
-  - Fine-grained scopes: `function_calls`, `imports`, `types`, `identifiers`, `macros`, `control_flow`
-  - **Tests scope**: Language-aware test detection (`scope = "tests"` or `exclude_scopes = ["tests"]`)
-    - Rust: `#[test]` attributes, `mod tests` blocks
-    - Python: `test_` prefix functions, `Test` prefix classes
-    - JavaScript/TypeScript: `describe()`, `it()`, `test()` blocks
-    - Go: `Test`, `Benchmark`, `Example` prefix functions
-  - 7 languages: Rust, Python, JavaScript, TypeScript, Go, JSON, YAML
-  - Multi-language steps: `languages = ["rust", "python", "typescript"]`
-  - Exclude scopes: `exclude_scopes = ["comments", "strings", "tests"]`
-  - Refactor code without changing strings or comments
-  - Example: `scope = "code"` with `language = "rust"` to only match in code
-- **Streaming Pipeline Server**: `--server` mode for network-based processing
-  - TCP server that accepts pipeline configurations and text to process
-  - Line-based JSON protocol for easy integration
-  - Support for default pipeline configuration
-  - Async mode available with `--features async`
-- **Continuous Streaming Mode**: `--stream` with URI-based sources and sinks
-  - Input sources: `stdin://`, `file:///path`, `tcp://host:port`, `udp://host:port`
-  - Output sinks: `stdout://`, `stderr://`, `file:///path`, `tcp://host:port`, `udp://host:port`
-  - Example: `rexpipe --config pipeline.toml --input tcp://0.0.0.0:5140 --output file:///var/log/processed.log`
-- **Apache Kafka Integration** (requires `--features kafka`):
-  - Consume messages from Kafka topics as input source
-  - Produce processed messages to Kafka topics as output sink
-  - URI format: `kafka://broker:port/topic?group_id=consumer-group`
-  - Built on rdkafka/librdkafka for production-grade reliability
-  - Example: `rexpipe --stream --input kafka://localhost:9092/raw-logs --output kafka://localhost:9092/processed-logs`
-- Crate-level documentation with usage examples and doc-tests
-- Working doctests for `ResolvedLibrary::contains` and `ResolvedLibrary::pattern_names`
+- **CLI Integration Tests**: Comprehensive test suite for binary behavior
+  - 26 tests covering substitution, filtering, JSON output, exit codes, file processing
+  - Tests for shell completions, config validation, dry-run, context lines, man page
+- `--validate-config` command for pipeline configuration validation
+  - Syntax checking with detailed error messages
+  - Pattern validation with suggestions for fixes
+- `--man` flag for generating man page to stdout
 
 ### Changed
-- Updated all dependencies to latest compatible versions
-- Migrated to `anyhow` for application error handling with rich context
-- Added `thiserror` for structured error types (foundation for future refinement)
-- Fixed all clippy warnings (Entry API usage, recursion parameter, iterator idioms)
-- Improved `BinaryMode` to implement `FromStr` trait for idiomatic parsing
-- Improved documentation with proper intra-doc links and HTML escaping
+- **Security**: Shell transforms now disabled by default
+  - Requires `--allow-shell` flag to enable shell command execution
+  - Prevents accidental command injection from untrusted configs
+- **CI**: Added feature-specific test matrix (pcre, async, tree-sitter, fpe)
+- Fixed benchmark file to use updated pipeline types (`StepAction` instead of `FilterAction`)
+- Version now dynamically read from Cargo.toml (fixes version mismatch)
 
 ## [1.1.0] - 2024-12-15
 

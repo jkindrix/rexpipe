@@ -424,6 +424,58 @@ impl CrossFileManager {
 
         groups
     }
+
+    /// Apply auto-fixes for cross-file violations.
+    ///
+    /// For each violation, this appends the trigger pattern's matched text
+    /// to the related file. Returns the number of files modified.
+    ///
+    /// # Arguments
+    /// * `results` - The check results containing violations to fix
+    /// * `dry_run` - If true, report what would be done without modifying files
+    ///
+    /// # Returns
+    /// A tuple of (files_modified, fixes_applied)
+    pub fn apply_fixes(&self, results: &[CrossFileCheckResult], dry_run: bool) -> Result<(usize, usize)> {
+        let mut files_modified = 0;
+        let mut fixes_applied = 0;
+
+        for result in results {
+            if result.passed {
+                continue;
+            }
+
+            for violation in &result.violations {
+                // The fix is to append the matched text from trigger to related file
+                let fix_text = format!(
+                    "\n// Auto-fix: Added to match pattern from {}\n{}\n",
+                    result.trigger_file.display(),
+                    result.trigger_pattern
+                );
+
+                if dry_run {
+                    eprintln!(
+                        "Would append to {}: {}",
+                        violation.file.display(),
+                        result.trigger_pattern
+                    );
+                } else {
+                    use std::fs::OpenOptions;
+                    use std::io::Write;
+
+                    let mut file = OpenOptions::new()
+                        .append(true)
+                        .open(&violation.file)?;
+
+                    writeln!(file, "{}", fix_text)?;
+                    files_modified += 1;
+                }
+                fixes_applied += 1;
+            }
+        }
+
+        Ok((files_modified, fixes_applied))
+    }
 }
 
 impl Default for CrossFileManager {
@@ -494,7 +546,7 @@ impl CrossFileConfig {
     /// ```
     pub fn load_rules_file(path: impl AsRef<Path>) -> Result<Self> {
         let content = std::fs::read_to_string(path.as_ref())
-            .map_err(|e| CrossFileError::Io(e))?;
+            .map_err(CrossFileError::Io)?;
 
         #[derive(Deserialize)]
         struct RulesFile {

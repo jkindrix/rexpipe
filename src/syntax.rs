@@ -16,6 +16,7 @@
 //! ```
 
 use std::collections::HashSet;
+use std::str::FromStr;
 
 /// Supported languages for syntax-aware processing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -29,20 +30,24 @@ pub enum Language {
     Yaml,
 }
 
-impl Language {
-    /// Parse a language name from a string.
-    pub fn from_str(s: &str) -> Option<Self> {
+impl FromStr for Language {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
-            "rust" | "rs" => Some(Language::Rust),
-            "python" | "py" => Some(Language::Python),
-            "javascript" | "js" => Some(Language::JavaScript),
-            "typescript" | "ts" => Some(Language::TypeScript),
-            "go" | "golang" => Some(Language::Go),
-            "json" => Some(Language::Json),
-            "yaml" | "yml" => Some(Language::Yaml),
-            _ => None,
+            "rust" | "rs" => Ok(Language::Rust),
+            "python" | "py" => Ok(Language::Python),
+            "javascript" | "js" => Ok(Language::JavaScript),
+            "typescript" | "ts" => Ok(Language::TypeScript),
+            "go" | "golang" => Ok(Language::Go),
+            "json" => Ok(Language::Json),
+            "yaml" | "yml" => Ok(Language::Yaml),
+            _ => Err(format!("Unknown language: '{}'. Supported: rust, python, javascript, typescript, go, json, yaml", s)),
         }
     }
+}
+
+impl Language {
 
     /// Get the tree-sitter language for this language.
     #[cfg(feature = "tree-sitter")]
@@ -305,23 +310,24 @@ pub enum ScopeFilter {
     Exclude(HashSet<String>),
 }
 
-impl ScopeFilter {
-    /// Parse a scope filter from a string.
-    pub fn from_str(s: &str) -> Option<Self> {
+impl FromStr for ScopeFilter {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
-            "all" | "*" => Some(ScopeFilter::All),
-            "code" => Some(ScopeFilter::Code),
-            "strings" | "string" => Some(ScopeFilter::Strings),
-            "comments" | "comment" => Some(ScopeFilter::Comments),
-            "functions" | "function" | "fn" => Some(ScopeFilter::Functions),
-            "function_calls" | "calls" => Some(ScopeFilter::FunctionCalls),
-            "imports" | "import" | "use" => Some(ScopeFilter::Imports),
-            "types" | "type" => Some(ScopeFilter::Types),
-            "identifiers" | "identifier" | "ident" => Some(ScopeFilter::Identifiers),
-            "macros" | "macro" => Some(ScopeFilter::Macros),
-            "control_flow" | "control" | "flow" => Some(ScopeFilter::ControlFlow),
-            "tests" | "test" | "specs" | "spec" => Some(ScopeFilter::Tests),
-            _ => None,
+            "all" | "*" => Ok(ScopeFilter::All),
+            "code" => Ok(ScopeFilter::Code),
+            "strings" | "string" => Ok(ScopeFilter::Strings),
+            "comments" | "comment" => Ok(ScopeFilter::Comments),
+            "functions" | "function" | "fn" => Ok(ScopeFilter::Functions),
+            "function_calls" | "calls" => Ok(ScopeFilter::FunctionCalls),
+            "imports" | "import" | "use" => Ok(ScopeFilter::Imports),
+            "types" | "type" => Ok(ScopeFilter::Types),
+            "identifiers" | "identifier" | "ident" => Ok(ScopeFilter::Identifiers),
+            "macros" | "macro" => Ok(ScopeFilter::Macros),
+            "control_flow" | "control" | "flow" => Ok(ScopeFilter::ControlFlow),
+            "tests" | "test" | "specs" | "spec" => Ok(ScopeFilter::Tests),
+            _ => Err(format!("Unknown scope: '{}'. Supported: all, code, strings, comments, functions, function_calls, imports, types, identifiers, macros, control_flow, tests", s)),
         }
     }
 }
@@ -445,11 +451,9 @@ impl SyntaxAnalyzer {
         match self.language {
             Language::Rust => {
                 // Check for #[test] or #[cfg(test)] attributes on functions
-                if kind == "function_item" {
-                    if self.rust_has_test_attribute(&node, source) {
-                        ranges.push(ByteRange::new(node.start_byte(), node.end_byte()));
-                        return;
-                    }
+                if kind == "function_item" && self.rust_has_test_attribute(&node, source) {
+                    ranges.push(ByteRange::new(node.start_byte(), node.end_byte()));
+                    return;
                 }
                 // Check for mod tests { } blocks
                 if kind == "mod_item" {
@@ -485,11 +489,9 @@ impl SyntaxAnalyzer {
             }
             Language::JavaScript | Language::TypeScript => {
                 // Check for describe(), it(), test() call expressions
-                if kind == "call_expression" {
-                    if self.js_is_test_call(&node, source) {
-                        ranges.push(ByteRange::new(node.start_byte(), node.end_byte()));
-                        return;
-                    }
+                if kind == "call_expression" && self.js_is_test_call(&node, source) {
+                    ranges.push(ByteRange::new(node.start_byte(), node.end_byte()));
+                    return;
                 }
             }
             Language::Go => {
@@ -532,15 +534,10 @@ impl SyntaxAnalyzer {
                 }
                 if child.kind() == "attribute_item" {
                     let attr_text = &source[child.start_byte()..child.end_byte()];
-                    if attr_text.contains("#[test]")
+                    prev_was_test_attr = attr_text.contains("#[test]")
                         || attr_text.contains("#[cfg(test)]")
                         || attr_text.contains("#[tokio::test]")
-                        || attr_text.contains("#[async_std::test]")
-                    {
-                        prev_was_test_attr = true;
-                    } else {
-                        prev_was_test_attr = false;
-                    }
+                        || attr_text.contains("#[async_std::test]");
                 } else if child.kind() != "line_comment" && child.kind() != "block_comment" {
                     prev_was_test_attr = false;
                 }
@@ -708,21 +705,21 @@ mod tests {
 
     #[test]
     fn test_language_from_str() {
-        assert_eq!(Language::from_str("rust"), Some(Language::Rust));
-        assert_eq!(Language::from_str("Python"), Some(Language::Python));
-        assert_eq!(Language::from_str("js"), Some(Language::JavaScript));
-        assert_eq!(Language::from_str("unknown"), None);
+        assert_eq!("rust".parse::<Language>().ok(), Some(Language::Rust));
+        assert_eq!("Python".parse::<Language>().ok(), Some(Language::Python));
+        assert_eq!("js".parse::<Language>().ok(), Some(Language::JavaScript));
+        assert!("unknown".parse::<Language>().is_err());
     }
 
     #[test]
     fn test_scope_filter_from_str() {
-        assert_eq!(ScopeFilter::from_str("all"), Some(ScopeFilter::All));
-        assert_eq!(ScopeFilter::from_str("code"), Some(ScopeFilter::Code));
-        assert_eq!(ScopeFilter::from_str("strings"), Some(ScopeFilter::Strings));
-        assert_eq!(ScopeFilter::from_str("comments"), Some(ScopeFilter::Comments));
-        assert_eq!(ScopeFilter::from_str("tests"), Some(ScopeFilter::Tests));
-        assert_eq!(ScopeFilter::from_str("test"), Some(ScopeFilter::Tests));
-        assert_eq!(ScopeFilter::from_str("specs"), Some(ScopeFilter::Tests));
+        assert_eq!("all".parse::<ScopeFilter>().ok(), Some(ScopeFilter::All));
+        assert_eq!("code".parse::<ScopeFilter>().ok(), Some(ScopeFilter::Code));
+        assert_eq!("strings".parse::<ScopeFilter>().ok(), Some(ScopeFilter::Strings));
+        assert_eq!("comments".parse::<ScopeFilter>().ok(), Some(ScopeFilter::Comments));
+        assert_eq!("tests".parse::<ScopeFilter>().ok(), Some(ScopeFilter::Tests));
+        assert_eq!("test".parse::<ScopeFilter>().ok(), Some(ScopeFilter::Tests));
+        assert_eq!("specs".parse::<ScopeFilter>().ok(), Some(ScopeFilter::Tests));
     }
 
     #[test]

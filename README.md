@@ -49,7 +49,7 @@ cargo install rexpipe
 Or build from source:
 
 ```bash
-git clone https://github.com/example/rexpipe
+git clone https://github.com/jkindrix/rexpipe
 cd rexpipe
 cargo build --release
 ```
@@ -552,8 +552,10 @@ OPTIONS:
 
     # Utilities
         --validate                Validate configuration only
+        --validate-config         Validate pipeline configuration file
         --export <FORMAT>         Export configuration (toml or json)
         --completions <SHELL>     Generate shell completion script
+        --man                     Generate man page to stdout
     -h, --help                    Print help information
     -V, --version                 Print version information
 ```
@@ -601,6 +603,30 @@ rexpipe --completions elvish >> ~/.elvish/rc.elv
 ```
 
 After generating, restart your shell or source the completion file to enable completions.
+
+## Man Page
+
+Generate and install the man page:
+
+```bash
+# Generate man page and save to file
+rexpipe --man > rexpipe.1
+
+# Install to system man pages (requires sudo)
+sudo install -m 644 rexpipe.1 /usr/local/share/man/man1/
+
+# Or install to user man pages
+mkdir -p ~/.local/share/man/man1
+install -m 644 rexpipe.1 ~/.local/share/man/man1/
+
+# Update man database
+sudo mandb  # System-wide
+# or
+mandb -c ~/.local/share/man  # User-specific
+
+# View the man page
+man rexpipe
+```
 
 ## Exit Codes
 
@@ -742,6 +768,37 @@ rexpipe -p 'api/v1' -r 'api/v2' -I -R -g '*.yaml' config/
 ```bash
 # Show processing metrics
 rexpipe -c pipeline.toml --performance < large-file.txt
+```
+
+### Benchmarking and Profiling
+
+Run benchmarks to measure performance:
+
+```bash
+# Run all benchmarks
+cargo bench
+
+# Run specific benchmark group
+cargo bench "simple_substitution"
+
+# Generate HTML report (requires gnuplot)
+cargo bench -- --noplot
+
+# Benchmarks are in benches/processing_benchmark.rs
+```
+
+For profiling with perf (Linux):
+
+```bash
+# Build with debug symbols in release mode
+RUSTFLAGS="-C debuginfo=2" cargo build --release
+
+# Profile with perf
+perf record --call-graph dwarf ./target/release/rexpipe -c pipeline.toml < large-file.txt
+perf report
+
+# Flamegraph (requires cargo-flamegraph)
+cargo flamegraph -- -c pipeline.toml < large-file.txt
 ```
 
 ### Dry-Run Preview
@@ -1110,6 +1167,69 @@ transform = { fpe_decrypt = {
 description = "Decrypt credit card numbers"
 ```
 
+### FPE Security Best Practices
+
+**Key Management:**
+
+1. **Never hardcode keys in config files that are committed to version control.** Use `key_file` instead of inline `key` for any non-development environment.
+
+2. **Set restrictive file permissions on key files:**
+   ```bash
+   chmod 600 /etc/rexpipe/fpe.key
+   chown root:root /etc/rexpipe/fpe.key
+   ```
+
+3. **Generate cryptographically secure keys:**
+   ```bash
+   # Generate 256-bit key (32 bytes = 64 hex characters)
+   openssl rand -hex 32 > /etc/rexpipe/fpe.key
+
+   # Generate 128-bit key (16 bytes = 32 hex characters)
+   openssl rand -hex 16 > /etc/rexpipe/fpe.key
+   ```
+
+4. **Key length requirements:**
+   - AES-128: 16 bytes (32 hex characters)
+   - AES-192: 24 bytes (48 hex characters)
+   - AES-256: 32 bytes (64 hex characters)
+
+**Tweak Usage:**
+
+- Tweaks add domain separation - use different tweaks for different data types
+- Tweaks can be public (unlike keys) but should be consistent per data domain
+- Missing or empty tweak is valid but reduces security isolation
+
+**Operational Security:**
+
+- **Rotate keys periodically** - maintain old keys for decryption during transition
+- **Audit key access** - log when key files are read
+- **Backup keys securely** - encrypted backups with tested recovery procedures
+- **Environment separation** - use different keys for dev/staging/production
+
+**What NOT to do:**
+
+```toml
+# BAD: Hardcoded key in committed config
+transform = { fpe_encrypt = { key = "0123456789ABCDEF..." }}
+
+# BAD: Key file in repository
+transform = { fpe_encrypt = { key_file = "./keys/fpe.key" }}
+
+# BAD: World-readable key file
+# chmod 644 /etc/rexpipe/fpe.key  # DON'T DO THIS
+```
+
+**Recommended pattern:**
+
+```toml
+# GOOD: External key file with restricted access
+transform = { fpe_encrypt = {
+    key_file = "/etc/rexpipe/fpe.key",
+    tweak_file = "/etc/rexpipe/fpe.tweak",
+    radix = "0123456789"
+}}
+```
+
 ## Deterministic Masking
 
 Deterministic masking produces consistent output for the same input, allowing masked data to be joined across datasets.
@@ -1150,6 +1270,12 @@ description = "Mask SSN using external seed file"
 | `mask_char` | char | '*' | Character to use for masking |
 
 **Note:** Use either `seed` or `seed_file`, not both. One must be specified.
+
+**Security:** The seed acts as a secret key - identical input + identical seed = identical output. Protect the seed like a password:
+- Use `seed_file` with restricted permissions (chmod 600) for production
+- Never commit seeds to version control
+- Use different seeds for different environments (dev/prod)
+- Treat seed compromise as requiring re-masking of all data
 
 ## Syntax-Aware Processing (Optional)
 

@@ -98,20 +98,14 @@ fn benchmark_filter_operations(c: &mut Criterion) {
     // KeepLine filter
     let keep_config = PipelineConfig {
         name: Some("Keep Filter".to_string()),
-        description: None,
-        version: None,
-        patterns_include: Vec::new(),
-        settings: PipelineSettings::default(),
         step: vec![PipelineStep {
             step_type: StepType::Filter,
             pattern: r"\[INFO\]".to_string(),
-            replacement: None,
-            action: Some(FilterAction::KeepLine),
-            transform: None,
-            flags: None,
-            description: None,
+            action: Some(StepAction::KeepLine),
             enabled: Some(true),
+            ..Default::default()
         }],
+        ..Default::default()
     };
 
     group.bench_function("keep_line_filter", |b| {
@@ -126,20 +120,14 @@ fn benchmark_filter_operations(c: &mut Criterion) {
     // DropLine filter
     let drop_config = PipelineConfig {
         name: Some("Drop Filter".to_string()),
-        description: None,
-        version: None,
-        patterns_include: Vec::new(),
-        settings: PipelineSettings::default(),
         step: vec![PipelineStep {
             step_type: StepType::Filter,
             pattern: r"\[DEBUG\]".to_string(),
-            replacement: None,
-            action: Some(FilterAction::DropLine),
-            transform: None,
-            flags: None,
-            description: None,
+            action: Some(StepAction::DropLine),
             enabled: Some(true),
+            ..Default::default()
         }],
+        ..Default::default()
     };
 
     group.bench_function("drop_line_filter", |b| {
@@ -202,20 +190,15 @@ fn benchmark_transform_operations(c: &mut Criterion) {
     // Uppercase transform
     let uppercase_config = PipelineConfig {
         name: Some("Uppercase Transform".to_string()),
-        description: None,
-        version: None,
-        patterns_include: Vec::new(),
-        settings: PipelineSettings::default(),
         step: vec![PipelineStep {
             step_type: StepType::Transform,
             pattern: r"[a-z]+".to_string(),
-            replacement: None,
-            action: None,
             transform: Some(TransformAction::Uppercase),
             flags: Some(vec![RegexFlag::Global]),
-            description: None,
             enabled: Some(true),
+            ..Default::default()
         }],
+        ..Default::default()
     };
 
     group.bench_function("uppercase_transform", |b| {
@@ -230,20 +213,15 @@ fn benchmark_transform_operations(c: &mut Criterion) {
     // Trim transform
     let trim_config = PipelineConfig {
         name: Some("Trim Transform".to_string()),
-        description: None,
-        version: None,
-        patterns_include: Vec::new(),
-        settings: PipelineSettings::default(),
         step: vec![PipelineStep {
             step_type: StepType::Transform,
             pattern: r"^\s+|\s+$".to_string(),
-            replacement: None,
-            action: None,
             transform: Some(TransformAction::Trim),
             flags: Some(vec![RegexFlag::Global]),
-            description: None,
             enabled: Some(true),
+            ..Default::default()
         }],
+        ..Default::default()
     };
 
     group.bench_function("trim_transform", |b| {
@@ -299,50 +277,44 @@ fn create_complex_pipeline() -> PipelineConfig {
         name: Some("Complex Benchmark Pipeline".to_string()),
         description: Some("Multi-step processing simulation".to_string()),
         version: Some("1.0.0".to_string()),
-        patterns_include: Vec::new(),
-        settings: PipelineSettings::default(),
         step: vec![
             PipelineStep {
                 step_type: StepType::Substitute,
                 pattern: r"\[ERROR\]".to_string(),
                 replacement: Some("[ERR]".to_string()),
-                action: None,
-                transform: None,
                 flags: Some(vec![RegexFlag::Global]),
                 description: Some("Normalize error levels".to_string()),
                 enabled: Some(true),
+                ..Default::default()
             },
             PipelineStep {
                 step_type: StepType::Filter,
                 pattern: "DEBUG".to_string(),
-                replacement: None,
-                action: Some(FilterAction::DropLine),
-                transform: None,
-                flags: None,
+                action: Some(StepAction::DropLine),
                 description: Some("Remove debug messages".to_string()),
                 enabled: Some(true),
+                ..Default::default()
             },
             PipelineStep {
                 step_type: StepType::Substitute,
                 pattern: r"user_id=(\d+)".to_string(),
                 replacement: Some("uid=${1}".to_string()),
-                action: None,
-                transform: None,
                 flags: Some(vec![RegexFlag::Global]),
                 description: Some("Standardize user ID format".to_string()),
                 enabled: Some(true),
+                ..Default::default()
             },
             PipelineStep {
                 step_type: StepType::Substitute,
                 pattern: r"192\.168\.".to_string(),
                 replacement: Some("10.0.".to_string()),
-                action: None,
-                transform: None,
                 flags: Some(vec![RegexFlag::Global]),
                 description: Some("Anonymize IP addresses".to_string()),
                 enabled: Some(true),
+                ..Default::default()
             },
         ],
+        ..Default::default()
     }
 }
 

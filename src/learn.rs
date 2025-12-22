@@ -43,6 +43,7 @@
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
+use std::time::Instant;
 use thiserror::Error;
 
 /// Errors that can occur during pattern learning.
@@ -50,6 +51,9 @@ use thiserror::Error;
 pub enum LearnError {
     #[error("Insufficient examples: need at least {min} positive examples, got {got}")]
     InsufficientExamples { min: usize, got: usize },
+
+    #[error("Too many examples: maximum {max} allowed, got {got}")]
+    TooManyExamples { max: usize, got: usize },
 
     #[error("No valid pattern found that matches all positive examples")]
     NoPatternFound,
@@ -60,8 +64,8 @@ pub enum LearnError {
     #[error("Invalid regex generated: {0}")]
     InvalidRegex(#[from] regex::Error),
 
-    #[error("Learning timeout exceeded")]
-    Timeout,
+    #[error("Learning timeout exceeded (limit: {0}ms)")]
+    Timeout(u64),
 }
 
 pub type Result<T> = std::result::Result<T, LearnError>;
@@ -198,9 +202,14 @@ pub struct LearnConfig {
     #[serde(default = "default_max_complexity")]
     pub max_complexity: usize,
 
-    /// Timeout in milliseconds
+    /// Timeout in milliseconds (default: 5000ms)
     #[serde(default = "default_timeout")]
     pub timeout_ms: u64,
+
+    /// Maximum number of examples (positive + negative) to process (default: 1000)
+    /// This prevents resource exhaustion from very large example sets
+    #[serde(default = "default_max_examples")]
+    pub max_examples: usize,
 }
 
 fn default_min_confidence() -> u8 {
@@ -223,6 +232,10 @@ fn default_timeout() -> u64 {
     5000
 }
 
+fn default_max_examples() -> usize {
+    1000
+}
+
 impl Default for LearnConfig {
     fn default() -> Self {
         Self {
@@ -232,6 +245,7 @@ impl Default for LearnConfig {
             generate_captures: false,
             max_complexity: default_max_complexity(),
             timeout_ms: default_timeout(),
+            max_examples: default_max_examples(),
         }
     }
 }
@@ -306,11 +320,31 @@ impl PatternLearner {
     }
 
     /// Learn patterns from the provided examples.
+    ///
+    /// # Rate Limiting
+    ///
+    /// This function enforces rate limits to prevent resource exhaustion:
+    /// - `max_examples`: Limits total examples (default: 1000)
+    /// - `timeout_ms`: Limits execution time (default: 5000ms)
+    ///
+    /// These limits can be configured via [`LearnConfig`].
     pub fn learn(&self) -> Result<Vec<LearnedPattern>> {
+        let start_time = Instant::now();
+
+        // Check minimum examples
         if self.positive_examples.len() < 2 {
             return Err(LearnError::InsufficientExamples {
                 min: 2,
                 got: self.positive_examples.len(),
+            });
+        }
+
+        // Check maximum examples (rate limiting)
+        let total_examples = self.example_count();
+        if total_examples > self.config.max_examples {
+            return Err(LearnError::TooManyExamples {
+                max: self.config.max_examples,
+                got: total_examples,
             });
         }
 
@@ -321,8 +355,18 @@ impl PatternLearner {
             candidates.extend(self.try_templates()?);
         }
 
+        // Check timeout
+        if start_time.elapsed().as_millis() as u64 > self.config.timeout_ms {
+            return Err(LearnError::Timeout(self.config.timeout_ms));
+        }
+
         // Generate patterns from character analysis
         candidates.extend(self.learn_from_structure()?);
+
+        // Check timeout again after structure learning
+        if start_time.elapsed().as_millis() as u64 > self.config.timeout_ms {
+            return Err(LearnError::Timeout(self.config.timeout_ms));
+        }
 
         // Filter by negative examples
         candidates = self.filter_by_negatives(candidates)?;
@@ -817,5 +861,54 @@ mod tests {
         let config = generate_pipeline_config(&patterns);
         assert!(config.contains("[[step]]"));
         assert!(config.contains(r"\d+"));
+    }
+
+    #[test]
+    fn test_max_examples_limit() {
+        // Configure a low limit
+        let config = LearnConfig {
+            max_examples: 5,
+            ..Default::default()
+        };
+
+        let mut learner = PatternLearner::with_config(config);
+
+        // Add more examples than the limit
+        for i in 0..10 {
+            learner.add_positive(format!("test{}", i));
+        }
+
+        let result = learner.learn();
+        assert!(matches!(result, Err(LearnError::TooManyExamples { max: 5, .. })));
+    }
+
+    #[test]
+    fn test_max_examples_within_limit() {
+        let config = LearnConfig {
+            max_examples: 10,
+            ..Default::default()
+        };
+
+        let mut learner = PatternLearner::with_config(config);
+
+        // Add examples within limit
+        learner.add_positive("123");
+        learner.add_positive("456");
+        learner.add_positive("789");
+
+        // Should succeed (within limit)
+        let result = learner.learn();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_default_config_limits() {
+        let config = LearnConfig::default();
+
+        // Verify default limits
+        assert_eq!(config.max_examples, 1000);
+        assert_eq!(config.timeout_ms, 5000);
+        assert_eq!(config.max_patterns, 5);
+        assert_eq!(config.max_complexity, 200);
     }
 }

@@ -791,7 +791,7 @@ impl StreamProcessor {
 
                     // Add single language if specified
                     if let Some(ref lang_str) = step.language {
-                        if let Some(lang) = Language::from_str(lang_str) {
+                        if let Ok(lang) = lang_str.parse::<Language>() {
                             collected.push(lang);
                         } else {
                             log::warn!(
@@ -805,7 +805,7 @@ impl StreamProcessor {
                     // Add multiple languages if specified
                     if let Some(ref lang_strs) = step.languages {
                         for lang_str in lang_strs {
-                            if let Some(lang) = Language::from_str(lang_str) {
+                            if let Ok(lang) = lang_str.parse::<Language>() {
                                 if !collected.contains(&lang) {
                                     collected.push(lang);
                                 }
@@ -834,7 +834,7 @@ impl StreamProcessor {
                 } else {
                     step.scope
                         .as_ref()
-                        .and_then(|s| ScopeFilter::from_str(s))
+                        .and_then(|s| s.parse::<ScopeFilter>().ok())
                 };
 
                 // Warn if scope is specified without any language
@@ -1478,7 +1478,7 @@ impl StreamProcessor {
                                 // Get or create the set for this step
                                 let seen_set = self.dedup_prefix_seen
                                     .entry(step_idx)
-                                    .or_insert_with(std::collections::HashSet::new);
+                                    .or_default();
 
                                 // If we've seen this prefix before, drop the line
                                 if seen_set.contains(&prefix) {
@@ -1658,7 +1658,7 @@ impl StreamProcessor {
                             // Get or create the seen set for this step
                             let seen_set = self.dedup_extract_seen
                                 .entry(step_idx)
-                                .or_insert_with(std::collections::HashSet::new);
+                                .or_default();
 
                             // Filter out lines we've already seen across the entire stream
                             let lines: Vec<&str> = output.split('\n').collect();
@@ -1895,7 +1895,7 @@ impl StreamProcessor {
                             // Check if we've seen this block before
                             let seen_set = self.dedup_block_seen
                                 .entry(step_idx)
-                                .or_insert_with(std::collections::HashSet::new);
+                                .or_default();
 
                             if !seen_set.contains(&block_hash) {
                                 // New unique block - output all buffered lines
@@ -2382,7 +2382,7 @@ impl StreamProcessor {
     /// Detect language from file extension
     #[cfg(feature = "tree-sitter")]
     pub fn detect_language_from_extension(extension: &str) -> Option<crate::syntax::Language> {
-        crate::syntax::Language::from_str(extension)
+        extension.parse().ok()
     }
 }
 
@@ -3348,7 +3348,6 @@ mod tests {
 
 #[cfg(test)]
 mod on_mismatch_tests {
-    use super::*;
     use crate::pipeline::{PipelineConfig, OnMismatch};
 
     #[test]
@@ -3368,7 +3367,7 @@ on_mismatch = "warn"
 
 #[cfg(test)]
 mod on_mismatch_behavior_tests {
-    use crate::pipeline::{PipelineConfig, PipelineStep, PipelineSettings, StepType, OnMismatch};
+    use crate::pipeline::{PipelineConfig, PipelineStep, StepType, OnMismatch};
     use crate::processor::StreamProcessor;
     use std::io::Cursor;
 
