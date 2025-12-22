@@ -4,7 +4,7 @@ version = "2.0.0"
 edition = "2024"
 rust-version = "1.85"
 authors = ["Justin Kindrix <jkindrix@gmail.com>"]
-description = "AI-native regex pipeline processor optimized for AI agents and automated text processing"
+description = "A modern regex pipeline processor for automated text processing"
 license = "MIT OR Apache-2.0"
 readme = "README.md"
 homepage = "https://github.com/jkindrix/rexpipe"
@@ -46,11 +46,6 @@ tree-sitter-typescript = { version = "0.23", optional = true }
 tree-sitter-go = { version = "0.23", optional = true }
 tree-sitter-json = { version = "0.24", optional = true }
 tree-sitter-yaml = { version = "0.7", optional = true }
-
-# Structured data support
-csv = "1.3"
-serde_yaml = "0.9"
-quick-xml = { version = "0.37", features = ["serialize"] }
 
 [dev-dependencies]
 tempfile = "3.14"

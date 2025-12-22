@@ -80,13 +80,11 @@
 //! - [`library`]: Pattern library loading and resolution
 //! - [`inspector`]: Interactive debugging and pattern inspection
 //! - [`plugin`]: Extensible plugin system for custom transformations
-//! - [`stream`]: URI-based streaming source and sink abstractions
 //! - [`bidirectional`]: Reversible pipeline transformations
 //! - [`checkpoint`]: Incremental processing with checkpoint/resume
 //! - [`crossfile`]: Cross-file semantic relationship processing
 //! - [`learn`]: Pattern learning and inference from examples
 //! - [`testing`]: First-class pipeline testing support
-//! - [`data`]: Structured data processing (JSON, CSV, YAML, XML, TOML)
 //! - `syntax` (requires `tree-sitter` feature): Syntax-aware pattern matching
 
 // Core modules
@@ -98,13 +96,11 @@ pub mod library;
 pub mod pipeline;
 pub mod plugin;
 pub mod processor;
-pub mod stream;
 
 // Advanced feature modules
 pub mod bidirectional;
 pub mod checkpoint;
 pub mod crossfile;
-pub mod data;
 pub mod learn;
 pub mod testing;
 
@@ -116,9 +112,6 @@ pub use error::{ConfigError, LibraryError, PatternError, RexpipeError, Validatio
 
 // Re-export shutdown signal types for graceful termination
 pub use files::{BinaryMode, ShutdownInterrupted, ShutdownSignal, is_binary_file};
-
-// Re-export stream types for convenience
-pub use stream::{StreamUri, StreamSource, StreamSink, create_source, create_sink};
 
 // Re-export bidirectional types for reversible pipelines
 pub use bidirectional::{BidirectionalConfig, Direction, MappingStore};
@@ -134,6 +127,3 @@ pub use learn::{PatternLearner, LearnedPattern, LearnConfig};
 
 // Re-export testing types for pipeline validation
 pub use testing::{TestRunner, TestCase, TestConfig, TestSummary};
-
-// Re-export data types for structured data processing
-pub use data::{DataFormat, DataValue, DataError, DataReader, DataWriter};

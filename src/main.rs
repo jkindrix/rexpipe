@@ -9,7 +9,6 @@ use std::path::{Path, PathBuf};
 // Import from the library crate
 use rexpipe::checkpoint::{Checkpoint, CheckpointConfig};
 use rexpipe::crossfile::{CrossFileConfig, CrossFileManager, ViolationAction, format_check_report};
-use rexpipe::data::{DataFormat, DataValue};
 use rexpipe::error::{ConfigError, LibraryError, PatternError, RexpipeError, ValidationError};
 use rexpipe::files::{FileProcessingOptions, MultiFileProcessor, MultiFileResult};
 use rexpipe::inspector::{Inspector, InspectorOptions};
@@ -78,13 +77,13 @@ fn should_use_color(matches: &clap::ArgMatches) -> bool {
 }
 
 /// Determine if JSON output should be used.
-/// AI-native behavior: JSON is default when stdout is not a terminal (piped output).
-/// This makes rexpipe ideal for AI agent consumption without explicit flags.
+/// JSON is the default when stdout is not a terminal (piped output).
+/// This makes rexpipe ideal for scripting and automation.
 ///
 /// Priority:
 /// 1. --text flag forces plain text output (returns false)
 /// 2. --json flag forces JSON output (returns true)
-/// 3. Default: JSON when stdout is NOT a terminal (AI-native)
+/// 3. Default: JSON when stdout is NOT a terminal (scripting-friendly)
 fn should_use_json(matches: &clap::ArgMatches) -> bool {
     // --text forces plain text output
     if matches.get_flag("text") {
@@ -96,7 +95,7 @@ fn should_use_json(matches: &clap::ArgMatches) -> bool {
         return true;
     }
 
-    // AI-native default: JSON when stdout is not a terminal
+    // Default: JSON when stdout is not a terminal
     !io::stdout().is_terminal()
 }
 
@@ -402,10 +401,10 @@ fn build_cli() -> Command {
                 .help("Actually apply changes (required for in-place edits when piping/scripting)")
                 .long_help(
                     "Explicitly confirm that file modifications should be applied. \
-                     In AI-native mode (non-interactive), this flag is required for \
+                     In non-interactive mode (piped/scripted), this flag is required for \
                      destructive operations like in-place editing (-i). This prevents \
-                     accidental file modifications when rexpipe is used by AI agents \
-                     or in automated pipelines."
+                     accidental file modifications when rexpipe is used in automated \
+                     pipelines."
                 )
                 .action(ArgAction::SetTrue),
         )
@@ -477,36 +476,6 @@ fn build_cli() -> Command {
                      Supported languages: rust, python, javascript, typescript, go, c, cpp, java, ruby"
                 ),
         )
-        // === Streaming Mode ===
-        .arg(
-            Arg::new("stream")
-                .long("stream")
-                .help("Run in continuous streaming mode (requires --source)")
-                .action(ArgAction::SetTrue),
-        )
-        .arg(
-            Arg::new("input-uri")
-                .long("source")
-                .value_name("URI")
-                .help("Streaming input source URI (stdin://, file:///path, tcp://host:port, udp://host:port)")
-                .long_help("Specify input source using URI format for streaming mode:\n\
-                     - stdin://           Read from standard input\n\
-                     - file:///path       Read from a file\n\
-                     - tcp://host:port    Accept TCP connections\n\
-                     - udp://host:port    Receive UDP datagrams"),
-        )
-        .arg(
-            Arg::new("output-uri")
-                .long("sink")
-                .value_name("URI")
-                .help("Streaming output sink URI (stdout://, file:///path, tcp://host:port, udp://host:port)")
-                .long_help("Specify output sink using URI format for streaming mode:\n\
-                     - stdout://          Write to standard output\n\
-                     - stderr://          Write to standard error\n\
-                     - file:///path       Write to a file\n\
-                     - tcp://host:port    Send to TCP socket\n\
-                     - udp://host:port    Send UDP datagrams"),
-        )
         // === Output Modes ===
         .arg(
             Arg::new("count")
@@ -544,7 +513,7 @@ fn build_cli() -> Command {
         .arg(
             Arg::new("text")
                 .long("text")
-                .help("Force plain text output even when piping (override AI-native JSON default)")
+                .help("Force plain text output even when piping (override JSON default)")
                 .action(ArgAction::SetTrue),
         )
         .arg(
@@ -564,7 +533,7 @@ fn build_cli() -> Command {
             Arg::new("error-format")
                 .long("error-format")
                 .value_name("FORMAT")
-                .help("Error output format: text (default) or json for AI-parseable errors")
+                .help("Error output format: text (default) or json for machine-parseable errors")
                 .value_parser(["text", "json"])
                 .default_value("text"),
         )
@@ -628,60 +597,6 @@ fn build_cli() -> Command {
                      Uses frequency analysis to find repeated structures like IDs, dates, emails, \
                      phone numbers, etc. Outputs suggested patterns with match counts."
                 )
-                .action(ArgAction::SetTrue),
-        )
-        // === Data Processing ===
-        .arg(
-            Arg::new("convert")
-                .long("convert")
-                .help("Convert between data formats (json, csv, yaml, xml, toml)")
-                .long_help(
-                    "Convert data from one format to another. Use --input-format and --output-format \
-                     to specify formats explicitly, or let rexpipe detect the input format.\n\n\
-                     Supported formats: json, jsonl, csv, tsv, yaml, xml, toml\n\n\
-                     Examples:\n  \
-                     rexpipe --convert --output-format yaml < data.json\n  \
-                     rexpipe --convert --input-format csv --output-format json < data.csv"
-                )
-                .action(ArgAction::SetTrue),
-        )
-        .arg(
-            Arg::new("data-query")
-                .long("query")
-                .short('Q')
-                .value_name("EXPR")
-                .help("Query data with jq-like expressions (e.g., '.users[0].name')")
-                .long_help(
-                    "Query structured data using path expressions similar to jq.\n\n\
-                     Path syntax:\n  \
-                     .key       - Access object key\n  \
-                     [0]        - Access array index\n  \
-                     .[*]       - Access all array elements\n  \
-                     .key1.key2 - Chain accessors\n\n\
-                     Examples:\n  \
-                     rexpipe -Q '.name' < user.json\n  \
-                     rexpipe -Q '.users[0].email' < data.json\n  \
-                     rexpipe -Q '.[*].id' < items.json"
-                ),
-        )
-        .arg(
-            Arg::new("input-format")
-                .long("input-format")
-                .value_name("FORMAT")
-                .help("Explicit input data format")
-                .value_parser(["text", "json", "jsonl", "csv", "tsv", "yaml", "xml", "toml"]),
-        )
-        .arg(
-            Arg::new("output-format")
-                .long("output-format")
-                .value_name("FORMAT")
-                .help("Output data format for conversion")
-                .value_parser(["text", "json", "jsonl", "csv", "tsv", "yaml", "xml", "toml"]),
-        )
-        .arg(
-            Arg::new("pretty")
-                .long("pretty")
-                .help("Pretty print output (for JSON, XML, etc.)")
                 .action(ArgAction::SetTrue),
         )
         // === Bidirectional Pipelines ===
@@ -812,8 +727,8 @@ fn build_cli() -> Command {
                 .long_help(
                     "Output a human-readable description of the pipeline's behavior. \
                      Lists each step, what patterns it matches, and what transformations \
-                     it applies. Useful for AI agents to understand a pipeline before \
-                     running it. Output can be JSON with --json flag."
+                     it applies. Useful for understanding a pipeline before running it. \
+                     Output can be JSON with --json flag."
                 )
                 .action(ArgAction::SetTrue),
         )
@@ -824,8 +739,8 @@ fn build_cli() -> Command {
                 .long_help(
                     "After processing, output a verification summary confirming what \
                      transformations were applied. Shows line counts, match counts, \
-                     and transformation counts. Useful for AI agents to confirm that \
-                     processing completed as expected. Output can be JSON with --json flag."
+                     and transformation counts. Useful for confirming that processing \
+                     completed as expected. Output can be JSON with --json flag."
                 )
                 .action(ArgAction::SetTrue),
         )
@@ -961,7 +876,7 @@ fn main() {
             .unwrap_or(false);
 
         if use_json_errors {
-            // Output structured JSON error for AI consumption
+            // Output structured JSON error for machine consumption
             match json_schema::output_error_json(&e.to_string(), exit_code, None) {
                 Ok(json) => eprintln!("{}", json),
                 Err(_) => eprintln!("Error: {}", e), // Fallback to plain text
@@ -999,21 +914,6 @@ fn run_application(matches: &clap::ArgMatches) -> Result<()> {
         return run_pattern_learning(matches);
     }
 
-    // Handle data conversion mode
-    if matches.get_flag("convert") {
-        return run_data_conversion(matches);
-    }
-
-    // Handle data query mode
-    if matches.get_one::<String>("data-query").is_some() {
-        return run_data_query(matches);
-    }
-
-    // Handle streaming mode
-    if matches.get_flag("stream") || matches.contains_id("input-uri") {
-        return run_streaming_mode(matches);
-    }
-
     // Build pipeline settings from CLI flags
     let settings = build_pipeline_settings(matches);
 
@@ -1049,15 +949,15 @@ fn run_application(matches: &clap::ArgMatches) -> Result<()> {
     let is_multi_file =
         matches.get_flag("recursive") || matches.get_flag("in-place") || !paths.is_empty();
 
-    // AI-native safety: require --apply for in-place edits in non-interactive mode
-    // This prevents accidental file modifications when used by AI agents or scripts
+    // Safety: require --apply for in-place edits in non-interactive mode
+    // This prevents accidental file modifications when used in scripts or pipelines
     let in_place = matches.get_flag("in-place");
     let has_apply = matches.get_flag("apply");
     let is_interactive = io::stdin().is_terminal() && io::stdout().is_terminal();
 
     if in_place && !is_interactive && !has_apply && !matches.get_flag("dry-run") {
         // Non-interactive in-place edit without --apply: show dry-run preview
-        eprintln!("AI-native safety: In-place editing requires --apply flag in non-interactive mode.");
+        eprintln!("Safety: In-place editing requires --apply flag in non-interactive mode.");
         eprintln!("Showing dry-run preview instead. Add --apply to actually modify files.\n");
         return run_dry_run_preview(&config, matches, paths);
     }
@@ -1956,7 +1856,7 @@ fn explain_pipeline(config: &PipelineConfig, matches: &clap::ArgMatches) -> Resu
     let json_output = should_use_json(matches);
 
     if json_output {
-        // JSON output for AI consumption
+        // JSON output for machine consumption
         #[derive(serde::Serialize)]
         struct StepExplanation {
             step_number: usize,
@@ -2537,90 +2437,6 @@ fn run_pattern_discovery(matches: &clap::ArgMatches) -> Result<()> {
     Ok(())
 }
 
-/// Run continuous streaming mode with URI-based sources and sinks.
-fn run_streaming_mode(matches: &clap::ArgMatches) -> Result<()> {
-    use rexpipe::stream::{StreamUri, create_source, create_sink};
-    use rexpipe::processor::StreamProcessor;
-
-    // Parse input URI (default to stdin if not specified)
-    let input_uri_str = matches
-        .get_one::<String>("input-uri")
-        .map(|s| s.as_str())
-        .unwrap_or("stdin://");
-    let input_uri = StreamUri::parse(input_uri_str)
-        .map_err(|e| anyhow!("Invalid input URI: {}", e))?;
-
-    // Parse output URI (default to stdout if not specified)
-    let output_uri_str = matches
-        .get_one::<String>("output-uri")
-        .map(|s| s.as_str())
-        .unwrap_or("stdout://");
-    let output_uri = StreamUri::parse(output_uri_str)
-        .map_err(|e| anyhow!("Invalid output URI: {}", e))?;
-
-    // Load pipeline configuration
-    let settings = build_pipeline_settings(matches);
-    let config = load_pipeline_config(matches, settings)?;
-
-    // Create processor
-    let mut processor = StreamProcessor::new(config)?;
-
-    // Create source and sink
-    let mut source = create_source(&input_uri)
-        .map_err(|e| anyhow!("Failed to create input source: {}", e))?;
-    let mut sink = create_sink(&output_uri)
-        .map_err(|e| anyhow!("Failed to create output sink: {}", e))?;
-
-    info!("Streaming: {} -> pipeline -> {}", input_uri_str, output_uri_str);
-    if !matches.get_flag("quiet") {
-        eprintln!("Streaming from {} to {}", input_uri_str, output_uri_str);
-        eprintln!("Press Ctrl+C to stop...");
-    }
-
-    // Process lines continuously
-    loop {
-        match source.read_line() {
-            Ok(Some(line)) => {
-                // Process the line through the pipeline
-                let input = format!("{}\n", line);
-                let mut output = Vec::new();
-
-                match processor.process_stream(std::io::Cursor::new(input.as_bytes()), &mut output) {
-                    Ok(_) => {
-                        // Write output (remove trailing newline since sink adds one)
-                        let output_str = String::from_utf8_lossy(&output);
-                        let output_trimmed = output_str.trim_end_matches('\n');
-                        if !output_trimmed.is_empty() {
-                            sink.write_line(output_trimmed)?;
-                            sink.flush()?;
-                        }
-                    }
-                    Err(e) => {
-                        log::error!("Processing error: {}", e);
-                    }
-                }
-            }
-            Ok(None) => {
-                // Source exhausted (EOF for files, but TCP/UDP continue)
-                if input_uri.scheme == "stdin" || input_uri.scheme == "file" {
-                    break;
-                }
-                // For network sources, this shouldn't happen
-            }
-            Err(e) => {
-                log::error!("Read error: {}", e);
-                // For transient errors, we might want to continue
-                // For fatal errors, we should break
-                if e.kind() == std::io::ErrorKind::UnexpectedEof {
-                    break;
-                }
-            }
-        }
-    }
-
-    Ok(())
-}
-
 /// Run pattern learning mode to infer regex patterns from examples.
 fn run_pattern_learning(matches: &clap::ArgMatches) -> Result<()> {
     use rexpipe::learn::PatternLearner;
@@ -2767,120 +2583,6 @@ fn run_pipeline_tests(config: &PipelineConfig, matches: &clap::ArgMatches) -> Re
     Ok(())
 }
 
-/// Run data format conversion mode.
-fn run_data_conversion(matches: &clap::ArgMatches) -> Result<()> {
-    use std::io::Read;
-
-    // Read input
-    let mut input_content = String::new();
-    if let Some(input_file) = matches.get_one::<String>("input") {
-        File::open(input_file)?.read_to_string(&mut input_content)?;
-    } else {
-        io::stdin().read_to_string(&mut input_content)?;
-    }
-
-    // Determine input format
-    let input_format = if let Some(fmt) = matches.get_one::<String>("input-format") {
-        parse_data_format(fmt)?
-    } else {
-        DataFormat::detect(&input_content)
-    };
-
-    // Determine output format
-    let output_format = if let Some(fmt) = matches.get_one::<String>("output-format") {
-        parse_data_format(fmt)?
-    } else {
-        return Err(anyhow!(
-            "Output format is required for conversion. Use --output-format (json, csv, yaml, xml, toml)"
-        ));
-    };
-
-    // Parse input
-    let data = DataValue::parse(&input_content, input_format)
-        .map_err(|e| anyhow!("Failed to parse input as {:?}: {}", input_format, e))?;
-
-    // Convert to output format
-    let pretty = matches.get_flag("pretty");
-    let output = data.to_format_with_options(output_format, pretty)
-        .map_err(|e| anyhow!("Failed to convert to {:?}: {}", output_format, e))?;
-
-    // Write output
-    if let Some(output_file) = matches.get_one::<String>("output") {
-        std::fs::write(output_file, &output)?;
-    } else {
-        print!("{}", output);
-    }
-
-    Ok(())
-}
-
-/// Run data query mode with jq-like expressions.
-fn run_data_query(matches: &clap::ArgMatches) -> Result<()> {
-    use std::io::Read;
-
-    let query = matches
-        .get_one::<String>("data-query")
-        .ok_or_else(|| anyhow!("Query expression is required"))?;
-
-    // Read input
-    let mut input_content = String::new();
-    if let Some(input_file) = matches.get_one::<String>("input") {
-        File::open(input_file)?.read_to_string(&mut input_content)?;
-    } else {
-        io::stdin().read_to_string(&mut input_content)?;
-    }
-
-    // Determine input format
-    let input_format = if let Some(fmt) = matches.get_one::<String>("input-format") {
-        parse_data_format(fmt)?
-    } else {
-        DataFormat::detect(&input_content)
-    };
-
-    // Parse input
-    let data = DataValue::parse(&input_content, input_format)
-        .map_err(|e| anyhow!("Failed to parse input as {:?}: {}", input_format, e))?;
-
-    // Execute query
-    let result = data
-        .query(query)
-        .map_err(|e| anyhow!("Query failed: {}", e))?;
-
-    // Determine output format
-    let output_format = if let Some(fmt) = matches.get_one::<String>("output-format") {
-        parse_data_format(fmt)?
-    } else {
-        // Default to JSON for query results
-        DataFormat::Json
-    };
-
-    // Format and output results
-    let pretty = matches.get_flag("pretty");
-    let output = result.to_format_with_options(output_format, pretty)
-        .map_err(|e| anyhow!("Failed to format result: {}", e))?;
-    println!("{}", output.trim_end());
-
-    Ok(())
-}
-
-/// Parse a data format string into a DataFormat enum.
-fn parse_data_format(s: &str) -> Result<DataFormat> {
-    match s.to_lowercase().as_str() {
-        "text" => Ok(DataFormat::Text),
-        "json" => Ok(DataFormat::Json),
-        "jsonl" | "jsonlines" | "ndjson" => Ok(DataFormat::JsonLines),
-        "csv" => Ok(DataFormat::Csv),
-        "tsv" => Ok(DataFormat::Tsv),
-        "yaml" | "yml" => Ok(DataFormat::Yaml),
-        "xml" => Ok(DataFormat::Xml),
-        "toml" => Ok(DataFormat::Toml),
-        _ => Err(anyhow!(
-            "Unknown data format: {}. Supported: text, json, jsonl, csv, tsv, yaml, xml, toml",
-            s
-        )),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2894,16 +2596,5 @@ mod tests {
         let config = PipelineConfig::from_inline_pattern(r"\d+", Some("NUMBER"));
         assert_eq!(config.step.len(), 1);
         assert!(config.validate().is_ok());
-    }
-
-    #[test]
-    fn test_parse_data_format() {
-        assert!(matches!(parse_data_format("json").unwrap(), DataFormat::Json));
-        assert!(matches!(parse_data_format("CSV").unwrap(), DataFormat::Csv));
-        assert!(matches!(parse_data_format("yaml").unwrap(), DataFormat::Yaml));
-        assert!(matches!(parse_data_format("yml").unwrap(), DataFormat::Yaml));
-        assert!(matches!(parse_data_format("xml").unwrap(), DataFormat::Xml));
-        assert!(matches!(parse_data_format("toml").unwrap(), DataFormat::Toml));
-        assert!(parse_data_format("unknown").is_err());
     }
 }
