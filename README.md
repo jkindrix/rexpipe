@@ -1,8 +1,15 @@
 # rexpipe
 
-**A transformation recipe system for repeatable, shareable text processing.**
+**DevOps-first text transformation with pattern learning, reversibility, and cross-file consistency.**
 
-rexpipe is not a sed replacement—it's a system for defining, sharing, and composing multi-stage text transformations as version-controlled configuration files. Where sed excels at one-liners, rexpipe excels at 10-50 step pipelines that need to be maintained, shared, and composed.
+rexpipe is a multi-stage regex pipeline system designed for DevOps, Security, and Compliance teams. Define transformations as version-controlled TOML files, infer patterns from examples instead of writing regex, and ensure consistency across your entire codebase.
+
+**Key differentiators:**
+- 🎓 **Pattern Learning**: Give examples, get regex (`--learn`)
+- 🔄 **Reversible Transforms**: Mask for testing, unmask for debugging
+- 🔗 **Cross-File Consistency**: Ensure API versions match across source and tests
+- ⏱️ **Incremental Processing**: Checkpoint support for growing log files
+- 🛡️ **Security-First**: 90+ secret detection patterns, GDPR/HIPAA-ready pipelines
 
 ## The Core Idea
 
@@ -81,19 +88,127 @@ See [`examples/pipelines/progressive-system/`](examples/pipelines/progressive-sy
 
 ## Advanced Capabilities
 
-Beyond basic pattern matching, rexpipe offers sophisticated features for complex workflows:
+### Pattern Learning — No Regex Knowledge Required
 
-| Feature | Description |
-|---------|-------------|
-| **Pattern Learning** | Infer regex from positive/negative examples (`--learn`) |
-| **Pattern Discovery** | Auto-detect emails, IPs, dates, API keys in data (`--discover`) |
-| **Bidirectional Transforms** | Reversible redaction with mapping files |
-| **Syntax-Aware Matching** | Tree-sitter scopes (code/string/comment) |
-| **Cross-File Operations** | Ensure consistency across related files |
-| **Checkpointing** | Incremental processing of growing files |
-| **Pipeline Networks** | Fan-out/fan-in parallel processing patterns |
+```bash
+# Don't know regex? Give examples, get patterns:
+rexpipe --learn \
+  --positive "ACCT-12345" \
+  --positive "ACCT-98765" \
+  --negative "ORDER-123"
 
-See [ADVANCED_FEATURES.md](ADVANCED_FEATURES.md) for complete documentation and [examples/advanced/](examples/advanced/) for working examples.
+# Output: Pattern: ACCT-\d{5} (confidence: 95%)
+# Suggested pipeline config ready to use!
+```
+
+**Use cases:** Business analysts redacting PII, QA engineers extracting test data, compliance teams without regex expertise.
+
+### Reversible Transformations — Dev/Prod Config Switching
+
+```bash
+# Transform prod config → local dev (and save mapping)
+rexpipe -c prod-to-local.toml --mapping-file .rexpipe-map.json < config.yaml > config.local.yaml
+
+# Later: restore for debugging a prod issue
+rexpipe -c prod-to-local.toml --reverse --mapping-file .rexpipe-map.json < config.local.yaml
+```
+
+**Use cases:** Environment switching, data masking for testing, reversible anonymization.
+
+### Cross-File Consistency — CI/Pre-Commit Enforcement
+
+```bash
+# Ensure API version in code matches version in tests
+rexpipe --cross-file consistency-rules.toml -R src/ tests/
+
+# In consistency-rules.toml:
+# [[cross_file_rule]]
+# trigger_pattern = "api/v2/"
+# trigger_files = "src/**/*.ts"
+# related_files = "tests/**/*.ts"
+# ensure_pattern = "api/v2/"
+# action = "fail"
+```
+
+**Use cases:** Version consistency, import synchronization, configuration validation.
+
+### Incremental Processing — Log Monitoring Daemon
+
+```bash
+# Process growing log file, track position
+tail -f /var/log/app.log | rexpipe -c sanitize.toml --checkpoint /var/lib/rexpipe/app.ckpt
+
+# Resume after restart - only process new content
+rexpipe -c sanitize.toml --checkpoint app.ckpt --resume /var/log/app.log
+```
+
+**Use cases:** Real-time log sanitization, continuous compliance monitoring, streaming ETL.
+
+### Infrastructure-as-Code Sanitization
+
+```bash
+# Sanitize Terraform state for safe sharing/debugging
+terraform show -json | rexpipe -c terraform-state-sanitize.toml > sanitized.tfstate
+
+# Process Kubernetes manifests - redact secrets, normalize environments
+rexpipe -c k8s-sanitize.toml < deployment.yaml > deployment.sanitized.yaml
+
+# Batch process all Terraform files in a directory
+rexpipe -c terraform-state-sanitize.toml -R terraform/
+```
+
+**The `terraform-state-sanitize.toml` pipeline redacts:**
+- AWS credentials, account IDs, ARNs
+- Database passwords and connection strings
+- Private keys and certificates
+- IP addresses, endpoints, bucket names
+- KMS key IDs, secrets manager values
+
+**Use cases:** Sharing infrastructure configs in docs/PRs, debugging without exposing secrets, compliance audits.
+
+### Codebase Migrations — Safe Atomic Refactoring
+
+```bash
+# Preview migration changes across entire codebase (dry-run)
+rexpipe -c code-migration.toml -R --dry-run src/
+
+# Apply migration with backup files (.bak suffix)
+rexpipe -c code-migration.toml -R -i -b .bak --apply src/
+
+# Atomic mode: all-or-nothing (rollback on any failure)
+rexpipe -c code-migration.toml -R -i --atomic --apply src/
+```
+
+**Example: Rename deprecated APIs**
+```toml
+# code-migration.toml
+[[step]]
+type = "substitute"
+pattern = '\bgetUser\s*\('
+replacement = 'fetchUser('
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+pattern = 'from\s+[\'"]legacy/user[\'"]'
+replacement = 'from "services/user"'
+flags = ["global"]
+```
+
+**Use cases:** API deprecation, module renaming, import path updates, config key migrations.
+
+### Full Feature Matrix
+
+| Feature | Description | CLI Flag |
+|---------|-------------|----------|
+| **Pattern Learning** | Infer regex from examples | `--learn --positive X --negative Y` |
+| **Pattern Discovery** | Auto-detect patterns in data | `--discover` |
+| **Bidirectional Transforms** | Reversible with mapping files | `--mapping-file F --reverse` |
+| **Cross-File Consistency** | Ensure patterns across files | `--cross-file rules.toml` |
+| **Checkpointing** | Resume from saved position | `--checkpoint F --resume` |
+| **Syntax-Aware** | Tree-sitter scopes | `language = "rust"` in config |
+
+See [ADVANCED_FEATURES.md](ADVANCED_FEATURES.md) for complete documentation.
 
 ## Key Features
 
