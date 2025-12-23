@@ -1469,9 +1469,16 @@ impl StreamProcessor {
             );
         }
 
-        // PCRE mode - use fancy-regex for advanced features
+        // Check for per-step PCRE flag in addition to global pcre_mode
+        let use_pcre = settings.pcre_mode
+            || flags
+                .as_ref()
+                .map(|f| f.iter().any(|flag| matches!(flag, RegexFlag::Pcre)))
+                .unwrap_or(false);
+
+        // PCRE mode - use fancy-regex for advanced features (global or per-step)
         #[cfg(feature = "pcre")]
-        if settings.pcre_mode {
+        if use_pcre {
             // Check for ReDoS risks in PCRE mode (which uses backtracking)
             if let Some(warning) = Self::check_redos_risk(pattern, true) {
                 if settings.strict_mode {
@@ -1495,9 +1502,9 @@ impl StreamProcessor {
         }
 
         #[cfg(not(feature = "pcre"))]
-        if settings.pcre_mode {
+        if use_pcre {
             return Err(PatternError::PcreNotEnabled).context(
-                "Suggestion: Rebuild with `cargo build --features pcre` or remove the -P flag",
+                "Suggestion: Rebuild with `cargo build --features pcre` or remove the -P flag, or remove 'pcre' from step flags",
             );
         }
 
@@ -1667,6 +1674,11 @@ impl StreamProcessor {
                     }
                     RegexFlag::Extended => {
                         builder.ignore_whitespace(true);
+                    }
+                    RegexFlag::Pcre => {
+                        // Pcre flag is handled at the build_pattern level to select
+                        // the regex engine. If we reach here, it means we're building
+                        // a standard regex (Pcre was not selected), so ignore this flag.
                     }
                 }
             }
@@ -2206,6 +2218,14 @@ impl StreamProcessor {
                         };
 
                         if !should_output {
+                            // Log step-level attribution for dropped lines
+                            trace!(
+                                "Line {} DROPPED by step {} ({:?}, pattern: {})",
+                                line_number,
+                                step_idx,
+                                action,
+                                compiled_step.pattern.pattern_str()
+                            );
                             break;
                         }
                     }

@@ -99,6 +99,35 @@ pub struct PipelineConfig {
     #[serde(default)]
     pub step: Vec<PipelineStep>,
 
+    // === Shorthand step sections ===
+    // These provide a more concise syntax: [[filter]] instead of [[step]] + type = "filter"
+    // Steps from these sections are merged into `step` with appropriate step_type set.
+    // Order: filter, substitute, extract, validate, transform, block (appended after [[step]])
+
+    /// Shorthand for filter steps: `[[filter]]` instead of `[[step]]` + `type = "filter"`
+    #[serde(default)]
+    pub filter: Vec<PipelineStep>,
+
+    /// Shorthand for substitute steps: `[[substitute]]` instead of `[[step]]` + `type = "substitute"`
+    #[serde(default)]
+    pub substitute: Vec<PipelineStep>,
+
+    /// Shorthand for extract steps: `[[extract]]` instead of `[[step]]` + `type = "extract"`
+    #[serde(default)]
+    pub extract: Vec<PipelineStep>,
+
+    /// Shorthand for validate steps: `[[validate]]` instead of `[[step]]` + `type = "validate"`
+    #[serde(default)]
+    pub validate: Vec<PipelineStep>,
+
+    /// Shorthand for transform steps: `[[transform]]` instead of `[[step]]` + `type = "transform"`
+    #[serde(default)]
+    pub transform: Vec<PipelineStep>,
+
+    /// Shorthand for block steps: `[[block]]` instead of `[[step]]` + `type = "block"`
+    #[serde(default)]
+    pub block: Vec<PipelineStep>,
+
     // === Advanced feature configurations ===
     /// Bidirectional (reversible) pipeline configuration
     #[serde(default)]
@@ -859,15 +888,36 @@ pub struct BlockContextConfig {
     pub overlap_lines: Option<usize>,
 }
 
+/// Regex flags that can be applied per-step.
+///
+/// These flags modify regex behavior for individual pipeline steps.
+/// Use in the `flags` field of a step configuration:
+///
+/// ```toml
+/// [[step]]
+/// type = "filter"
+/// pattern = "(?<=user=)\\w+"
+/// flags = ["pcre"]  # Enable PCRE for this step only
+/// action = "keep_line"
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RegexFlag {
+    /// Apply replacement globally (all matches, not just first)
     Global,
+    /// Case-insensitive matching
     CaseInsensitive,
+    /// ^ and $ match line boundaries (not just string boundaries)
     Multiline,
+    /// . matches newlines
     DotAll,
+    /// Enable Unicode support
     Unicode,
+    /// Allow whitespace and comments in pattern
     Extended,
+    /// Use PCRE-compatible regex engine (supports lookahead/lookbehind)
+    /// This enables fancy-regex for this step only, without requiring global --pcre mode
+    Pcre,
 }
 
 #[derive(Debug, Clone)]
@@ -953,7 +1003,43 @@ impl PipelineConfig {
             config = config.merge_with_base(base_config);
         }
 
+        // Normalize shorthand sections into step vec
+        config = config.normalize_shorthand_sections();
+
         Ok(config)
+    }
+
+    /// Normalize shorthand sections ([[filter]], [[substitute]], etc.) into the main step vec.
+    /// This enables concise syntax like `[[filter]]` instead of `[[step]]` + `type = "filter"`.
+    ///
+    /// Order of processing: steps from [[step]] come first, then shorthand sections in order:
+    /// filter, substitute, extract, validate, transform, block.
+    fn normalize_shorthand_sections(mut self) -> Self {
+        // Helper to set step_type on each step and append to main vec
+        fn append_with_type(
+            steps: &mut Vec<PipelineStep>,
+            mut shorthand: Vec<PipelineStep>,
+            step_type: StepType,
+        ) {
+            for step in &mut shorthand {
+                // Only override step_type if it's the default (Substitute)
+                // This allows explicit type override in shorthand sections if needed
+                if step.step_type == StepType::default() {
+                    step.step_type = step_type.clone();
+                }
+            }
+            steps.extend(shorthand);
+        }
+
+        // Append shorthand sections in defined order
+        append_with_type(&mut self.step, std::mem::take(&mut self.filter), StepType::Filter);
+        append_with_type(&mut self.step, std::mem::take(&mut self.substitute), StepType::Substitute);
+        append_with_type(&mut self.step, std::mem::take(&mut self.extract), StepType::Extract);
+        append_with_type(&mut self.step, std::mem::take(&mut self.validate), StepType::Validate);
+        append_with_type(&mut self.step, std::mem::take(&mut self.transform), StepType::Transform);
+        append_with_type(&mut self.step, std::mem::take(&mut self.block), StepType::Block);
+
+        self
     }
 
     /// Merge this config with a base config (for extends support)
@@ -980,6 +1066,13 @@ impl PipelineConfig {
             // Merge settings (this config's settings override base)
             settings: self.settings.merge_with_base(base.settings),
             step: merged_steps,
+            // Shorthand sections are empty after normalization
+            filter: Vec::new(),
+            substitute: Vec::new(),
+            extract: Vec::new(),
+            validate: Vec::new(),
+            transform: Vec::new(),
+            block: Vec::new(),
             // Use this config's advanced configs if present, else base
             bidirectional: if self.bidirectional != BidirectionalConfig::default() {
                 self.bidirectional
@@ -1072,15 +1165,9 @@ impl PipelineConfig {
             name: Some("Inline Pipeline".to_string()),
             description: Some("Generated from command line pattern".to_string()),
             version: Some("1.0.0".to_string()),
-            extends: None,
-            patterns_include: Vec::new(),
             settings,
             step: vec![step],
-            bidirectional: BidirectionalConfig::default(),
-            checkpoint: CheckpointConfig::default(),
-            cross_file: CrossFileConfig::default(),
-            tests: Vec::new(),
-            finalize: FinalizeConfig::default(),
+            ..Default::default()
         }
     }
 
@@ -1995,5 +2082,99 @@ mod tests {
         assert_eq!(merged.step.len(), 2);
         assert_eq!(merged.step[0].pattern, "base_pattern");
         assert_eq!(merged.step[1].pattern, "child_pattern");
+    }
+
+    #[test]
+    fn test_shorthand_syntax_filter() {
+        let toml = r#"
+            [[filter]]
+            pattern = "^ERROR"
+            action = "keep_line"
+
+            [[filter]]
+            pattern = "^WARN"
+            action = "keep_line"
+        "#;
+
+        let config: PipelineConfig = toml::from_str(toml).unwrap();
+        let config = config.normalize_shorthand_sections();
+
+        assert_eq!(config.step.len(), 2);
+        assert_eq!(config.step[0].step_type, StepType::Filter);
+        assert_eq!(config.step[0].pattern, "^ERROR");
+        assert_eq!(config.step[1].step_type, StepType::Filter);
+        assert_eq!(config.step[1].pattern, "^WARN");
+    }
+
+    #[test]
+    fn test_shorthand_syntax_mixed() {
+        let toml = r#"
+            # Traditional step syntax
+            [[step]]
+            type = "substitute"
+            pattern = "old"
+            replacement = "new"
+
+            # Shorthand filter
+            [[filter]]
+            pattern = "^#"
+            action = "drop_line"
+
+            # Shorthand substitute
+            [[substitute]]
+            pattern = "foo"
+            replacement = "bar"
+        "#;
+
+        let config: PipelineConfig = toml::from_str(toml).unwrap();
+        let config = config.normalize_shorthand_sections();
+
+        // [[step]] comes first, then shorthand sections in order: filter, substitute
+        assert_eq!(config.step.len(), 3);
+        assert_eq!(config.step[0].step_type, StepType::Substitute);
+        assert_eq!(config.step[0].pattern, "old");
+        assert_eq!(config.step[1].step_type, StepType::Filter);
+        assert_eq!(config.step[1].pattern, "^#");
+        assert_eq!(config.step[2].step_type, StepType::Substitute);
+        assert_eq!(config.step[2].pattern, "foo");
+    }
+
+    #[test]
+    fn test_shorthand_syntax_all_types() {
+        let toml = r#"
+            [[filter]]
+            pattern = "filter_pattern"
+            action = "drop_line"
+
+            [[substitute]]
+            pattern = "sub_pattern"
+            replacement = "replacement"
+
+            [[extract]]
+            pattern = "extract_pattern"
+
+            [[validate]]
+            pattern = "validate_pattern"
+
+            [[transform]]
+            pattern = "transform_pattern"
+            transform = { type = "uppercase" }
+
+            [[block]]
+            start_pattern = "^START"
+            end_pattern = "^END"
+            action = "keep_block"
+        "#;
+
+        let config: PipelineConfig = toml::from_str(toml).unwrap();
+        let config = config.normalize_shorthand_sections();
+
+        assert_eq!(config.step.len(), 6);
+        assert_eq!(config.step[0].step_type, StepType::Filter);
+        assert_eq!(config.step[1].step_type, StepType::Substitute);
+        assert_eq!(config.step[2].step_type, StepType::Extract);
+        assert_eq!(config.step[3].step_type, StepType::Validate);
+        assert_eq!(config.step[4].step_type, StepType::Transform);
+        assert_eq!(config.step[5].step_type, StepType::Block);
     }
 }
