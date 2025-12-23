@@ -2124,7 +2124,7 @@ mod tests {
 
             // When a symlink is explicitly specified, it should be processable
             // (the symlink itself passes is_file() check)
-            let result = processor.count_matches(&[link_file.clone()]).unwrap();
+            let result = processor.count_matches(std::slice::from_ref(&link_file)).unwrap();
 
             // The symlink file should be processed
             assert_eq!(result.files_processed, 1);

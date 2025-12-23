@@ -762,6 +762,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::invalid_regex)] // Intentionally testing invalid regex error handling
     fn test_pattern_error_from_regex_error() {
         // Create a regex error by attempting to compile an invalid pattern
         let regex_err = regex::Regex::new("(").unwrap_err();
@@ -837,7 +838,7 @@ mod tests {
         assert!(
             ConfigError::ReadError {
                 path: PathBuf::from("x"),
-                source: std::io::Error::new(std::io::ErrorKind::Other, "err")
+                source: std::io::Error::other("err")
             }
             .suggestion()
             .is_some()
@@ -934,7 +935,7 @@ mod tests {
         assert!(
             LibraryError::ReadError {
                 path: PathBuf::from("x"),
-                source: std::io::Error::new(std::io::ErrorKind::Other, "err")
+                source: std::io::Error::other("err")
             }
             .suggestion()
             .is_some()
@@ -1197,7 +1198,7 @@ mod tests {
         assert!(err.suggestion().is_some());
 
         // IO always has a suggestion
-        let err = RexpipeError::Io(std::io::Error::new(std::io::ErrorKind::Other, "err"));
+        let err = RexpipeError::Io(std::io::Error::other("err"));
         assert!(err.suggestion().is_some());
 
         // Processing has no suggestion

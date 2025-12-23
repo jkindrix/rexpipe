@@ -4,7 +4,9 @@ use clap_complete::{Generator, Shell, generate};
 use clap_mangen::Man;
 use log::{debug, info};
 use std::fs::File;
-use std::io::{self, BufReader, IsTerminal, Read};
+use std::io::{self, BufReader, IsTerminal};
+#[cfg(feature = "tree-sitter")]
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 // Import from the library crate
@@ -3142,8 +3144,11 @@ fn run_processing_mode(
     Ok(())
 }
 
-/// Read all input from a BufRead into a String
-#[allow(dead_code)]
+/// Read all input from a BufRead into a String.
+///
+/// Only compiled when the `tree-sitter` feature is enabled, as syntax-aware
+/// processing requires buffering the entire file content for AST analysis.
+#[cfg(feature = "tree-sitter")]
 fn read_input_to_string(mut input: Box<dyn io::BufRead>) -> Result<String> {
     let mut content = String::new();
     input.read_to_string(&mut content)?;

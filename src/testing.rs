@@ -754,10 +754,12 @@ mod tests {
 
     #[test]
     fn test_format_tap_output() {
-        let mut summary = TestSummary::default();
-        summary.total = 2;
-        summary.passed = 1;
-        summary.failed = 1;
+        let mut summary = TestSummary {
+            total: 2,
+            passed: 1,
+            failed: 1,
+            ..Default::default()
+        };
         summary
             .results
             .push(TestResult::passed("test1", Duration::from_millis(10), 0, 0));
@@ -775,9 +777,11 @@ mod tests {
 
     #[test]
     fn test_format_junit_xml() {
-        let mut summary = TestSummary::default();
-        summary.total = 1;
-        summary.passed = 1;
+        let mut summary = TestSummary {
+            total: 1,
+            passed: 1,
+            ..Default::default()
+        };
         summary.results.push(TestResult::passed(
             "test1",
             Duration::from_millis(100),

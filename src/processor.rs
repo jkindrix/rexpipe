@@ -169,6 +169,26 @@ struct PatternComplexity {
     optimization_hint: Option<String>,
 }
 
+/// Context for substitution operations with variable expansion.
+///
+/// This struct groups related parameters for `apply_substitution_with_vars`
+/// to improve code clarity and avoid functions with too many arguments.
+/// See: <https://github.com/rust-unofficial/patterns/discussions/239>
+struct SubstitutionContext<'a> {
+    /// The compiled pattern to match against
+    pattern: &'a CompiledPattern,
+    /// Input text to process
+    input: &'a str,
+    /// Replacement template (may contain ${seq}, ${count}, capture groups)
+    replacement: &'a str,
+    /// Whether to replace all matches (global) or just the first
+    is_global: bool,
+    /// Index of the current pipeline step (for sequence tracking)
+    step_index: usize,
+    /// Whether to record bidirectional mappings
+    record_mappings: bool,
+}
+
 /// Core streaming text processor for rexpipe pipelines.
 ///
 /// `StreamProcessor` executes a configured pipeline against text input,
@@ -2618,44 +2638,50 @@ impl StreamProcessor {
             }
         } else {
             // Slow path: handle variable expansion and/or bidirectional mapping
-            self.apply_substitution_with_vars(
-                pattern, input, replacement, is_global, step_index, step_result, record_mappings
-            )
+            let ctx = SubstitutionContext {
+                pattern,
+                input,
+                replacement,
+                is_global,
+                step_index,
+                record_mappings,
+            };
+            self.apply_substitution_with_vars(ctx, step_result)
         }
     }
 
     /// Applies substitution with variable expansion and optional bidirectional mapping.
-    #[allow(clippy::too_many_arguments)]
+    ///
+    /// Uses [`SubstitutionContext`] to group related parameters and improve readability.
     fn apply_substitution_with_vars(
         &mut self,
-        pattern: &CompiledPattern,
-        input: &str,
-        replacement: &str,
-        is_global: bool,
-        step_index: usize,
+        ctx: SubstitutionContext<'_>,
         step_result: &mut StepResult,
-        record_mappings: bool,
     ) -> Result<(String, bool)> {
         // Collect all matches first (we need to process them with mutable state)
-        let matches: Vec<_> = pattern.find_iter(input);
+        let matches: Vec<_> = ctx.pattern.find_iter(ctx.input);
 
         if matches.is_empty() {
-            return Ok((input.to_string(), false));
+            return Ok((ctx.input.to_string(), false));
         }
 
         // Only process first match if not global
-        let matches_to_process = if is_global { matches } else { vec![matches.into_iter().next().unwrap()] };
+        let matches_to_process = if ctx.is_global {
+            matches
+        } else {
+            vec![matches.into_iter().next().expect("matches verified non-empty above")]
+        };
 
         let mut result = String::new();
         let mut last_end = 0;
-        let pattern_str = pattern.pattern_str();
+        let pattern_str = ctx.pattern.pattern_str();
 
         for (start, end, matched_text) in matches_to_process {
             // Append text before match
-            result.push_str(&input[last_end..start]);
+            result.push_str(&ctx.input[last_end..start]);
 
             // Increment sequence counter for this step
-            let seq = self.seq_counters.entry(step_index).or_insert(0);
+            let seq = self.seq_counters.entry(ctx.step_index).or_insert(0);
             *seq += 1;
             let seq_val = *seq;
 
@@ -2664,20 +2690,20 @@ impl StreamProcessor {
             let count_val = self.global_match_count;
 
             // Expand variables in replacement
-            let expanded = replacement
+            let expanded = ctx.replacement
                 .replace("${seq}", &seq_val.to_string())
                 .replace("${count}", &count_val.to_string());
 
             // Expand capture groups using the pattern
-            let final_replacement = pattern.expand_captures(input, start, end, &expanded);
+            let final_replacement = ctx.pattern.expand_captures(ctx.input, start, end, &expanded);
 
             // Record bidirectional mapping if enabled
-            if record_mappings {
+            if ctx.record_mappings {
                 if let Some(ref mut manager) = self.bidirectional_manager {
                     manager.record_mapping(
                         &matched_text,
                         &final_replacement,
-                        step_index,
+                        ctx.step_index,
                         pattern_str,
                     );
                 }
@@ -2689,7 +2715,7 @@ impl StreamProcessor {
         }
 
         // Append remaining text
-        result.push_str(&input[last_end..]);
+        result.push_str(&ctx.input[last_end..]);
 
         Ok((result, true))
     }

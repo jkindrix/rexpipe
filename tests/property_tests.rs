@@ -198,7 +198,7 @@ proptest! {
         }
 
         let rate = result.success_rate();
-        prop_assert!(rate >= 0.0 && rate <= 1.0, "Success rate {} out of bounds", rate);
+        prop_assert!((0.0..=1.0).contains(&rate), "Success rate {} out of bounds", rate);
     }
 
     /// Property: Transformations should never exceed matches
@@ -212,8 +212,8 @@ proptest! {
         // In reality, transformations come from processing - this just tests the struct
         result.transformations_applied = transformations.min(matches * 10); // Allow multiple transforms per match
 
-        // This is a sanity check - the real invariant is tested in integration
-        prop_assert!(result.matches_found <= u64::MAX);
+        // Verify the struct was constructed correctly
+        prop_assert!(result.matches_found == matches);
     }
 }
 

@@ -578,3 +578,51 @@ See `examples/pipelines/progressive-system/` for a working implementation.
 - **Fuzz tests**: Edge case discovery with cargo-fuzz
 - **Benchmarks**: Performance regression detection with criterion
 - **CRLF tests**: Windows line ending compatibility
+
+## Future Modularization Opportunities
+
+The current codebase is functional and well-tested, but two files are larger than typical
+Rust conventions recommend (`main.rs` at ~4,400 lines, `processor.rs` at ~4,500 lines).
+These could be modularized in future refactoring for improved maintainability.
+
+### Recommended main.rs Extraction
+
+**Module 1: `src/cli.rs`** (~800 lines)
+- `build_cli()` - CLI argument definitions
+- `print_completions()`, `print_man_page()` - Shell integration
+- `EXAMPLES_HELP` constant
+
+**Module 2: `src/modes.rs`** (~2,500 lines)
+- All `run_*()` mode handlers (discovery, learning, watch, streaming, etc.)
+- Mode-specific configuration builders
+
+**Module 3: `src/config_loader.rs`** (~700 lines)
+- `load_pipeline_config()` - Configuration loading and merging
+- `validate_configuration()` - Configuration validation
+- Library pattern resolution utilities
+
+**Resulting main.rs**: ~1,000 lines (clean dispatcher)
+
+### Recommended processor.rs Extraction
+
+**Module: `src/processor/compiled.rs`** (~600 lines)
+- `CompiledPattern` and `CompiledStep` types
+- Pattern compilation logic
+
+**Module: `src/processor/transforms.rs`** (~500 lines)
+- `transform_match()` and action handlers
+- Built-in transformation implementations
+
+**Resulting processor.rs**: ~3,300 lines (core streaming logic)
+
+### Why Not Refactor Now
+
+The current structure:
+- Passes all tests and clippy lints
+- Has clear internal organization with documented sections
+- Works reliably in production use cases
+
+Major refactoring should be undertaken when:
+- New features require significant additions to these files
+- Team size grows and merge conflicts become common
+- IDE tooling struggles with file size (not currently an issue)
