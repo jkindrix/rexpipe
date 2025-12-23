@@ -22,7 +22,7 @@
 //! action = "warn"  # or "fail", "fix"
 //! ```
 
-use glob::Pattern;
+use globset::{Glob, GlobMatcher};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -58,6 +58,14 @@ pub enum CrossFileError {
 }
 
 pub type Result<T> = std::result::Result<T, CrossFileError>;
+
+/// Compile a glob pattern into a matcher.
+/// This uses globset which properly handles `**` for recursive directory matching.
+fn compile_glob(pattern: &str) -> Result<GlobMatcher> {
+    Glob::new(pattern)
+        .map(|g| g.compile_matcher())
+        .map_err(|e| CrossFileError::InvalidPattern(e.to_string()))
+}
 
 /// Action to take when a cross-file rule is violated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -128,6 +136,14 @@ pub struct CrossFileRule {
     /// Supports: {dir}, {name}, {ext}, {stem}
     #[serde(default)]
     pub related_path_template: Option<String>,
+
+    /// Whether this rule is enabled (defaults to true)
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
+}
+
+fn default_enabled() -> bool {
+    true
 }
 
 impl CrossFileRule {
@@ -147,7 +163,14 @@ impl CrossFileRule {
             atomic: false,
             description: None,
             related_path_template: None,
+            enabled: true,
         }
+    }
+
+    /// Enable or disable this rule.
+    pub fn enabled(mut self, enabled: bool) -> Self {
+        self.enabled = enabled;
+        self
     }
 
     /// Set the action for violations.
@@ -273,11 +296,15 @@ impl CrossFileManager {
 
         for (file_path, content) in &self.file_contents {
             for (rule_index, rule) in self.rules.iter().enumerate() {
-                // Check if file matches trigger pattern
-                let trigger_glob = Pattern::new(&rule.trigger_files)
-                    .map_err(|e| CrossFileError::InvalidPattern(e.to_string()))?;
+                // Skip disabled rules
+                if !rule.enabled {
+                    continue;
+                }
 
-                if !trigger_glob.matches_path(file_path) {
+                // Check if file matches trigger pattern
+                let trigger_glob = compile_glob(&rule.trigger_files)?;
+
+                if !trigger_glob.is_match(file_path) {
                     continue;
                 }
 
@@ -326,8 +353,7 @@ impl CrossFileManager {
         trigger_match: &TriggerMatch,
         rule: &CrossFileRule,
     ) -> Result<CrossFileCheckResult> {
-        let related_glob = Pattern::new(&rule.related_files)
-            .map_err(|e| CrossFileError::InvalidPattern(e.to_string()))?;
+        let related_glob = compile_glob(&rule.related_files)?;
 
         let ensure_pattern = rule.ensure_pattern();
         let ensure_regex = regex::Regex::new(ensure_pattern)?;
@@ -342,7 +368,7 @@ impl CrossFileManager {
             }
 
             // Check if file matches related pattern
-            let matches_glob = related_glob.matches_path(file_path);
+            let matches_glob = related_glob.is_match(file_path);
             let matches_template = rule
                 .derive_related_path(trigger_file)
                 .map(|p| &p == file_path)
@@ -405,14 +431,14 @@ impl CrossFileManager {
                     group.rules.push(rule.name.clone());
 
                     // Find related files for this rule
-                    let related_glob = match Pattern::new(&rule.related_files) {
+                    let related_glob = match compile_glob(&rule.related_files) {
                         Ok(p) => p,
                         Err(_) => continue,
                     };
 
                     for file_path in self.file_contents.keys() {
                         if file_path != trigger_file
-                            && related_glob.matches_path(file_path)
+                            && related_glob.is_match(file_path)
                             && !group.related.contains(file_path)
                         {
                             group.related.push(file_path.clone());
@@ -586,13 +612,26 @@ pub fn format_check_report(results: &[CrossFileCheckResult]) -> String {
     report.push_str("║              CROSS-FILE CONSISTENCY CHECK                        ║\n");
     report.push_str("╚══════════════════════════════════════════════════════════════════╝\n\n");
 
+    // Calculate statistics
+    let total_related_files: usize = results.iter().map(|r| r.related_files.len()).sum();
+    let total_violations: usize = results.iter().map(|r| r.violations.len()).sum();
+    let unique_rules: HashSet<&str> = results.iter().map(|r| r.rule_name.as_str()).collect();
+
     report.push_str(&format!(
-        "Total checks: {} ({} passed, {} failed)\n\n",
+        "Summary: {} checks across {} unique rules\n",
         results.len(),
-        passed,
-        failed
+        unique_rules.len()
+    ));
+    report.push_str(&format!(
+        "Results: {} passed, {} failed ({} violations)\n",
+        passed, failed, total_violations
+    ));
+    report.push_str(&format!(
+        "Coverage: {} related files checked\n\n",
+        total_related_files
     ));
 
+    // Group results by rule for better organization
     for result in results {
         let status = if result.passed { "✓" } else { "✗" };
         report.push_str(&format!(
@@ -600,6 +639,10 @@ pub fn format_check_report(results: &[CrossFileCheckResult]) -> String {
             status,
             result.rule_name,
             result.trigger_file.display()
+        ));
+        report.push_str(&format!(
+            "  Related files checked: {}\n",
+            result.related_files.len()
         ));
 
         if !result.passed {
@@ -646,6 +689,7 @@ mod tests {
             atomic: false,
             description: None,
             related_path_template: Some("{dir}/{stem}.test.{ext}".to_string()),
+            enabled: true,
         };
 
         let trigger = Path::new("src/components/Button.ts");
