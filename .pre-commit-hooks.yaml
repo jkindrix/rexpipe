@@ -1,0 +1,54 @@
+# Pre-commit hooks provided by rexpipe
+# Add this repo to your .pre-commit-config.yaml:
+#
+#   - repo: https://github.com/jkindrix/rexpipe
+#     rev: v2.0.0
+#     hooks:
+#       - id: rexpipe-secrets
+#       - id: rexpipe-pii
+#
+# These hooks use cargo to install rexpipe (cached between runs).
+
+- id: rexpipe-secrets
+  name: Check for secrets
+  description: Detect hardcoded secrets, API keys, and credentials
+  entry: rexpipe
+  args:
+    - '--config'
+    - 'examples/pipelines/secrets-redact.toml'
+    - '--dry-run'
+    - '--quiet'
+  language: rust
+  types: [text]
+  pass_filenames: true
+
+- id: rexpipe-pii
+  name: Check for PII
+  description: Detect personally identifiable information
+  entry: rexpipe
+  args:
+    - '--pattern'
+    - '\b\d{3}-\d{2}-\d{4}\b|\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
+    - '--dry-run'
+    - '--quiet'
+  language: rust
+  types: [text]
+  pass_filenames: true
+
+- id: rexpipe-custom
+  name: Run custom rexpipe pipeline
+  description: Run a custom rexpipe pipeline (requires args configuration)
+  entry: rexpipe
+  language: rust
+  types: [text]
+  pass_filenames: true
+
+- id: rexpipe-validate-pipeline
+  name: Validate rexpipe pipelines
+  description: Validate rexpipe TOML pipeline configurations
+  entry: rexpipe
+  args:
+    - '--validate'
+  language: rust
+  files: '\.toml$'
+  pass_filenames: true
