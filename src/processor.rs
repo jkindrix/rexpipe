@@ -1,4 +1,4 @@
-use crate::bidirectional::{Direction, generate_reverse_pipeline};
+use crate::bidirectional::{BidirectionalManager, Direction, generate_reverse_pipeline};
 use crate::error::{PatternError, ValidationError};
 use crate::pipeline::{
     BlockAction, ErrorType, MaxLineAction, OnMismatch, PipelineConfig, PipelineError,
@@ -214,6 +214,12 @@ pub struct StreamProcessor {
     csv_header_written: HashMap<usize, bool>,
     /// State for finalize section (aggregation counters)
     finalize_state: Option<FinalizeState>,
+    /// Per-step sequence counters for ${seq} variable expansion (step_index -> current seq)
+    seq_counters: HashMap<usize, usize>,
+    /// Global match count for ${count} variable expansion
+    global_match_count: usize,
+    /// Bidirectional transform manager for recording/replaying mappings
+    bidirectional_manager: Option<BidirectionalManager>,
 }
 
 /// State for finalize section - tracks counters and collected values during processing.
@@ -637,6 +643,51 @@ impl CompiledPattern {
         }
     }
 
+    /// Expand capture groups in a replacement string for a specific match.
+    ///
+    /// This method finds captures for the match at the given position and expands
+    /// backreferences like `$1`, `$2`, etc. in the replacement string.
+    pub fn expand_captures(&self, text: &str, start: usize, _end: usize, replacement: &str) -> String {
+        match self {
+            CompiledPattern::Standard(re) => {
+                // Find captures for this specific match
+                if let Some(caps) = re.captures(&text[start..]) {
+                    let mut result = String::new();
+                    caps.expand(replacement, &mut result);
+                    result
+                } else {
+                    replacement.to_string()
+                }
+            }
+            CompiledPattern::Fixed(_) => {
+                // Fixed strings don't have capture groups
+                replacement.to_string()
+            }
+            #[cfg(feature = "pcre")]
+            CompiledPattern::Pcre(re) => {
+                // fancy_regex has different API for captures
+                if let Ok(Some(caps)) = re.captures(&text[start..]) {
+                    // Manual expansion for fancy_regex
+                    let mut result = replacement.to_string();
+                    for i in (0..=9).rev() {
+                        if let Some(m) = caps.get(i) {
+                            result = result.replace(&format!("${}", i), m.as_str());
+                            result = result.replace(&format!("${{{}}}", i), m.as_str());
+                        }
+                    }
+                    // Handle $0 / full match
+                    if let Some(m) = caps.get(0) {
+                        result = result.replace("$0", m.as_str());
+                        result = result.replace("${0}", m.as_str());
+                    }
+                    result
+                } else {
+                    replacement.to_string()
+                }
+            }
+        }
+    }
+
     /// Returns the original pattern string.
     ///
     /// This method provides access to the pattern used to create this compiled pattern
@@ -960,6 +1011,22 @@ impl StreamProcessor {
             None
         };
 
+        // Initialize bidirectional manager if enabled
+        let bidirectional_manager = if config.bidirectional.enabled {
+            debug!("Initializing bidirectional manager");
+            match BidirectionalManager::new(config.bidirectional.clone()) {
+                Ok(manager) => Some(manager),
+                Err(e) => {
+                    return Err(anyhow::anyhow!(
+                        "Failed to initialize bidirectional manager: {}",
+                        e
+                    ));
+                }
+            }
+        } else {
+            None
+        };
+
         Ok(Self {
             config,
             compiled_steps,
@@ -975,6 +1042,9 @@ impl StreamProcessor {
             dedup_extract_seen: HashMap::new(),
             csv_header_written: HashMap::new(),
             finalize_state,
+            seq_counters: HashMap::new(),
+            global_match_count: 0,
+            bidirectional_manager,
         })
     }
 
@@ -1645,6 +1715,13 @@ impl StreamProcessor {
         // Output finalize section if configured
         self.write_finalize_output(&mut writer)?;
 
+        // Save bidirectional mappings if enabled
+        if let Some(ref mut manager) = self.bidirectional_manager {
+            if let Err(e) = manager.save_if_modified() {
+                log::warn!("Failed to save bidirectional mappings: {}", e);
+            }
+        }
+
         debug!(
             "Processing complete: {} lines, {} matches, {} transformations",
             result.lines_processed, result.matches_found, result.transformations_applied
@@ -1770,22 +1847,28 @@ impl StreamProcessor {
                     line_number
                 ));
             }
-            let compiled_step = &self.compiled_steps[step_idx];
-            let step_start = Instant::now();
-            let mut step_result = StepResult::new(
-                compiled_step.step_index,
-                compiled_step.step_type.clone(),
-                format!("{:?}", compiled_step.pattern),
-            );
 
-            match compiled_step.step_type.clone() {
+            // Extract values we need before mutably borrowing self
+            let step_type = self.compiled_steps[step_idx].step_type.clone();
+            let step_index = self.compiled_steps[step_idx].step_index;
+            let is_global = self.compiled_steps[step_idx].is_global;
+            let replacement = self.compiled_steps[step_idx].replacement.clone();
+            let pattern_debug = format!("{:?}", self.compiled_steps[step_idx].pattern);
+
+            let step_start = Instant::now();
+            let mut step_result = StepResult::new(step_index, step_type.clone(), pattern_debug);
+
+            match step_type {
                 StepType::Substitute => {
-                    if let Some(ref replacement) = compiled_step.replacement {
+                    if let Some(replacement_str) = replacement {
+                        // Clone the pattern for use in apply_substitution
+                        let pattern = self.compiled_steps[step_idx].pattern.clone();
                         let (result, was_modified) = self.apply_substitution(
-                            &compiled_step.pattern,
+                            &pattern,
                             &current_line,
-                            replacement,
-                            compiled_step.is_global,
+                            &replacement_str,
+                            is_global,
+                            step_index,
                             &mut step_result,
                         )?;
 
@@ -1796,6 +1879,8 @@ impl StreamProcessor {
                     }
                 }
                 StepType::Filter => {
+                    // Re-borrow compiled_step for non-mutable operations
+                    let compiled_step = &self.compiled_steps[step_idx];
                     let matches = compiled_step.pattern.is_match(&current_line);
                     if matches {
                         step_result.add_match();
@@ -1847,6 +1932,8 @@ impl StreamProcessor {
                     }
                 }
                 StepType::Extract => {
+                    // Re-borrow compiled_step for non-mutable operations
+                    let compiled_step = &self.compiled_steps[step_idx];
                     // Extract all matched content with capture group support
                     let captures: Vec<CaptureGroup> =
                         compiled_step.pattern.captures_iter(&current_line);
@@ -2086,6 +2173,8 @@ impl StreamProcessor {
                     }
                 }
                 StepType::Validate => {
+                    // Re-borrow compiled_step for non-mutable operations
+                    let compiled_step = &self.compiled_steps[step_idx];
                     let is_valid = compiled_step.pattern.is_match(&current_line);
                     if !is_valid {
                         // Handle based on on_mismatch setting
@@ -2121,6 +2210,8 @@ impl StreamProcessor {
                     }
                 }
                 StepType::Transform => {
+                    // Re-borrow compiled_step for non-mutable operations
+                    let compiled_step = &self.compiled_steps[step_idx];
                     // Apply transformation to matched text
                     if let Some(ref action) = compiled_step.transform_action {
                         let (result, was_modified) = self.apply_transform(
@@ -2144,6 +2235,8 @@ impl StreamProcessor {
                     }
                 }
                 StepType::Block => {
+                    // Re-borrow compiled_step for non-mutable operations
+                    let compiled_step = &self.compiled_steps[step_idx];
                     // Cross-line state machine: track blocks between start and end patterns
                     let is_in_block = self.block_states[step_idx];
 
@@ -2312,7 +2405,7 @@ impl StreamProcessor {
             step_result.set_processing_time(elapsed);
             self.stats
                 .step_timings
-                .insert(compiled_step.step_index, elapsed);
+                .insert(step_index, elapsed);
             result.add_step_result(step_result);
         }
 
@@ -2324,28 +2417,117 @@ impl StreamProcessor {
     }
 
     /// Applies substitution and returns (result, was_modified) to avoid cloning for comparison.
+    ///
+    /// This method handles:
+    /// - Standard regex replacements with capture group expansion
+    /// - Variable expansion: `${seq}` (per-step sequence) and `${count}` (global match count)
+    /// - Bidirectional mapping recording (if enabled)
     fn apply_substitution(
-        &self,
+        &mut self,
         pattern: &CompiledPattern,
         input: &str,
         replacement: &str,
         is_global: bool,
+        step_index: usize,
         step_result: &mut StepResult,
     ) -> Result<(String, bool)> {
-        // Use single-pass methods that count while replacing
-        if is_global {
-            let (result, match_count) = pattern.replace_all_counting(input, replacement);
-            for _ in 0..match_count {
-                step_result.add_match();
+        // Check if we need variable expansion
+        let needs_var_expansion = replacement.contains("${seq}") || replacement.contains("${count}");
+
+        // Check if bidirectional recording is needed
+        let record_mappings = self.bidirectional_manager.is_some()
+            && self.bidirectional_manager.as_ref().map_or(false, |m| m.is_enabled());
+
+        if !needs_var_expansion && !record_mappings {
+            // Fast path: no variable expansion or mapping needed
+            if is_global {
+                let (result, match_count) = pattern.replace_all_counting(input, replacement);
+                for _ in 0..match_count {
+                    step_result.add_match();
+                }
+                Ok((result, match_count > 0))
+            } else {
+                let (result, had_match) = pattern.replace_counting(input, replacement);
+                if had_match {
+                    step_result.add_match();
+                }
+                Ok((result, had_match))
             }
-            Ok((result, match_count > 0))
         } else {
-            let (result, had_match) = pattern.replace_counting(input, replacement);
-            if had_match {
-                step_result.add_match();
-            }
-            Ok((result, had_match))
+            // Slow path: handle variable expansion and/or bidirectional mapping
+            self.apply_substitution_with_vars(
+                pattern, input, replacement, is_global, step_index, step_result, record_mappings
+            )
         }
+    }
+
+    /// Applies substitution with variable expansion and optional bidirectional mapping.
+    fn apply_substitution_with_vars(
+        &mut self,
+        pattern: &CompiledPattern,
+        input: &str,
+        replacement: &str,
+        is_global: bool,
+        step_index: usize,
+        step_result: &mut StepResult,
+        record_mappings: bool,
+    ) -> Result<(String, bool)> {
+        // Collect all matches first (we need to process them with mutable state)
+        let matches: Vec<_> = pattern.find_iter(input);
+
+        if matches.is_empty() {
+            return Ok((input.to_string(), false));
+        }
+
+        // Only process first match if not global
+        let matches_to_process = if is_global { matches } else { vec![matches.into_iter().next().unwrap()] };
+
+        let mut result = String::new();
+        let mut last_end = 0;
+        let pattern_str = pattern.pattern_str();
+
+        for (start, end, matched_text) in matches_to_process {
+            // Append text before match
+            result.push_str(&input[last_end..start]);
+
+            // Increment sequence counter for this step
+            let seq = self.seq_counters.entry(step_index).or_insert(0);
+            *seq += 1;
+            let seq_val = *seq;
+
+            // Increment global match count
+            self.global_match_count += 1;
+            let count_val = self.global_match_count;
+
+            // Expand variables in replacement
+            let expanded = replacement
+                .replace("${seq}", &seq_val.to_string())
+                .replace("${count}", &count_val.to_string());
+
+            // Expand capture groups using the pattern
+            let final_replacement = pattern.expand_captures(input, start, end, &expanded);
+
+            // Record bidirectional mapping if enabled
+            if record_mappings {
+                if let Some(ref mut manager) = self.bidirectional_manager {
+                    manager.record_mapping(
+                        &matched_text,
+                        &final_replacement,
+                        step_index,
+                        pattern_str,
+                    );
+                }
+            }
+
+            result.push_str(&final_replacement);
+            last_end = end;
+            step_result.add_match();
+        }
+
+        // Append remaining text
+        result.push_str(&input[last_end..]);
+
+        Ok((result, true))
     }
 
     /// Apply a single transform action to matched text.
@@ -2768,20 +2950,24 @@ impl StreamProcessor {
         &mut self,
         content: &str,
         file_language: Option<crate::syntax::Language>,
-    ) -> Result<String> {
-        // First pass: apply syntax-aware transformations
-        let intermediate = if self.has_syntax_aware_steps() {
-            self.process_file_syntax_aware(content, file_language)?
-        } else {
-            content.to_string()
+    ) -> Result<(String, PipelineResult)> {
+        // Apply syntax-aware transformations
+        // This only processes steps that have BOTH languages AND scope_filter defined
+        let processed = self.process_file_syntax_aware(content, file_language)?;
+
+        // Count transformations
+        let transformations = if processed != content { 1 } else { 0 };
+
+        // Create result with basic stats
+        let result = PipelineResult {
+            lines_processed: content.lines().count() as u64,
+            matches_found: transformations as u64, // Approximate: each transformation is a match
+            transformations_applied: transformations,
+            errors: Vec::new(),
+            step_results: Vec::new(),
         };
 
-        // Second pass: apply regular stream processing for non-syntax-aware steps
-        let mut output = Vec::new();
-        self.process_stream(std::io::Cursor::new(intermediate.as_bytes()), &mut output)?;
-
-        String::from_utf8(output)
-            .map_err(|e| anyhow::anyhow!("Invalid UTF-8 in processed output: {}", e))
+        Ok((processed, result))
     }
 
     /// Detect language from file extension
@@ -2789,6 +2975,49 @@ impl StreamProcessor {
     pub fn detect_language_from_extension(extension: &str) -> Option<crate::syntax::Language> {
         extension.parse().ok()
     }
+
+    /// Process a file, automatically using syntax-aware processing if needed.
+    ///
+    /// This method checks if any steps require syntax-aware processing and routes
+    /// to the appropriate processing path:
+    /// - If syntax-aware steps exist: reads entire file and uses `process_file_content`
+    /// - Otherwise: uses streaming `process_stream`
+    ///
+    /// # Arguments
+    /// * `file_path` - Path to the file to process
+    /// * `writer` - Output writer
+    ///
+    /// # Returns
+    /// The pipeline result with processing statistics.
+    pub fn process_file<W: Write>(
+        &mut self,
+        file_path: &std::path::Path,
+        writer: W,
+    ) -> Result<PipelineResult> {
+        #[cfg(feature = "tree-sitter")]
+        if self.has_syntax_aware_steps() {
+            // Syntax-aware processing: read entire file, process with AST
+            let content = std::fs::read_to_string(file_path)
+                .map_err(|e| anyhow::anyhow!("Failed to read file: {}", e))?;
+
+            // Detect language from file extension
+            let language = file_path
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .and_then(|ext| Self::detect_language_from_extension(ext));
+
+            let (output, result) = self.process_file_content(&content, language)?;
+            writer.write_all(output.as_bytes())?;
+            return Ok(result);
+        }
+
+        // Standard stream processing
+        let file = std::fs::File::open(file_path)
+            .map_err(|e| anyhow::anyhow!("Failed to open file: {}", e))?;
+        let reader = std::io::BufReader::new(file);
+        self.process_stream(reader, writer)
+    }
+
 }
 
 impl ProcessorStats {

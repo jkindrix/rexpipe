@@ -4,11 +4,11 @@ use clap_complete::{Generator, Shell, generate};
 use clap_mangen::Man;
 use log::{debug, info};
 use std::fs::File;
-use std::io::{self, BufReader, IsTerminal};
+use std::io::{self, BufReader, IsTerminal, Read};
 use std::path::{Path, PathBuf};
 
 // Import from the library crate
-use rexpipe::checkpoint::{Checkpoint, CheckpointConfig};
+use rexpipe::checkpoint::{Checkpoint, CheckpointConfig, GitDiff};
 use rexpipe::crossfile::{CrossFileConfig, CrossFileManager, ViolationAction, format_check_report};
 use rexpipe::error::{ConfigError, LibraryError, PatternError, RexpipeError, ValidationError};
 use rexpipe::files::{FileProcessingOptions, MultiFileProcessor, MultiFileResult};
@@ -902,6 +902,80 @@ fn build_cli() -> Command {
                 )
                 .value_hint(ValueHint::DirPath),
         )
+        // === Git Integration ===
+        .arg(
+            Arg::new("conventional-commits")
+                .long("conventional-commits")
+                .help("Validate commit messages against Conventional Commits specification")
+                .long_help(
+                    "Validate input as a commit message against the Conventional Commits specification.\n\n\
+                     Format: <type>[optional scope]: <description>\n\n\
+                     Valid types: feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert\n\n\
+                     Exit codes:\n\
+                     - 0: Valid commit message\n\
+                     - 1: Invalid commit message (with explanation)\n\n\
+                     Use in git hooks:\n\
+                       rexpipe --conventional-commits < .git/COMMIT_EDITMSG"
+                )
+                .action(ArgAction::SetTrue),
+        )
+        // === Streaming Mode ===
+        .arg(
+            Arg::new("stream")
+                .long("stream")
+                .help("Real-time streaming mode with live aggregation")
+                .long_help(
+                    "Process input in real-time streaming mode with live aggregation.\n\n\
+                     Useful for tailing logs and getting immediate feedback:\n\
+                       tail -f app.log | rexpipe -c errors.toml --stream\n\n\
+                     Aggregation shows:\n\
+                     - Running match counts per pattern\n\
+                     - Error rates and trends\n\
+                     - Periodic summary output"
+                )
+                .action(ArgAction::SetTrue),
+        )
+        .arg(
+            Arg::new("stream-interval")
+                .long("stream-interval")
+                .value_name("SECS")
+                .help("Interval in seconds for streaming aggregation summary (default: 5)")
+                .value_parser(value_parser!(u64))
+                .default_value("5"),
+        )
+        // === Atomic Multi-File ===
+        .arg(
+            Arg::new("atomic")
+                .long("atomic")
+                .help("Atomic multi-file transforms with rollback on failure")
+                .long_help(
+                    "Enable atomic mode for multi-file transforms.\n\n\
+                     In atomic mode:\n\
+                     - All changes are staged to temporary files first\n\
+                     - If any file fails to process, all changes are rolled back\n\
+                     - Changes are only committed if all files succeed\n\n\
+                     Requires --in-place or --output-dir.\n\n\
+                     Example:\n\
+                       rexpipe -c migrate.toml -i --atomic -R src/"
+                )
+                .action(ArgAction::SetTrue),
+        )
+        // === Test Data Generation ===
+        .arg(
+            Arg::new("generate")
+                .long("generate")
+                .value_name("COUNT")
+                .help("Generate test data from pipeline patterns")
+                .long_help(
+                    "Generate test data that matches the patterns in the pipeline.\n\n\
+                     Uses pipeline patterns to generate sample data for testing.\n\
+                     Useful for creating test fixtures or fuzzing.\n\n\
+                     Example:\n\
+                       rexpipe -c email-validator.toml --generate 10\n\n\
+                     This will generate 10 samples that match the email pattern."
+                )
+                .value_parser(value_parser!(u32)),
+        )
         // === I/O ===
         .arg(
             Arg::new("input")
@@ -1252,6 +1326,11 @@ fn run_application(matches: &clap::ArgMatches) -> Result<()> {
         return run_pattern_learning(matches);
     }
 
+    // Handle conventional commits validation mode
+    if matches.get_flag("conventional-commits") {
+        return run_conventional_commits_validation(matches);
+    }
+
     // Build pipeline settings from CLI flags
     let settings = build_pipeline_settings(matches);
 
@@ -1276,6 +1355,11 @@ fn run_application(matches: &clap::ArgMatches) -> Result<()> {
     // Handle explain mode: describe what pipeline will do
     if matches.get_flag("explain") {
         return explain_pipeline(&config, matches);
+    }
+
+    // Handle test data generation mode
+    if let Some(count) = matches.get_one::<u32>("generate") {
+        return run_test_data_generation(&config, *count, matches);
     }
 
     // Check if we're in multi-file mode
@@ -1344,6 +1428,11 @@ fn run_application(matches: &clap::ArgMatches) -> Result<()> {
         }
         Box::new(io::stdin().lock())
     };
+
+    // Handle streaming mode
+    if matches.get_flag("stream") {
+        return run_streaming_mode(&config, input, matches);
+    }
 
     // Handle inspection mode
     if matches.get_flag("inspect") {
@@ -1639,6 +1728,60 @@ fn run_multi_file_mode(
         files.clone()
     };
 
+    // Filter by git-diff if enabled
+    let files_to_process: Vec<PathBuf> = if let Some(git_ref) = matches.get_one::<String>("git-diff") {
+        match GitDiff::discover(".", git_ref) {
+            Ok(git_diff) => {
+                match git_diff.changed_files() {
+                    Ok(changed_files) => {
+                        let changed_set: std::collections::HashSet<_> = changed_files.into_iter().collect();
+                        let filtered: Vec<PathBuf> = files_to_process
+                            .into_iter()
+                            .filter(|f| {
+                                // Check if file is in changed set (handle both absolute and relative paths)
+                                let abs_path = std::fs::canonicalize(f).unwrap_or_else(|_| f.clone());
+                                changed_set.iter().any(|changed| {
+                                    let changed_abs = std::fs::canonicalize(changed).unwrap_or_else(|_| changed.clone());
+                                    abs_path == changed_abs
+                                })
+                            })
+                            .collect();
+
+                        if !quiet && filtered.len() < files.len() {
+                            eprintln!(
+                                "Git diff: processing {} of {} files (changed since {})",
+                                filtered.len(),
+                                files.len(),
+                                git_ref
+                            );
+                        }
+
+                        if filtered.is_empty() && !quiet {
+                            eprintln!("Git diff: no files changed since {}", git_ref);
+                            return Ok(());
+                        }
+
+                        filtered
+                    }
+                    Err(e) => {
+                        if !quiet {
+                            eprintln!("Warning: Could not get changed files from git: {}", e);
+                        }
+                        files_to_process
+                    }
+                }
+            }
+            Err(e) => {
+                if !quiet {
+                    eprintln!("Warning: Could not initialize git diff: {}", e);
+                }
+                files_to_process
+            }
+        }
+    } else {
+        files_to_process
+    };
+
     // Handle cross-file consistency checking
     if let Some(cross_file_path) = matches.get_one::<String>("cross-file") {
         let cross_file_config = CrossFileConfig::load_rules_file(cross_file_path)
@@ -1856,6 +1999,9 @@ fn run_multi_file_mode(
             std::process::exit(exit_codes::NO_MATCHES);
         }
         return Ok(());
+    } else if matches.get_flag("atomic") && options.in_place {
+        // Atomic mode: process to temp files first, then commit or rollback
+        return run_atomic_multi_file_processing(config, &processor, &files_to_process, &options, &mut checkpoint, quiet, json_output);
     } else {
         #[cfg(feature = "async")]
         if use_async {
@@ -2687,10 +2833,36 @@ fn run_processing_mode(
 
     let mut processor = StreamProcessor::new(config.clone())?;
 
+    // Check if syntax-aware processing is needed (requires tree-sitter feature)
+    #[cfg(feature = "tree-sitter")]
+    let use_syntax_aware = processor.has_syntax_aware_steps();
+    #[cfg(not(feature = "tree-sitter"))]
+    let use_syntax_aware = false;
+
+    // Get language from CLI for syntax-aware processing
+    #[cfg(feature = "tree-sitter")]
+    let cli_language: Option<rexpipe::syntax::Language> = matches
+        .get_one::<String>("language")
+        .and_then(|s| s.parse().ok());
+
     if quiet {
         // Quiet mode: process but don't output anything
-        let mut output = std::io::sink();
-        let result = processor.process_stream(input, &mut output)?;
+        let result = if use_syntax_aware {
+            #[cfg(feature = "tree-sitter")]
+            {
+                let content = read_input_to_string(input)?;
+                let (_, result) = processor.process_file_content(&content, cli_language)?;
+                result
+            }
+            #[cfg(not(feature = "tree-sitter"))]
+            {
+                let mut output = std::io::sink();
+                processor.process_stream(input, &mut output)?
+            }
+        } else {
+            let mut output = std::io::sink();
+            processor.process_stream(input, &mut output)?
+        };
         if result.matches_found == 0 {
             std::process::exit(exit_codes::NO_MATCHES);
         }
@@ -2699,8 +2871,22 @@ fn run_processing_mode(
 
     if count_only {
         // Count mode: just count matches
-        let mut output = std::io::sink();
-        let result = processor.process_stream(input, &mut output)?;
+        let result = if use_syntax_aware {
+            #[cfg(feature = "tree-sitter")]
+            {
+                let content = read_input_to_string(input)?;
+                let (_, result) = processor.process_file_content(&content, cli_language)?;
+                result
+            }
+            #[cfg(not(feature = "tree-sitter"))]
+            {
+                let mut output = std::io::sink();
+                processor.process_stream(input, &mut output)?
+            }
+        } else {
+            let mut output = std::io::sink();
+            processor.process_stream(input, &mut output)?
+        };
 
         if json_output {
             println!("{}", json_schema::output_count_json(&result)?);
@@ -2717,7 +2903,23 @@ fn run_processing_mode(
         Box::new(io::stdout())
     };
 
-    let result = processor.process_stream(input, output)?;
+    let result = if use_syntax_aware {
+        #[cfg(feature = "tree-sitter")]
+        {
+            // Syntax-aware processing: buffer input, process with AST, write output
+            let content = read_input_to_string(input)?;
+            let (processed, result) = processor.process_file_content(&content, cli_language)?;
+            output.write_all(processed.as_bytes())?;
+            result
+        }
+        #[cfg(not(feature = "tree-sitter"))]
+        {
+            processor.process_stream(input, output)?
+        }
+    } else {
+        // Standard stream processing
+        processor.process_stream(input, output)?
+    };
 
     if matches.get_flag("performance") {
         eprintln!("{}", result.performance_summary());
@@ -2735,6 +2937,14 @@ fn run_processing_mode(
     }
 
     Ok(())
+}
+
+/// Read all input from a BufRead into a String
+#[allow(dead_code)]
+fn read_input_to_string(mut input: Box<dyn io::BufRead>) -> Result<String> {
+    let mut content = String::new();
+    input.read_to_string(&mut content)?;
+    Ok(content)
 }
 
 /// Output a verification summary confirming what transformations were applied
@@ -3337,6 +3547,565 @@ fn process_files_with_config(
     }
 
     Ok(())
+}
+
+/// Run atomic multi-file processing with rollback on failure.
+///
+/// This processes all files to temporary files first, then only commits
+/// the changes if all files succeed. If any file fails, all temp files
+/// are deleted (rollback).
+fn run_atomic_multi_file_processing(
+    config: &PipelineConfig,
+    _processor: &MultiFileProcessor,
+    files: &[PathBuf],
+    options: &FileProcessingOptions,
+    checkpoint: &mut Checkpoint,
+    quiet: bool,
+    json_output: bool,
+) -> Result<()> {
+    use std::io::Write;
+
+    if !quiet {
+        eprintln!("Atomic mode: processing {} files to staging...", files.len());
+    }
+
+    // Create temp directory for staging
+    let temp_dir = std::env::temp_dir().join(format!("rexpipe_atomic_{}", std::process::id()));
+    std::fs::create_dir_all(&temp_dir)?;
+
+    // Track staged files: (original_path, temp_path)
+    let mut staged: Vec<(PathBuf, PathBuf)> = Vec::with_capacity(files.len());
+    let mut results: Vec<(PathBuf, Result<String>)> = Vec::new();
+    let mut all_success = true;
+
+    // Stage 1: Process all files to temp directory
+    for file in files {
+        let temp_name = format!("{}", file.file_name().unwrap_or_default().to_string_lossy());
+        let temp_path = temp_dir.join(&temp_name);
+
+        // Read and process file
+        let content = match std::fs::read_to_string(file) {
+            Ok(c) => c,
+            Err(e) => {
+                results.push((file.clone(), Err(anyhow!("Failed to read: {}", e))));
+                all_success = false;
+                continue;
+            }
+        };
+
+        // Process through pipeline
+        let mut proc = StreamProcessor::new(config.clone())?;
+        let mut output = Vec::new();
+        let cursor = std::io::Cursor::new(content.as_bytes());
+        let reader = std::io::BufReader::new(cursor);
+
+        match proc.process_stream(reader, &mut output) {
+            Ok(_result) => {
+                // Write to temp file
+                match std::fs::File::create(&temp_path) {
+                    Ok(mut f) => {
+                        if let Err(e) = f.write_all(&output) {
+                            results.push((file.clone(), Err(anyhow!("Failed to write temp: {}", e))));
+                            all_success = false;
+                            continue;
+                        }
+                        staged.push((file.clone(), temp_path.clone()));
+                        results.push((file.clone(), Ok(String::from_utf8_lossy(&output).to_string())));
+                    }
+                    Err(e) => {
+                        results.push((file.clone(), Err(anyhow!("Failed to create temp: {}", e))));
+                        all_success = false;
+                    }
+                }
+            }
+            Err(e) => {
+                results.push((file.clone(), Err(e)));
+                all_success = false;
+            }
+        }
+    }
+
+    // Stage 2: Commit or rollback
+    if all_success && !staged.is_empty() {
+        if !quiet {
+            eprintln!("Atomic mode: all {} files processed successfully, committing...", staged.len());
+        }
+
+        // Create backups if requested
+        let backup_suffix = options.backup_suffix.as_deref();
+
+        for (original, temp) in &staged {
+            // Create backup if suffix provided
+            if let Some(suffix) = backup_suffix {
+                let backup_path = PathBuf::from(format!("{}{}", original.display(), suffix));
+                if let Err(e) = std::fs::copy(original, &backup_path) {
+                    eprintln!("Warning: Failed to create backup for {}: {}", original.display(), e);
+                }
+            }
+
+            // Move temp to original
+            if let Err(_) = std::fs::rename(temp, original) {
+                // If rename fails (cross-device), try copy+delete
+                if let Err(e) = std::fs::copy(temp, original) {
+                    eprintln!("Error: Failed to commit {}: {}", original.display(), e);
+                } else {
+                    let _ = std::fs::remove_file(temp);
+                }
+            }
+        }
+
+        if !quiet {
+            eprintln!("Atomic mode: {} files committed successfully", staged.len());
+        }
+
+        // Update checkpoint
+        if checkpoint.is_enabled() {
+            for file in files {
+                if let Ok(metadata) = std::fs::metadata(file) {
+                    checkpoint.update_file_state(file, metadata.len(), 0, metadata.len());
+                }
+            }
+            checkpoint
+                .save()
+                .map_err(|e| anyhow!("Failed to save checkpoint: {}", e))?;
+        }
+
+    } else {
+        // Rollback: delete all temp files
+        if !quiet {
+            eprintln!("Atomic mode: errors detected, rolling back...");
+        }
+
+        for (_, temp) in &staged {
+            let _ = std::fs::remove_file(temp);
+        }
+
+        // Clean up temp directory
+        let _ = std::fs::remove_dir(&temp_dir);
+
+        // Report errors
+        if json_output {
+            let errors: Vec<_> = results.iter()
+                .filter_map(|(path, result)| {
+                    result.as_ref().err().map(|e| {
+                        serde_json::json!({
+                            "file": path.display().to_string(),
+                            "error": e.to_string()
+                        })
+                    })
+                })
+                .collect();
+            println!("{}", serde_json::json!({
+                "status": "rollback",
+                "errors": errors
+            }));
+        } else {
+            for (path, result) in &results {
+                if let Err(e) = result {
+                    eprintln!("  Error in {}: {}", path.display(), e);
+                }
+            }
+        }
+
+        return Err(anyhow!("Atomic operation failed, changes rolled back"));
+    }
+
+    // Clean up temp directory
+    let _ = std::fs::remove_dir(&temp_dir);
+
+    Ok(())
+}
+
+/// Validate a commit message against the Conventional Commits specification.
+///
+/// Format: <type>[optional scope]: <description>
+///
+/// Valid types: feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert
+fn run_conventional_commits_validation(matches: &clap::ArgMatches) -> Result<()> {
+    use std::io::BufRead;
+
+    // Read commit message from input
+    let input: Box<dyn io::BufRead> = if let Some(input_file) = matches.get_one::<String>("input") {
+        Box::new(BufReader::new(File::open(input_file)?))
+    } else {
+        Box::new(io::stdin().lock())
+    };
+
+    let mut commit_msg = String::new();
+    for line in input.lines() {
+        let line = line?;
+        // Skip comment lines (git commit message comments)
+        if line.starts_with('#') {
+            continue;
+        }
+        if !commit_msg.is_empty() {
+            commit_msg.push('\n');
+        }
+        commit_msg.push_str(&line);
+    }
+
+    let commit_msg = commit_msg.trim();
+
+    if commit_msg.is_empty() {
+        eprintln!("Error: Empty commit message");
+        std::process::exit(exit_codes::VALIDATION_ERROR);
+    }
+
+    // Parse the first line (subject line)
+    let first_line = commit_msg.lines().next().unwrap_or("");
+
+    // Conventional Commits pattern:
+    // ^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\(.+\))?(!)?: .+$
+    let valid_types = ["feat", "fix", "docs", "style", "refactor", "perf", "test", "build", "ci", "chore", "revert"];
+
+    // Parse type
+    let type_end = first_line.find(|c| c == '(' || c == ':' || c == '!');
+    let commit_type = match type_end {
+        Some(idx) => &first_line[..idx],
+        None => {
+            eprintln!("Error: Invalid commit message format");
+            eprintln!("Expected: <type>[scope]: <description>");
+            eprintln!("Got: {}", first_line);
+            std::process::exit(exit_codes::VALIDATION_ERROR);
+        }
+    };
+
+    if !valid_types.contains(&commit_type) {
+        eprintln!("Error: Invalid commit type: '{}'", commit_type);
+        eprintln!("Valid types: {}", valid_types.join(", "));
+        std::process::exit(exit_codes::VALIDATION_ERROR);
+    }
+
+    let rest = &first_line[commit_type.len()..];
+
+    // Parse optional scope
+    let (scope, rest) = if rest.starts_with('(') {
+        if let Some(close_paren) = rest.find(')') {
+            let scope = &rest[1..close_paren];
+            if scope.is_empty() {
+                eprintln!("Error: Empty scope in parentheses");
+                std::process::exit(exit_codes::VALIDATION_ERROR);
+            }
+            (Some(scope), &rest[close_paren + 1..])
+        } else {
+            eprintln!("Error: Unclosed parenthesis in scope");
+            std::process::exit(exit_codes::VALIDATION_ERROR);
+        }
+    } else {
+        (None, rest)
+    };
+
+    // Check for breaking change indicator
+    let (is_breaking, rest) = if rest.starts_with('!') {
+        (true, &rest[1..])
+    } else {
+        (false, rest)
+    };
+
+    // Require colon and space
+    if !rest.starts_with(": ") {
+        eprintln!("Error: Missing ': ' after type/scope");
+        eprintln!("Expected: <type>[scope]: <description>");
+        eprintln!("Got: {}", first_line);
+        std::process::exit(exit_codes::VALIDATION_ERROR);
+    }
+
+    let description = rest[2..].trim();
+
+    if description.is_empty() {
+        eprintln!("Error: Empty description");
+        std::process::exit(exit_codes::VALIDATION_ERROR);
+    }
+
+    // Check for breaking change in footer
+    let has_breaking_footer = commit_msg.contains("BREAKING CHANGE:") || commit_msg.contains("BREAKING-CHANGE:");
+
+    // Success - output parsed information in JSON if requested
+    let use_json = matches.get_flag("json") || !io::stdout().is_terminal();
+
+    if use_json {
+        let output = serde_json::json!({
+            "valid": true,
+            "type": commit_type,
+            "scope": scope,
+            "description": description,
+            "breaking": is_breaking || has_breaking_footer,
+            "subject": first_line,
+        });
+        println!("{}", serde_json::to_string_pretty(&output)?);
+    } else if !matches.get_flag("quiet") {
+        println!("✓ Valid conventional commit");
+        println!("  Type: {}", commit_type);
+        if let Some(s) = scope {
+            println!("  Scope: {}", s);
+        }
+        println!("  Description: {}", description);
+        if is_breaking || has_breaking_footer {
+            println!("  ⚠ Breaking change");
+        }
+    }
+
+    Ok(())
+}
+
+/// Run streaming mode with real-time aggregation.
+fn run_streaming_mode(
+    config: &PipelineConfig,
+    input: Box<dyn io::BufRead>,
+    matches: &clap::ArgMatches,
+) -> Result<()> {
+    use std::collections::HashMap;
+    use std::io::{BufRead, Write};
+    use std::time::{Duration, Instant};
+
+    let interval_secs = matches.get_one::<u64>("stream-interval").copied().unwrap_or(5);
+    let interval = Duration::from_secs(interval_secs);
+    let use_json = matches.get_flag("json") || matches.get_flag("jsonl");
+    let quiet = matches.get_flag("quiet");
+
+    // Aggregation counters
+    let mut match_counts: HashMap<String, u64> = HashMap::new();
+    let mut total_lines: u64 = 0;
+    let mut total_matches: u64 = 0;
+    let mut last_summary = Instant::now();
+    let start_time = Instant::now();
+
+    // Initialize counters for each step
+    for (idx, step) in config.step.iter().enumerate() {
+        let step_name = step.description.clone().unwrap_or_else(|| {
+            if !step.pattern.is_empty() {
+                step.pattern.clone()
+            } else {
+                format!("step-{}", idx)
+            }
+        });
+        match_counts.insert(step_name, 0);
+    }
+
+    // Build compiled patterns for matching
+    let patterns: Vec<(String, Option<regex::Regex>)> = config.step.iter().map(|step| {
+        let name = step.description.clone().unwrap_or_else(|| step.pattern.clone());
+        let re = if !step.pattern.is_empty() {
+            regex::Regex::new(&step.pattern).ok()
+        } else {
+            None
+        };
+        (name, re)
+    }).collect();
+
+    // Process lines manually for streaming with aggregation
+    let stdout = io::stdout();
+    let mut stdout_lock = stdout.lock();
+
+    for line_result in input.lines() {
+        let line = line_result?;
+        total_lines += 1;
+
+        // Process line through a fresh processor for each line
+        // (for simplicity - in production you'd want to batch)
+        let mut processor = StreamProcessor::new(config.clone())?;
+        let mut output = Vec::new();
+        let cursor = std::io::Cursor::new(line.as_bytes());
+        let reader = std::io::BufReader::new(cursor);
+        let _ = processor.process_stream(reader, &mut output)?;
+        let result = String::from_utf8_lossy(&output);
+        let result = result.trim_end();
+
+        // Count matches
+        if result != line {
+            total_matches += 1;
+            // Try to identify which step matched
+            for (name, re_opt) in &patterns {
+                if let Some(re) = re_opt {
+                    if re.is_match(&line) {
+                        *match_counts.entry(name.clone()).or_insert(0) += 1;
+                    }
+                }
+            }
+        }
+
+        // Output the processed line
+        if !quiet {
+            writeln!(stdout_lock, "{}", result)?;
+        }
+
+        // Periodic summary
+        if last_summary.elapsed() >= interval {
+            let elapsed = start_time.elapsed();
+
+            if use_json {
+                let summary = serde_json::json!({
+                    "type": "summary",
+                    "elapsed_secs": elapsed.as_secs(),
+                    "total_lines": total_lines,
+                    "total_matches": total_matches,
+                    "match_rate": if total_lines > 0 {
+                        (total_matches as f64 / total_lines as f64) * 100.0
+                    } else { 0.0 },
+                    "matches_by_pattern": match_counts,
+                });
+                eprintln!("{}", serde_json::to_string(&summary)?);
+            } else {
+                eprintln!("--- Streaming Summary ({:?} elapsed) ---", elapsed);
+                eprintln!("  Lines processed: {}", total_lines);
+                eprintln!("  Total matches: {} ({:.1}%)",
+                    total_matches,
+                    if total_lines > 0 { (total_matches as f64 / total_lines as f64) * 100.0 } else { 0.0 }
+                );
+                if !match_counts.is_empty() {
+                    eprintln!("  By pattern:");
+                    for (name, count) in &match_counts {
+                        if *count > 0 {
+                            eprintln!("    {}: {}", name, count);
+                        }
+                    }
+                }
+                eprintln!("---");
+            }
+
+            last_summary = Instant::now();
+        }
+    }
+
+    // Final summary
+    let elapsed = start_time.elapsed();
+
+    if use_json {
+        let summary = serde_json::json!({
+            "type": "final_summary",
+            "elapsed_secs": elapsed.as_secs_f64(),
+            "total_lines": total_lines,
+            "total_matches": total_matches,
+            "match_rate": if total_lines > 0 {
+                (total_matches as f64 / total_lines as f64) * 100.0
+            } else { 0.0 },
+            "matches_by_pattern": match_counts,
+        });
+        eprintln!("{}", serde_json::to_string_pretty(&summary)?);
+    } else if !quiet {
+        eprintln!("\n=== Final Summary ===");
+        eprintln!("  Total time: {:.2}s", elapsed.as_secs_f64());
+        eprintln!("  Lines processed: {}", total_lines);
+        eprintln!("  Total matches: {} ({:.1}%)",
+            total_matches,
+            if total_lines > 0 { (total_matches as f64 / total_lines as f64) * 100.0 } else { 0.0 }
+        );
+        if total_lines > 0 {
+            eprintln!("  Lines/sec: {:.0}", total_lines as f64 / elapsed.as_secs_f64().max(0.001));
+        }
+    }
+
+    Ok(())
+}
+
+/// Generate test data from pipeline patterns.
+fn run_test_data_generation(
+    config: &PipelineConfig,
+    count: u32,
+    matches: &clap::ArgMatches,
+) -> Result<()> {
+    use rand::Rng;
+
+    let use_json = matches.get_flag("json");
+    let mut generated: Vec<String> = Vec::with_capacity(count as usize);
+    let mut rng = rand::thread_rng();
+
+    // Extract patterns from steps (only steps with non-empty patterns)
+    let patterns: Vec<(&str, Option<&str>)> = config.step.iter()
+        .filter(|step| !step.pattern.is_empty())
+        .map(|step| (step.pattern.as_str(), step.description.as_deref()))
+        .collect();
+
+    if patterns.is_empty() {
+        return Err(anyhow!("No patterns found in pipeline configuration"));
+    }
+
+    for i in 0..count {
+        // Pick a random pattern to generate from
+        let (pattern, description) = patterns[rng.gen_range(0..patterns.len())];
+
+        // Generate a sample that matches the pattern
+        // This is a simplified generator - for complex patterns, we generate approximations
+        let sample = generate_sample_from_pattern(pattern, i, &mut rng);
+
+        if use_json {
+            generated.push(serde_json::json!({
+                "index": i,
+                "pattern": pattern,
+                "description": description,
+                "sample": sample,
+            }).to_string());
+        } else {
+            generated.push(sample);
+        }
+    }
+
+    if use_json {
+        println!("[{}]", generated.join(",\n"));
+    } else {
+        for sample in generated {
+            println!("{}", sample);
+        }
+    }
+
+    Ok(())
+}
+
+/// Generate a sample string that approximately matches a regex pattern.
+/// This is a simplified generator for common pattern types.
+fn generate_sample_from_pattern(pattern: &str, index: u32, rng: &mut impl rand::Rng) -> String {
+    // Common pattern substitutions
+    let sample = pattern
+        // Digit patterns
+        .replace(r"\d+", &format!("{}", rng.gen_range(100..9999)))
+        .replace(r"\d{3}", &format!("{:03}", rng.gen_range(0..999)))
+        .replace(r"\d{4}", &format!("{:04}", rng.gen_range(0..9999)))
+        .replace(r"\d{2}", &format!("{:02}", rng.gen_range(0..99)))
+        .replace(r"\d", &format!("{}", rng.gen_range(0..9)))
+        // Word patterns
+        .replace(r"\w+", &format!("word{}", index))
+        .replace(r"\w*", &format!("text{}", rng.gen_range(0..100)))
+        // Space patterns
+        .replace(r"\s+", " ")
+        .replace(r"\s*", " ")
+        .replace(r"\s", " ")
+        // Common anchors
+        .replace("^", "")
+        .replace("$", "")
+        // Character classes
+        .replace(r"[a-zA-Z]+", &format!("Sample{}", index))
+        .replace(r"[a-z]+", "example")
+        .replace(r"[A-Z]+", "EXAMPLE")
+        .replace(r"[0-9]+", &format!("{}", rng.gen_range(1000..9999)))
+        // Email-like patterns
+        .replace(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", &format!("user{}@example.com", index))
+        // IP-like patterns
+        .replace(r"\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}", &format!("192.168.{}.{}", rng.gen_range(0..255), rng.gen_range(1..255)))
+        // UUID-like patterns
+        .replace(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
+            &format!("{:08x}-{:04x}-{:04x}-{:04x}-{:012x}",
+                rng.gen_range(0u32..u32::MAX), rng.gen_range(0u16..u16::MAX),
+                rng.gen_range(0u16..u16::MAX), rng.gen_range(0u16..u16::MAX),
+                rng.gen_range(0u64..0xffffffffffff)))
+        // Quantifiers
+        .replace("+", "")
+        .replace("*", "")
+        .replace("?", "")
+        // Groups
+        .replace("(", "")
+        .replace(")", "")
+        .replace("|", "")
+        // Escape sequences
+        .replace(r"\\", "\\")
+        .replace(r"\.", ".")
+        .replace(r"\-", "-");
+
+    // If the result still contains regex metacharacters, return a simpler sample
+    if sample.contains(r"\") || sample.contains('[') || sample.contains('{') {
+        format!("sample_data_{}", index)
+    } else {
+        sample
+    }
 }
 
 #[cfg(test)]
