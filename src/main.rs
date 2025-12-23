@@ -239,6 +239,96 @@ CONFIGURATION FILE EXAMPLE:
     pattern = "password=\\w+"
     replacement = "password=***"
 
+SHORTHAND SYNTAX:
+    Use [[filter]], [[substitute]], etc. instead of [[step]] + type = "...":
+
+    # Before (verbose):
+    [[step]]
+    type = "filter"
+    pattern = "^\\[OK\\]"
+    action = "drop_line"
+
+    # After (concise):
+    [[filter]]
+    pattern = "^\\[OK\\]"
+    action = "drop_line"
+
+    Available shorthand sections:
+      [[filter]]      Filter steps (keep_line, drop_line, etc.)
+      [[substitute]]  Substitution steps
+      [[extract]]     Extraction steps
+      [[validate]]    Validation steps
+      [[transform]]   Transform steps
+      [[block]]       Block-scoped steps
+
+    You can mix [[step]] with shorthand sections. [[step]] runs first.
+
+FILTER ACTIONS:
+    For type = "filter" steps, use these actions:
+      keep_line             Keep lines matching the pattern (whitelist)
+      drop_line             Drop lines matching the pattern (blacklist)
+      keep_match            Output only the matched text from each line
+      drop_match            Remove matched text, keeping the rest of the line
+      deduplicate_by_prefix Deduplicate based on pattern capture group
+
+    For type = "block" steps (multi-line matching):
+      keep_block            Keep lines within matching blocks
+      drop_block            Drop lines within matching blocks
+      collect_block         Collect and output block contents together
+      deduplicate           Output each unique block only once
+
+PER-STEP FLAGS:
+    Individual steps can specify regex flags without affecting other steps:
+
+    [[step]]
+    type = "filter"
+    pattern = "(?<=user=)\\w+"
+    flags = ["pcre"]              # PCRE for this step only
+    action = "keep_line"
+
+    Available flags:
+      global            Apply replacement to all matches (not just first)
+      case_insensitive  Case-insensitive matching
+      multiline         ^ and $ match line boundaries
+      dot_all           . matches newlines
+      unicode           Enable Unicode support
+      extended          Allow whitespace and comments in pattern
+      pcre              Use PCRE engine (lookahead/lookbehind) for this step
+
+CONFIG COMPOSITION:
+    Pipelines can inherit from base configs and include pattern libraries:
+
+    # patterns/common.toml - Pattern library file
+    [patterns.logs]
+    error = "(ERROR|FATAL|CRITICAL)"
+    warn = "(WARN|WARNING)"
+    info = "^\\[INFO\\]"
+
+    # pipeline.toml - Uses the library
+    patterns_include = ["patterns/common.toml"]
+
+    [[filter]]
+    pattern = "${logs.error}"   # Expands to (ERROR|FATAL|CRITICAL)
+    action = "keep_line"
+
+    # Inherit from base config
+    extends = "base.toml"       # Steps/settings from base are applied first
+
+    See README for full pattern library and inheritance documentation.
+
+DEBUGGING:
+    Control logging verbosity with -q and -v flags:
+      rexpipe -q ...      # errors only (also suppresses output)
+      rexpipe ...         # warnings (default)
+      rexpipe -v ...      # info level
+      rexpipe -vv ...     # debug level
+      rexpipe -vvv ...    # trace level (line-by-line processing details)
+
+    Note: -v flags override -q's log effect (e.g., -q -v shows info logs)
+
+    Or use RUST_LOG for fine-grained control (takes precedence):
+      RUST_LOG=rexpipe=debug rexpipe -c config.toml < input.txt
+
 EXIT CODES:
     0    Success (matches found or operation completed)
     1    No matches found
@@ -526,8 +616,16 @@ fn build_cli() -> Command {
             Arg::new("quiet")
                 .short('q')
                 .long("quiet")
-                .help("Quiet mode - only set exit code")
+                .help("Quiet mode - suppress output and reduce logs to errors only")
                 .action(ArgAction::SetTrue),
+        )
+        .arg(
+            Arg::new("verbose")
+                .short('v')
+                .long("verbose")
+                .help("Increase logging verbosity (repeat for more: -v=info, -vv=debug, -vvv=trace)")
+                .action(ArgAction::Count)
+                .global(true),
         )
         .arg(
             Arg::new("json")
@@ -1262,15 +1360,28 @@ description = "Keep only properly formatted lines"
 "#;
 
 fn main() {
-    // Initialize logger from RUST_LOG environment variable
-    // Example: RUST_LOG=rexpipe=debug rexpipe --config my.toml < input.txt
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn"))
-        .format_timestamp(None)
-        .init();
+    // Parse arguments first so we can use -v flags for logging
+    let matches = build_cli().get_matches();
+
+    // Initialize logger: RUST_LOG takes precedence, otherwise use -v/-q flags
+    // -q reduces to error-only, -v increases verbosity, -v overrides -q's log effect
+    let verbose_count = matches.get_count("verbose");
+    let quiet = matches.get_flag("quiet");
+    let log_level = match (verbose_count, quiet) {
+        (0, true) => "error",  // -q alone: errors only
+        (0, false) => "warn",  // default: warnings
+        (1, _) => "info",      // -v (overrides -q)
+        (2, _) => "debug",     // -vv
+        _ => "trace",          // -vvv+
+    };
+
+    env_logger::Builder::from_env(
+        env_logger::Env::default().default_filter_or(format!("rexpipe={}", log_level)),
+    )
+    .format_timestamp(None)
+    .init();
 
     debug!("Starting rexpipe");
-
-    let matches = build_cli().get_matches();
 
     // Handle completions generation first (before any other processing)
     if let Some(shell) = matches.get_one::<Shell>("completions").copied() {
@@ -2461,15 +2572,10 @@ fn load_pipeline_config(
             name: Some("Inline Pipeline".to_string()),
             description: Some("Generated from command line pattern".to_string()),
             version: Some("1.0.0".to_string()),
-            extends: None,
-            patterns_include: Vec::new(),
             settings,
             step: vec![step],
             bidirectional,
-            checkpoint: Default::default(),
-            cross_file: Default::default(),
-            tests: Vec::new(),
-            finalize: Default::default(),
+            ..Default::default()
         })
     } else {
         Err(anyhow!(
