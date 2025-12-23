@@ -672,6 +672,18 @@ fn build_cli() -> Command {
                 .num_args(0..=1)
                 .default_missing_value("HEAD"),
         )
+        .arg(
+            Arg::new("checkpoint-info")
+                .long("checkpoint-info")
+                .value_name("FILE")
+                .help("Display checkpoint file information and exit")
+                .long_help(
+                    "Read and display the contents of a checkpoint file in human-readable format. \
+                     Shows tracked files, byte offsets, timestamps, and file states. \
+                     Useful for debugging and verifying checkpoint integrity."
+                )
+                .value_hint(ValueHint::FilePath),
+        )
         // === Cross-file Consistency ===
         .arg(
             Arg::new("cross-file")
@@ -729,6 +741,39 @@ fn build_cli() -> Command {
                 .value_name("EXAMPLE")
                 .help("Negative example for pattern learning (should not match)")
                 .action(ArgAction::Append),
+        )
+        .arg(
+            Arg::new("positive-file")
+                .long("positive-file")
+                .value_name("FILE")
+                .help("File containing positive examples (one per line)")
+                .long_help(
+                    "Load positive examples from a file, one example per line. \
+                     Empty lines and lines starting with # are ignored. \
+                     Can be combined with --positive for additional examples."
+                ),
+        )
+        .arg(
+            Arg::new("negative-file")
+                .long("negative-file")
+                .value_name("FILE")
+                .help("File containing negative examples (one per line)")
+                .long_help(
+                    "Load negative examples from a file, one example per line. \
+                     Empty lines and lines starting with # are ignored. \
+                     Can be combined with --negative for additional examples."
+                ),
+        )
+        .arg(
+            Arg::new("learn-output")
+                .long("learn-output")
+                .value_name("FILE")
+                .help("Save learned patterns to a TOML pipeline file")
+                .long_help(
+                    "Instead of printing the learned pipeline to stdout, save it directly \
+                     to the specified file. The file can then be used with -c/--config."
+                )
+                .value_hint(ValueHint::FilePath),
         )
         // === Misc ===
         .arg(
@@ -1311,6 +1356,11 @@ fn run_application(matches: &clap::ArgMatches) -> Result<()> {
         return validate_config_file(matches);
     }
 
+    // Handle checkpoint info display
+    if let Some(checkpoint_path) = matches.get_one::<String>("checkpoint-info") {
+        return display_checkpoint_info(checkpoint_path);
+    }
+
     // Handle git filter setup
     if let Some(filter_name) = matches.get_one::<String>("git-filter-setup") {
         return print_git_filter_setup(filter_name, matches);
@@ -1859,10 +1909,28 @@ fn run_multi_file_mode(
                     }
                     ViolationAction::Fix => {
                         // Apply auto-fixes for violations
-                        // Dry-run unless both in-place and apply flags are set
+                        // Dry-run if --dry-run flag is set, or if not using in-place+apply
+                        let explicit_dry_run = matches.get_flag("dry-run");
                         let fix_in_place = matches.get_flag("in-place");
                         let fix_apply = matches.get_flag("apply");
-                        let dry_run = !fix_in_place || !fix_apply;
+                        let dry_run = explicit_dry_run || !fix_in_place || !fix_apply;
+
+                        if !quiet && dry_run {
+                            eprintln!("\n--- Cross-File Fix Preview (dry-run) ---");
+                            for result in &results {
+                                if !result.passed {
+                                    for violation in &result.violations {
+                                        eprintln!(
+                                            "Would add pattern '{}' to {}",
+                                            result.trigger_pattern,
+                                            violation.file.display()
+                                        );
+                                    }
+                                }
+                            }
+                            eprintln!();
+                        }
+
                         match manager.apply_fixes(&results, dry_run) {
                             Ok((files_modified, fixes_applied)) => {
                                 if !quiet {
@@ -1871,7 +1939,11 @@ fn run_multi_file_mode(
                                             "Dry-run: Would apply {} fix(es) to {} file(s)",
                                             fixes_applied, files_modified
                                         );
-                                        eprintln!("Use --apply with -i to apply fixes");
+                                        if explicit_dry_run {
+                                            eprintln!("Remove --dry-run and use --apply -i to apply fixes");
+                                        } else {
+                                            eprintln!("Use --apply with -i to apply fixes");
+                                        }
                                     } else {
                                         eprintln!(
                                             "Applied {} fix(es) to {} file(s)",
@@ -2729,6 +2801,135 @@ fn validate_library_file(library_path: &str) -> Result<()> {
     }
 }
 
+/// Display checkpoint file information.
+fn display_checkpoint_info(checkpoint_path: &str) -> Result<()> {
+    use chrono::{DateTime, Utc};
+    use rexpipe::checkpoint::CheckpointState;
+
+    let path = Path::new(checkpoint_path);
+    if !path.exists() {
+        return Err(anyhow!("Checkpoint file not found: {}", checkpoint_path));
+    }
+
+    let content = std::fs::read_to_string(path)
+        .map_err(|e| anyhow!("Failed to read checkpoint file: {}", e))?;
+
+    let state: CheckpointState =
+        serde_json::from_str(&content).map_err(|e| anyhow!("Invalid checkpoint format: {}", e))?;
+
+    // Format timestamps
+    let format_time = |ts: u64| -> String {
+        DateTime::<Utc>::from_timestamp(ts as i64, 0)
+            .map(|dt| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string())
+            .unwrap_or_else(|| format!("{}", ts))
+    };
+
+    println!("╔══════════════════════════════════════════════════════════════════╗");
+    println!("║                    CHECKPOINT INFORMATION                        ║");
+    println!("╚══════════════════════════════════════════════════════════════════╝\n");
+
+    println!("File: {}", checkpoint_path);
+    println!("Version: {}", state.version);
+    if let Some(ref pipeline_id) = state.pipeline_id {
+        println!("Pipeline ID: {}", pipeline_id);
+    }
+    println!("Created: {}", format_time(state.created_at));
+    println!("Updated: {}", format_time(state.updated_at));
+    println!();
+
+    // Display file statistics
+    println!("Tracked Files: {}", state.files.len());
+    let total_bytes: u64 = state.files.values().map(|f| f.byte_offset).sum();
+    let total_lines: u64 = state.files.values().map(|f| f.line_number).sum();
+    println!(
+        "Total Progress: {} bytes processed, {} lines tracked",
+        total_bytes, total_lines
+    );
+    println!();
+
+    // Display each tracked file with staleness detection
+    if !state.files.is_empty() {
+        println!("File Details:");
+        println!("{:-<70}", "");
+
+        let mut stale_count = 0;
+        let mut missing_count = 0;
+        let mut grown_count = 0;
+
+        for (path, file_state) in &state.files {
+            println!("  Path: {}", path.display());
+
+            // Check file status
+            let status = match std::fs::metadata(path) {
+                Ok(meta) => {
+                    let current_size = meta.len();
+                    let current_mtime = meta
+                        .modified()
+                        .ok()
+                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map(|d| d.as_secs());
+
+                    if current_size > file_state.size {
+                        grown_count += 1;
+                        let new_bytes = current_size - file_state.size;
+                        format!("📈 GROWN (+{} bytes to process)", new_bytes)
+                    } else if let (Some(ckpt_mtime), Some(curr_mtime)) = (file_state.mtime, current_mtime) {
+                        if curr_mtime > ckpt_mtime {
+                            stale_count += 1;
+                            "⚠️ STALE (modified since checkpoint)".to_string()
+                        } else {
+                            "✓ Current".to_string()
+                        }
+                    } else {
+                        "✓ Current".to_string()
+                    }
+                }
+                Err(_) => {
+                    missing_count += 1;
+                    "❌ MISSING (file deleted)".to_string()
+                }
+            };
+
+            println!("    Status: {}", status);
+            println!("    Offset: {} bytes (line {})", file_state.byte_offset, file_state.line_number);
+            println!("    Size at checkpoint: {} bytes", file_state.size);
+            if let Some(mtime) = file_state.mtime {
+                println!("    Modified at checkpoint: {}", format_time(mtime));
+            }
+            if let Some(ref hash) = file_state.content_hash {
+                println!("    Hash: {}...", &hash[..hash.len().min(16)]);
+            }
+            println!("    Last Processed: {}", format_time(file_state.last_processed));
+            println!();
+        }
+
+        // Summary of file status
+        if stale_count > 0 || missing_count > 0 || grown_count > 0 {
+            println!("File Status Summary:");
+            if grown_count > 0 {
+                println!("  📈 {} file(s) have new content to process", grown_count);
+            }
+            if stale_count > 0 {
+                println!("  ⚠️  {} file(s) modified since checkpoint", stale_count);
+            }
+            if missing_count > 0 {
+                println!("  ❌ {} file(s) no longer exist", missing_count);
+            }
+            println!();
+        }
+    }
+
+    // Display metadata
+    if !state.metadata.is_empty() {
+        println!("Metadata:");
+        for (key, value) in &state.metadata {
+            println!("  {}: {}", key, value);
+        }
+    }
+
+    Ok(())
+}
+
 /// Validate a pipeline configuration file without processing.
 fn validate_config_file(matches: &clap::ArgMatches) -> Result<()> {
     let config_path = matches
@@ -2931,9 +3132,11 @@ fn run_processing_mode(
         eprintln!("{}", json_schema::output_performance_json(&result)?);
     }
 
-    // Output verification summary if requested
+    // Output verification summary if requested (includes bidirectional stats)
     if matches.get_flag("verify") {
-        output_verification_summary(&result, json_output)?;
+        // Include bidirectional mapping statistics in verification output
+        let bidir_stats = processor.get_bidirectional_stats();
+        output_verification_summary(&result, json_output, bidir_stats)?;
     }
 
     Ok(())
@@ -2951,6 +3154,7 @@ fn read_input_to_string(mut input: Box<dyn io::BufRead>) -> Result<String> {
 fn output_verification_summary(
     result: &rexpipe::pipeline::PipelineResult,
     json_output: bool,
+    bidir_stats: Option<rexpipe::bidirectional::MappingStats>,
 ) -> Result<()> {
     if json_output {
         #[derive(serde::Serialize)]
@@ -2961,6 +3165,16 @@ fn output_verification_summary(
             transformations_applied: u64,
             success_rate: f64,
             verified: bool,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            bidirectional: Option<BidirStats>,
+        }
+
+        #[derive(serde::Serialize)]
+        struct BidirStats {
+            total_mappings: usize,
+            unique_originals: usize,
+            unique_transformed: usize,
+            steps_with_mappings: usize,
         }
 
         let verified = result.lines_processed > 0;
@@ -2972,6 +3186,13 @@ fn output_verification_summary(
             "no_matches"
         };
 
+        let bidirectional = bidir_stats.as_ref().filter(|s| s.total_mappings > 0).map(|s| BidirStats {
+            total_mappings: s.total_mappings,
+            unique_originals: s.unique_originals,
+            unique_transformed: s.unique_transformed,
+            steps_with_mappings: s.steps_with_mappings,
+        });
+
         let verification = VerificationResult {
             status: status.to_string(),
             lines_processed: result.lines_processed,
@@ -2979,6 +3200,7 @@ fn output_verification_summary(
             transformations_applied: result.transformations_applied,
             success_rate: result.success_rate(),
             verified,
+            bidirectional,
         };
 
         let response = json_schema::JsonResponse::new("verify", verification);
@@ -2992,6 +3214,13 @@ fn output_verification_summary(
             result.transformations_applied
         );
         eprintln!("Success rate: {:.1}%", result.success_rate() * 100.0);
+
+        // Show bidirectional stats if available
+        if let Some(ref stats) = bidir_stats {
+            if stats.total_mappings > 0 {
+                eprintln!("\nBidirectional: {}", stats);
+            }
+        }
 
         if result.transformations_applied > 0 {
             eprintln!("Status: ✓ Transformations applied successfully");
@@ -3285,6 +3514,30 @@ fn run_pattern_learning(matches: &clap::ArgMatches) -> Result<()> {
         }
     }
 
+    // Load positive examples from file
+    if let Some(file_path) = matches.get_one::<String>("positive-file") {
+        let content = std::fs::read_to_string(file_path)
+            .map_err(|e| anyhow!("Failed to read positive examples file '{}': {}", file_path, e))?;
+        for line in content.lines() {
+            let line = line.trim();
+            if !line.is_empty() && !line.starts_with('#') {
+                learner.add_positive(line);
+            }
+        }
+    }
+
+    // Load negative examples from file
+    if let Some(file_path) = matches.get_one::<String>("negative-file") {
+        let content = std::fs::read_to_string(file_path)
+            .map_err(|e| anyhow!("Failed to read negative examples file '{}': {}", file_path, e))?;
+        for line in content.lines() {
+            let line = line.trim();
+            if !line.is_empty() && !line.starts_with('#') {
+                learner.add_negative(line);
+            }
+        }
+    }
+
     // If no examples provided via flags, try to read from stdin
     if learner.example_count() == 0 {
         // Only show instructions if stdin is interactive (TTY)
@@ -3319,6 +3572,10 @@ fn run_pattern_learning(matches: &clap::ArgMatches) -> Result<()> {
         ));
     }
 
+    // Collect examples for testing patterns
+    let positive_examples: Vec<String> = learner.positive_examples().map(|s| s.to_string()).collect();
+    let negative_examples: Vec<String> = learner.negative_examples().map(|s| s.to_string()).collect();
+
     // Learn patterns
     match learner.learn() {
         Ok(patterns) => {
@@ -3332,19 +3589,49 @@ fn run_pattern_learning(matches: &clap::ArgMatches) -> Result<()> {
                     if !pattern.description.is_empty() {
                         println!("   Description: {}", pattern.description);
                     }
+
+                    // Show test results for this pattern
+                    if let Ok(regex) = regex::Regex::new(&pattern.pattern) {
+                        let pos_matches: Vec<_> = positive_examples
+                            .iter()
+                            .filter(|ex| regex.is_match(ex))
+                            .collect();
+                        let neg_matches: Vec<_> = negative_examples
+                            .iter()
+                            .filter(|ex| regex.is_match(ex))
+                            .collect();
+
+                        println!(
+                            "   Test: ✓ {}/{} positive, ✗ {}/{} negative (false positives)",
+                            pos_matches.len(),
+                            positive_examples.len(),
+                            neg_matches.len(),
+                            negative_examples.len()
+                        );
+
+                        // Show false positives (negatives that match)
+                        if !neg_matches.is_empty() {
+                            println!(
+                                "   ⚠ False positives: {}",
+                                neg_matches.iter().map(|s| format!("\"{}\"", s)).collect::<Vec<_>>().join(", ")
+                            );
+                        }
+                    }
                     println!();
                 }
 
-                // Generate pipeline config suggestion
-                if let Some(best) = patterns.first() {
+                // Generate pipeline config
+                let config_toml = rexpipe::learn::generate_pipeline_config(&patterns);
+
+                // Save to file or print
+                if let Some(output_path) = matches.get_one::<String>("learn-output") {
+                    std::fs::write(output_path, &config_toml)
+                        .map_err(|e| anyhow!("Failed to write to '{}': {}", output_path, e))?;
+                    println!("Pipeline saved to: {}", output_path);
+                    println!("Use with: rexpipe -c {}", output_path);
+                } else {
                     println!("Suggested pipeline configuration:");
-                    println!("[[step]]");
-                    println!("type = \"substitute\"");
-                    println!(
-                        "pattern = \"{}\"",
-                        best.pattern.replace('\\', "\\\\").replace('"', "\\\"")
-                    );
-                    println!("replacement = \"[REDACTED]\"");
+                    println!("{}", config_toml);
                 }
             }
         }
@@ -3644,7 +3931,7 @@ fn run_atomic_multi_file_processing(
             }
 
             // Move temp to original
-            if let Err(_) = std::fs::rename(temp, original) {
+            if std::fs::rename(temp, original).is_err() {
                 // If rename fails (cross-device), try copy+delete
                 if let Err(e) = std::fs::copy(temp, original) {
                     eprintln!("Error: Failed to commit {}: {}", original.display(), e);
@@ -3759,7 +4046,7 @@ fn run_conventional_commits_validation(matches: &clap::ArgMatches) -> Result<()>
     let valid_types = ["feat", "fix", "docs", "style", "refactor", "perf", "test", "build", "ci", "chore", "revert"];
 
     // Parse type
-    let type_end = first_line.find(|c| c == '(' || c == ':' || c == '!');
+    let type_end = first_line.find(['(', ':', '!']);
     let commit_type = match type_end {
         Some(idx) => &first_line[..idx],
         None => {
@@ -3796,10 +4083,9 @@ fn run_conventional_commits_validation(matches: &clap::ArgMatches) -> Result<()>
     };
 
     // Check for breaking change indicator
-    let (is_breaking, rest) = if rest.starts_with('!') {
-        (true, &rest[1..])
-    } else {
-        (false, rest)
+    let (is_breaking, rest) = match rest.strip_prefix('!') {
+        Some(stripped) => (true, stripped),
+        None => (false, rest),
     };
 
     // Require colon and space
