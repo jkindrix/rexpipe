@@ -2,6 +2,31 @@
 
 This directory contains example rexpipe pipelines demonstrating various use cases from simple transformations to complex multi-stage processing systems.
 
+## 🌟 Featured: Progressive Pipeline System
+
+The [`progressive-system/`](progressive-system/) directory demonstrates rexpipe's most powerful capability: **pipeline chains** where multiple pipelines work together as a unified system.
+
+```bash
+# 4-stage code analysis: Source → Symbols → Graph → Patterns → Report
+cat src/*.py | \
+  rexpipe -c progressive-system/01-extract-symbols.toml | \
+  rexpipe -c progressive-system/02-build-graph.toml | \
+  rexpipe -c progressive-system/03-analyze-patterns.toml | \
+  rexpipe -c progressive-system/04-generate-report.toml
+```
+
+**Output:**
+```
+- ℹ️ [PATTERN] SERVICE in UserService - Service layer pattern
+- ℹ️ [PATTERN] CONTROLLER in UserController - Controller pattern (MVC)
+- ℹ️ [PATTERN] FACTORY in createLogger - Factory method pattern
+- ℹ️ [OPPORTUNITY] CACHEABLE for getUser - Getter function - consider caching decorator
+```
+
+This is **not** just a complex pipeline—it's a **system of pipelines** that communicate via the `@@MARKER@@` protocol. Each stage transforms the output of the previous, progressively building understanding.
+
+---
+
 ## Pipeline Categories
 
 ### Basic Transformations

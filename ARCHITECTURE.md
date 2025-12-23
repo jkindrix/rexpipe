@@ -493,6 +493,83 @@ Architecture:
 - Initial run + re-run on modify/create events
 - Graceful Ctrl+C handling
 
+## Pipeline Composition Patterns
+
+While rexpipe excels at individual multi-step pipelines, its architecture enables a more powerful paradigm: **progressive multi-stage transformation systems** where pipelines chain together.
+
+### Pipeline Chains
+
+```
+Input → [Pipeline A] → [Pipeline B] → [Pipeline C] → Output
+```
+
+Each pipeline's stdout becomes the next pipeline's stdin. The shell handles the composition:
+
+```bash
+cat source.py | \
+  rexpipe -c 01-extract.toml | \
+  rexpipe -c 02-transform.toml | \
+  rexpipe -c 03-analyze.toml | \
+  rexpipe -c 04-report.toml
+```
+
+### The Marker Protocol
+
+Pipeline chains communicate via a **marker protocol**—structured text patterns that serve as contracts between stages:
+
+```
+@@TYPE:field1:field2:...@@
+```
+
+Examples:
+- `@@SYM:FUNC:getUser:(id: int)@@` - Symbol extraction
+- `@@NODE:CLASS:UserService@@` - Graph node
+- `@@EDGE:UserService:Repository:CALLS@@` - Graph edge
+- `@@FINDING:PATTERN:INFO:Factory method detected@@` - Analysis result
+
+### Design Principles
+
+1. **Stage Independence**: Each pipeline is a complete, testable unit
+2. **Explicit Contracts**: Marker formats are documented in pipeline headers
+3. **Incremental Processing**: Intermediate outputs can be cached/inspected
+4. **Alternative Paths**: Same intermediate can feed multiple downstream pipelines
+5. **Debuggability**: Inspect any stage's output independently
+
+### Example: Code Analysis System
+
+```
+┌─────────────────────┐
+│ 01-extract-symbols  │ → @@SYM:type:name:signature@@
+└──────────┬──────────┘
+           │
+┌──────────▼──────────┐
+│  02-build-graph     │ → @@NODE:...@@ @@EDGE:...@@
+└──────────┬──────────┘
+           │
+┌──────────▼──────────┐
+│ 03-analyze-patterns │ → @@FINDING:category:severity:message@@
+└──────────┬──────────┘
+           │
+┌──────────▼──────────┐
+│ 04-generate-report  │ → Markdown report
+└─────────────────────┘
+```
+
+See `examples/pipelines/progressive-system/` for a working implementation.
+
+### When to Use Pipeline Chains
+
+**Use chains when:**
+- Transformations have distinct logical phases
+- Intermediate results have value on their own
+- Different downstream processes might consume the same intermediate
+- Debugging requires inspecting transformation at each stage
+
+**Use single pipelines when:**
+- Steps are tightly coupled and sequentially dependent
+- No intermediate state has standalone value
+- Simpler deployment (one file vs. multiple)
+
 ## Testing Strategy
 
 - **Unit tests**: Core processing logic in each module

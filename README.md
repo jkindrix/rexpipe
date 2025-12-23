@@ -45,6 +45,40 @@ rexpipe -c pipelines/normalize-logs.toml < log.txt
 | Silent failures | Structured errors with fix suggestions |
 | No audit trail | Verification and provenance tracking |
 
+## Pipeline Systems: Beyond Individual Transforms
+
+rexpipe isn't just for individual pipelines—it's a platform for **progressive multi-stage transformation systems** where pipelines chain together:
+
+```
+Source Code → [Extract] → [Build Graph] → [Analyze] → [Report] → Intelligence
+```
+
+```bash
+# Chain pipelines together - each stage's output feeds the next
+cat src/*.py | \
+  rexpipe -c 01-extract-symbols.toml | \
+  rexpipe -c 02-build-graph.toml | \
+  rexpipe -c 03-analyze-patterns.toml | \
+  rexpipe -c 04-generate-report.toml
+```
+
+**The Marker Protocol**: Pipelines communicate via `@@TYPE:value@@` markers—a contract between stages:
+
+```
+Stage 1 Output: @@SYM:FUNC:getUser:(id)@@
+Stage 2 Output: @@NODE:FUNC:getUser@@@@EDGE:getUser:repo:CALLS@@
+Stage 3 Output: @@FINDING:PATTERN:INFO:FACTORY in getUser@@
+Stage 4 Output: - ℹ️ [PATTERN] FACTORY in getUser
+```
+
+This enables:
+- **Cached intermediates**: Save stage outputs for incremental processing
+- **Alternative downstream**: Feed the same graph to different analyzers
+- **Debugging**: Inspect any stage's output independently
+- **Composability**: Mix and match stages from different systems
+
+See [`examples/pipelines/progressive-system/`](examples/pipelines/progressive-system/) for a complete 4-stage code analysis system.
+
 ## Key Features
 
 - **JSON output for scripting** - When stdout is not a TTY, output is JSON by default
@@ -983,11 +1017,13 @@ rexpipe approach:
 cat access.log | rexpipe --config log-cleanup.toml
 ```
 
-**Performance improvements:**
-- **3-5x faster processing** on files >100MB
-- **10-20x less RAM usage** on large files
+**Operational advantages:**
+- **Constant memory usage** regardless of file size (streaming architecture)
 - **Single process** eliminates inter-process communication overhead
-- **Constant memory usage** regardless of file size
+- **Predictable performance** - no shell spawning or pipe buffering variability
+- **Maintainable** - TOML configs vs cryptic shell one-liners
+
+> **Note:** For simple single-pattern operations, native tools like `sed` and `grep` are typically faster. rexpipe's value is in multi-step pipelines where maintainability, reusability, and structured output matter more than raw speed.
 
 ## Multi-File Processing
 
