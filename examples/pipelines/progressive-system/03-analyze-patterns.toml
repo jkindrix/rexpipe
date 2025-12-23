@@ -1,0 +1,244 @@
+name = "analyze-patterns"
+version = "1.0.0"
+description = "Stage 3: Analyze graph for patterns, smells, and opportunities"
+#
+# INPUT: Graph from 02-build-graph.toml
+# OUTPUT: Analysis findings with @@FINDING:type:severity:message@@ markers
+#
+# This pipeline detects:
+# - Design patterns (Singleton, Factory, Observer, etc.)
+# - Code smells (God class, Feature envy, etc.)
+# - Architectural issues (Circular dependencies, Layer violations)
+# - Improvement opportunities (Refactoring candidates)
+#
+# The output is designed to be consumed by 04-generate-report.toml
+
+# =============================================================================
+# PASS 1: Detect Design Patterns
+# =============================================================================
+
+# Singleton pattern: class with getInstance
+[[step]]
+type = "substitute"
+description = "Pattern: Singleton"
+pattern = "@@NODE:CLASS:([^@]+)@@(.*)@@NODE:FUNC:getInstance@@"
+replacement = "@@NODE:CLASS:$1@@$2@@NODE:FUNC:getInstance@@@@PATTERN:$1:SINGLETON:Implements Singleton pattern@@"
+flags = ["global"]
+
+# Factory pattern: function that creates objects
+[[step]]
+type = "substitute"
+description = "Pattern: Factory method"
+pattern = "@@NODE:FUNC:(create[A-Z][^@]*)@@"
+replacement = "@@NODE:FUNC:$1@@@@PATTERN:$1:FACTORY:Factory method pattern@@"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Pattern: Factory method (make)"
+pattern = "@@NODE:FUNC:(make[A-Z][^@]*)@@"
+replacement = "@@NODE:FUNC:$1@@@@PATTERN:$1:FACTORY:Factory method pattern@@"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Pattern: Factory method (build)"
+pattern = "@@NODE:FUNC:(build[A-Z][^@]*)@@"
+replacement = "@@NODE:FUNC:$1@@@@PATTERN:$1:BUILDER:Builder pattern@@"
+flags = ["global"]
+
+# Observer pattern: class with subscribe/unsubscribe or on/off
+[[step]]
+type = "substitute"
+description = "Pattern: Observer (subscribe)"
+pattern = "@@NODE:CLASS:([^@]+)@@(.*)@@NODE:FUNC:subscribe@@"
+replacement = "@@NODE:CLASS:$1@@$2@@NODE:FUNC:subscribe@@@@PATTERN:$1:OBSERVER:Implements Observer pattern@@"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Pattern: Observer (on/off)"
+pattern = "@@NODE:CLASS:([^@]+)@@(.*)@@NODE:FUNC:on@@(.*)@@NODE:FUNC:off@@"
+replacement = "@@NODE:CLASS:$1@@$2@@NODE:FUNC:on@@$3@@NODE:FUNC:off@@@@PATTERN:$1:EVENT_EMITTER:Event emitter pattern@@"
+flags = ["global"]
+
+# Repository pattern
+[[step]]
+type = "substitute"
+description = "Pattern: Repository"
+pattern = "@@NODE:CLASS:([^@]*Repository)@@"
+replacement = "@@NODE:CLASS:$1@@@@PATTERN:$1:REPOSITORY:Repository pattern for data access@@"
+flags = ["global"]
+
+# Service pattern
+[[step]]
+type = "substitute"
+description = "Pattern: Service"
+pattern = "@@NODE:CLASS:([^@]*Service)@@"
+replacement = "@@NODE:CLASS:$1@@@@PATTERN:$1:SERVICE:Service layer pattern@@"
+flags = ["global"]
+
+# Controller pattern
+[[step]]
+type = "substitute"
+description = "Pattern: Controller"
+pattern = "@@NODE:CLASS:([^@]*Controller)@@"
+replacement = "@@NODE:CLASS:$1@@@@PATTERN:$1:CONTROLLER:Controller pattern (MVC)@@"
+flags = ["global"]
+
+# =============================================================================
+# PASS 2: Detect Code Smells
+# =============================================================================
+
+# God class: class with too many methods (heuristic: many NODE:FUNC after NODE:CLASS)
+[[step]]
+type = "substitute"
+description = "Smell: Potential god class"
+pattern = "@@NODE:CLASS:([^@]+)@@(.*@@NODE:FUNC:[^@]+@@){8,}"
+replacement = "@@NODE:CLASS:$1@@$2@@SMELL:$1:GOD_CLASS:MEDIUM:Class has many methods - consider splitting@@"
+
+# Feature envy detection simplified (heuristic: many method calls)
+[[step]]
+type = "substitute"
+description = "Smell: High method call count"
+pattern = "(@@EDGE:[^:]+:[^:]+:CALLS@@.*){5,}"
+replacement = "$0@@SMELL:MULTIPLE:FEATURE_ENVY:LOW:Many method calls detected - review for feature envy@@"
+
+# Long parameter list heuristic (signature with many commas)
+[[step]]
+type = "substitute"
+description = "Smell: Long parameter list"
+pattern = "@@SIG:([^:]+):\\([^,]+,[^,]+,[^,]+,[^,]+,[^,]+[^)]*\\)@@"
+replacement = "@@SIG:$1@@@@SMELL:$1:LONG_PARAM_LIST:LOW:Consider using parameter object@@"
+
+# High fan-in already marked
+[[step]]
+type = "substitute"
+description = "Smell: High coupling (fan-in)"
+pattern = "@@METRIC:([^:]+):HIGH_FAN_IN@@"
+replacement = "@@METRIC:$1:HIGH_FAN_IN@@@@SMELL:$1:HIGH_COUPLING:MEDIUM:Many dependents - changes have high impact@@"
+flags = ["global"]
+
+# High fan-out already marked
+[[step]]
+type = "substitute"
+description = "Smell: High dependency (fan-out)"
+pattern = "@@METRIC:([^:]+):HIGH_FAN_OUT@@"
+replacement = "@@METRIC:$1:HIGH_FAN_OUT@@@@SMELL:$1:HIGH_DEPENDENCY:LOW:Depends on many things - fragile@@"
+flags = ["global"]
+
+# =============================================================================
+# PASS 3: Detect Architectural Issues
+# =============================================================================
+
+# Circular dependency detection (heuristic: multiple bidirectional imports)
+# Note: True cycle detection requires backreferences not supported in Rust regex
+# This marks files with many import relationships as potential cycle candidates
+[[step]]
+type = "substitute"
+description = "Issue: Potential circular imports"
+pattern = "(@@EDGE:[^:]+:[^:]+:IMPORTS@@.*){3,}"
+replacement = "$0@@ISSUE:IMPORT_COMPLEXITY:MEDIUM:Many import relationships - review for circular dependencies@@"
+
+# Direct database access from controller (layer violation)
+# Heuristic: Controller pattern followed by Repository call suggests layer bypass
+[[step]]
+type = "substitute"
+description = "Issue: Layer violation"
+pattern = "@@PATTERN:([^:]+):CONTROLLER@@(.*)@@EDGE:[^:]+:([^:]*Repository):CALLS@@"
+replacement = "$0@@ISSUE:LAYER_VIOLATION:MEDIUM:Controller may directly call Repository - review for service layer@@"
+
+# =============================================================================
+# PASS 4: Identify Improvement Opportunities
+# =============================================================================
+
+# Async function that could be batched (heuristic: async with multiple calls)
+[[step]]
+type = "substitute"
+description = "Opportunity: Batch async"
+pattern = "@@ATTR:([^:]+):async@@(.*@@EDGE:[^:]+:[^:]+:CALLS@@){2,}"
+replacement = "$0@@OPPORTUNITY:ASYNC:BATCH_ASYNC:Async function with multiple calls - consider batching@@"
+
+# Function without decorator that matches pattern
+[[step]]
+type = "substitute"
+description = "Opportunity: Add caching"
+pattern = "@@NODE:FUNC:(get[A-Z][^@]*)@@"
+replacement = "@@NODE:FUNC:$1@@@@OPPORTUNITY:$1:CACHEABLE:Getter function - consider caching decorator@@"
+
+# =============================================================================
+# PASS 5: Consolidate Findings
+# =============================================================================
+
+# Convert patterns to findings
+[[step]]
+type = "substitute"
+description = "Finding: Pattern found"
+pattern = "@@PATTERN:([^:]+):([^:]+):([^@]+)@@"
+replacement = "@@FINDING:PATTERN:INFO:$2 in $1 - $3@@"
+flags = ["global"]
+
+# Convert smells to findings
+[[step]]
+type = "substitute"
+description = "Finding: Smell detected"
+pattern = "@@SMELL:([^:]+):([^:]+):([^:]+):([^@]+)@@"
+replacement = "@@FINDING:SMELL:$3:$2 in $1 - $4@@"
+flags = ["global"]
+
+# Convert issues to findings
+[[step]]
+type = "substitute"
+description = "Finding: Issue detected"
+pattern = "@@ISSUE:([^:]+):([^:]+):([^@]+)@@"
+replacement = "@@FINDING:ISSUE:$2:$1 - $3@@"
+flags = ["global"]
+
+# Convert opportunities to findings
+[[step]]
+type = "substitute"
+description = "Finding: Opportunity"
+pattern = "@@OPPORTUNITY:([^:]+):([^:]+):([^@]+)@@"
+replacement = "@@FINDING:OPPORTUNITY:INFO:$2 for $1 - $3@@"
+flags = ["global"]
+
+# =============================================================================
+# PASS 6: Cleanup
+# =============================================================================
+
+# Keep node and edge info for report
+# Remove internal markers
+[[step]]
+type = "substitute"
+description = "Cleanup: Remove metrics"
+pattern = "@@METRIC:[^@]+@@"
+replacement = ""
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Cleanup: Remove attrs"
+pattern = "@@ATTR:[^@]+@@"
+replacement = ""
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Cleanup: Remove provides"
+pattern = "@@PROVIDES:[^@]+@@"
+replacement = ""
+flags = ["global"]
+
+# =============================================================================
+# OUTPUT FORMAT
+# =============================================================================
+#
+# The output contains:
+#   @@NODE:type:name@@           - Symbols in codebase
+#   @@EDGE:from:to:type@@        - Relationships
+#   @@FINDING:category:severity:message@@
+#
+# Categories: PATTERN, SMELL, ISSUE, OPPORTUNITY
+# Severities: HIGH, MEDIUM, LOW, INFO
+#
+# This format is designed to be consumed by 04-generate-report.toml

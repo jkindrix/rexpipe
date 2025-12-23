@@ -1,0 +1,346 @@
+name = "generate-report"
+version = "1.0.0"
+description = "Stage 4: Generate actionable report from analysis findings"
+#
+# INPUT: Analysis from 03-analyze-patterns.toml
+# OUTPUT: Formatted Markdown report
+#
+# This pipeline produces:
+# - Executive summary
+# - Findings by severity
+# - Recommendations by category
+# - Codebase statistics
+# - Action items
+
+# =============================================================================
+# PASS 1: Group Findings by Severity
+# =============================================================================
+
+# Extract findings to their own lines (include trailing colon if present)
+[[step]]
+type = "substitute"
+description = "Group: High severity"
+pattern = "@@FINDING:([^:]+):HIGH:([^@]+)@@:?"
+replacement = "\n@@HIGH_SEV@@🔴 [$1] $2\n"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Group: Medium severity"
+pattern = "@@FINDING:([^:]+):MEDIUM:([^@]+)@@:?"
+replacement = "\n@@MED_SEV@@🟡 [$1] $2\n"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Group: Low severity"
+pattern = "@@FINDING:([^:]+):LOW:([^@]+)@@:?"
+replacement = "\n@@LOW_SEV@@🟢 [$1] $2\n"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Group: Info"
+pattern = "@@FINDING:([^:]+):INFO:([^@]+)@@:?"
+replacement = "\n@@INFO@@ℹ️ [$1] $2\n"
+flags = ["global"]
+
+# =============================================================================
+# PASS 2: Count Statistics
+# =============================================================================
+
+# We'll use the finalize section for counting
+
+# =============================================================================
+# PASS 3: Generate Report Structure
+# =============================================================================
+
+# Convert nodes to stats section
+[[step]]
+type = "substitute"
+description = "Stats: Function count"
+pattern = "@@NODE:FUNC:([^@]+)@@"
+replacement = "@@STAT_FUNC@@"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Stats: Class count"
+pattern = "@@NODE:CLASS:([^@]+)@@"
+replacement = "@@STAT_CLASS@@"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Stats: Import count"
+pattern = "@@NODE:IMPORT:([^@]+)@@"
+replacement = "@@STAT_IMPORT@@"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Stats: Async function count"
+pattern = "@@NODE:ASYNC_FUNC:([^@]+)@@"
+replacement = "@@STAT_ASYNC@@"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Stats: Decorator count"
+pattern = "@@NODE:DECORATOR:([^@]+)@@"
+replacement = "@@STAT_DECORATOR@@"
+flags = ["global"]
+
+# Convert edges to relationship markers
+[[step]]
+type = "substitute"
+description = "Stats: Call edge"
+pattern = "@@EDGE:[^:]+:[^:]+:CALLS@@"
+replacement = "@@STAT_CALL@@"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Stats: Import edge"
+pattern = "@@EDGE:[^:]+:[^:]+:IMPORTS@@"
+replacement = "@@STAT_DEP@@"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Stats: Inherit edge"
+pattern = "@@EDGE:[^:]+:[^:]+:INHERITS@@"
+replacement = "@@STAT_INHERIT@@"
+flags = ["global"]
+
+# Remove other node types
+[[step]]
+type = "substitute"
+description = "Cleanup: Other nodes"
+pattern = "@@NODE:[^@]+@@"
+replacement = ""
+flags = ["global"]
+
+# Remove remaining edges
+[[step]]
+type = "substitute"
+description = "Cleanup: Other edges"
+pattern = "@@EDGE:[^@]+@@"
+replacement = ""
+flags = ["global"]
+
+# =============================================================================
+# PASS 4: Format Output
+# =============================================================================
+
+# Convert severity markers to list items (no duplicate headers)
+[[step]]
+type = "substitute"
+description = "Format: High to list"
+pattern = "@@HIGH_SEV@@"
+replacement = "- "
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Format: Med to list"
+pattern = "@@MED_SEV@@"
+replacement = "- "
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Format: Low to list"
+pattern = "@@LOW_SEV@@"
+replacement = "- "
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Format: Info to list"
+pattern = "@@INFO@@"
+replacement = "- "
+flags = ["global"]
+
+# =============================================================================
+# PASS 5: Final Cleanup
+# =============================================================================
+
+# Remove stat markers (will be counted in finalize)
+[[step]]
+type = "substitute"
+description = "Cleanup: Stat markers"
+pattern = "@@STAT_[A-Z]+@@"
+replacement = ""
+flags = ["global"]
+
+# Remove residual call markers
+[[step]]
+type = "substitute"
+description = "Cleanup: Residual calls"
+pattern = "@@CALL:[^@]+@@"
+replacement = ""
+flags = ["global"]
+
+# Remove residual edge markers
+[[step]]
+type = "substitute"
+description = "Cleanup: Residual edges"
+pattern = "@@EDGE:[^@]+@@"
+replacement = ""
+flags = ["global"]
+
+# Remove residual symbol markers
+[[step]]
+type = "substitute"
+description = "Cleanup: Residual symbols"
+pattern = "@@SYM:[^@]+@@"
+replacement = ""
+flags = ["global"]
+
+# Remove lines with just colons and whitespace
+[[step]]
+type = "substitute"
+description = "Cleanup: Empty colons"
+pattern = "^\\s*:\\s*$"
+replacement = ""
+flags = ["global"]
+
+# Remove lines with just parentheses content
+[[step]]
+type = "substitute"
+description = "Cleanup: Parentheses only"
+pattern = "^\\s*\\([^)]*\\)\\s*$"
+replacement = ""
+flags = ["global"]
+
+# Remove lines with residual code (self., return, etc.)
+[[step]]
+type = "substitute"
+description = "Cleanup: Residual code"
+pattern = "^[^#-][^\\n]*\\.[^\\n]*$"
+replacement = ""
+flags = ["global"]
+
+# Remove lines that are just variable assignments
+[[step]]
+type = "substitute"
+description = "Cleanup: Assignments"
+pattern = "^[a-z_][a-z0-9_]*\\s*=.*$"
+replacement = ""
+flags = ["global"]
+
+# Remove lines with just return statements
+[[step]]
+type = "substitute"
+description = "Cleanup: Returns"
+pattern = "^return\\s.*$"
+replacement = ""
+flags = ["global"]
+
+# Remove lines with just numbers
+[[step]]
+type = "substitute"
+description = "Cleanup: Numbers"
+pattern = "^\\d+$"
+replacement = ""
+flags = ["global"]
+
+# Remove lines with just strings
+[[step]]
+type = "substitute"
+description = "Cleanup: Strings"
+pattern = "^\"[^\"]*\"$"
+replacement = ""
+flags = ["global"]
+
+# Remove lines with await
+[[step]]
+type = "substitute"
+description = "Cleanup: Await"
+pattern = "^.*await.*$"
+replacement = ""
+flags = ["global"]
+
+# Keep lines that have actual findings (contain emoji markers)
+[[step]]
+type = "filter"
+description = "Filter: Keep findings"
+pattern = "ℹ️|🔴|🟡|🟢"
+action = "keep_line"
+
+# Remove leading whitespace from lines
+[[step]]
+type = "substitute"
+description = "Cleanup: Leading whitespace"
+pattern = "^[ \\t]+"
+replacement = ""
+flags = ["global"]
+
+# Remove multiple consecutive newlines
+[[step]]
+type = "substitute"
+description = "Cleanup: Empty lines"
+pattern = "\\n{2,}"
+replacement = "\n"
+flags = ["global"]
+
+# =============================================================================
+# FINALIZE: Generate Complete Report
+# =============================================================================
+
+[finalize]
+enabled = true
+
+[[finalize.counters]]
+name = "high_issues"
+pattern = "🔴"
+description = "Critical issues"
+
+[[finalize.counters]]
+name = "medium_issues"
+pattern = "🟡"
+description = "Warnings"
+
+[[finalize.counters]]
+name = "low_issues"
+pattern = "🟢"
+description = "Suggestions"
+
+[[finalize.counters]]
+name = "patterns"
+pattern = "ℹ️"
+description = "Patterns detected"
+
+template = """# Code Analysis Report
+
+Generated by rexpipe Progressive Analysis System
+
+---
+
+## Executive Summary
+
+| Metric | Count |
+|--------|-------|
+| 🔴 Critical Issues | {{counters.high_issues}} |
+| 🟡 Warnings | {{counters.medium_issues}} |
+| 🟢 Suggestions | {{counters.low_issues}} |
+| ℹ️ Patterns Found | {{counters.patterns}} |
+
+---
+
+{{output}}
+
+---
+
+## Next Steps
+
+1. Address all 🔴 Critical Issues immediately
+2. Review 🟡 Warnings in next sprint
+3. Consider 🟢 Suggestions for technical debt backlog
+4. Document ℹ️ Patterns in architecture docs
+
+---
+
+*Report generated by rexpipe progressive-system pipeline chain*
+"""

@@ -1,0 +1,221 @@
+name = "build-graph"
+version = "1.0.0"
+description = "Stage 2: Build dependency graph from extracted symbols"
+#
+# INPUT: Symbol stream from 01-extract-symbols.toml
+# OUTPUT: Graph structure with @@EDGE:from:to:type@@ and @@NODE:type:name@@ markers
+#
+# This pipeline builds:
+# - Nodes for each symbol (function, class, import)
+# - Edges for dependencies (calls, inheritance, imports)
+# - Clustering for modules/namespaces
+#
+# The output is designed to be consumed by 03-analyze-patterns.toml
+
+# =============================================================================
+# PASS 1: Convert Symbols to Nodes
+# =============================================================================
+
+# Function node
+[[step]]
+type = "substitute"
+description = "Node: Function"
+pattern = "@@SYM:FUNC:([^:]+):([^@]+)@@"
+replacement = "@@NODE:FUNC:$1@@@@SIG:$1:$2@@"
+flags = ["global"]
+
+# Async function node
+[[step]]
+type = "substitute"
+description = "Node: Async Function"
+pattern = "@@SYM:ASYNC_FUNC:([^:]+):([^@]+)@@"
+replacement = "@@NODE:ASYNC_FUNC:$1@@@@SIG:$1:$2@@@@ATTR:$1:async@@"
+flags = ["global"]
+
+# Arrow function node
+[[step]]
+type = "substitute"
+description = "Node: Arrow Function"
+pattern = "@@SYM:ARROW_FUNC:([^:]+):([^@]+)@@"
+replacement = "@@NODE:ARROW_FUNC:$1@@@@SIG:$1:$2@@"
+flags = ["global"]
+
+# Class node (matches new format without extends())
+[[step]]
+type = "substitute"
+description = "Node: Class"
+pattern = "@@SYM:CLASS:([^:]+):([^@]*)@@"
+replacement = "@@NODE:CLASS:$1@@@@EXTENDS:$1:$2@@"
+flags = ["global"]
+
+# Import node
+[[step]]
+type = "substitute"
+description = "Node: Import"
+pattern = "@@SYM:IMPORT:([^:]+):([^@]+)@@"
+replacement = "@@NODE:IMPORT:$1@@@@IMPORTS:$1:$2@@"
+flags = ["global"]
+
+# From-import node
+[[step]]
+type = "substitute"
+description = "Node: From Import"
+pattern = "@@SYM:FROM_IMPORT:([^:]+):([^@]+)@@"
+replacement = "@@NODE:MODULE:$1@@@@IMPORTS:$1:$2@@"
+flags = ["global"]
+
+# Constant node
+[[step]]
+type = "substitute"
+description = "Node: Constant"
+pattern = "@@SYM:CONST:([^:]+):([^@]+)@@"
+replacement = "@@NODE:CONST:$1@@"
+flags = ["global"]
+
+# Decorator node
+[[step]]
+type = "substitute"
+description = "Node: Decorator"
+pattern = "@@SYM:DECORATOR:([^:]+):([^@]+)@@"
+replacement = "@@NODE:DECORATOR:$1@@@@DECOR_ARGS:$1:$2@@"
+flags = ["global"]
+
+# Export node
+[[step]]
+type = "substitute"
+description = "Node: Export"
+pattern = "@@SYM:EXPORT:([^:]+):([^@]+)@@"
+replacement = "@@NODE:EXPORT:$1@@"
+flags = ["global"]
+
+# =============================================================================
+# PASS 2: Build Edges from Inheritance
+# =============================================================================
+
+# Class inheritance edge (only if parent class specified)
+[[step]]
+type = "substitute"
+description = "Edge: Inheritance"
+pattern = "@@EXTENDS:([^:]+):([^@]+)@@"
+replacement = "@@EDGE:$1:$2:INHERITS@@"
+flags = ["global"]
+
+# Remove empty extends markers
+[[step]]
+type = "substitute"
+description = "Cleanup: Empty extends"
+pattern = "@@EXTENDS:[^:]+:@@"
+replacement = ""
+flags = ["global"]
+
+# =============================================================================
+# PASS 3: Build Edges from Imports
+# =============================================================================
+
+# Import dependency edge
+[[step]]
+type = "substitute"
+description = "Edge: Import dependency"
+pattern = "@@IMPORTS:([^:]+):([^@]+)@@"
+replacement = "@@EDGE:CURRENT_MODULE:$1:IMPORTS@@@@PROVIDES:$1:$2@@"
+flags = ["global"]
+
+# =============================================================================
+# PASS 4: Build Edges from Calls
+# =============================================================================
+
+# Function call edge
+[[step]]
+type = "substitute"
+description = "Edge: Function call"
+pattern = "@@CALL:([^@]+)@@"
+replacement = "@@EDGE:CALLER:$1:CALLS@@"
+flags = ["global"]
+
+# =============================================================================
+# PASS 5: Decorator Application Edges
+# =============================================================================
+
+# Decorator applied to next function
+[[step]]
+type = "substitute"
+description = "Edge: Decorator application"
+pattern = "@@NODE:DECORATOR:([^@]+)@@(.{0,200})@@NODE:FUNC:([^@]+)@@"
+replacement = "@@NODE:DECORATOR:$1@@$2@@NODE:FUNC:$3@@@@EDGE:$1:$3:DECORATES@@"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Edge: Decorator to class"
+pattern = "@@NODE:DECORATOR:([^@]+)@@(.{0,200})@@NODE:CLASS:([^@]+)@@"
+replacement = "@@NODE:DECORATOR:$1@@$2@@NODE:CLASS:$3@@@@EDGE:$1:$3:DECORATES@@"
+flags = ["global"]
+
+# =============================================================================
+# PASS 6: Calculate Metrics
+# =============================================================================
+
+# Mark high-connectivity nodes (many calls to same target - heuristic)
+# Note: True fan-in detection requires backreferences not supported in Rust regex
+# This marks functions with many incoming call edges as potential hubs
+[[step]]
+type = "substitute"
+description = "Metric: Mark hub functions"
+pattern = "(@@EDGE:[^:]+:[^:]+:CALLS@@.*){4,}"
+replacement = "$0@@METRIC:MULTIPLE:HIGH_FAN_IN@@"
+
+# Mark functions with many dependencies (heuristic: many outgoing calls)
+# Note: True fan-out detection requires backreferences not supported in Rust regex
+# This is detected by high call edge density in the output
+[[step]]
+type = "substitute"
+description = "Metric: Mark dependent functions"
+pattern = "(@@EDGE:[^:]+:[^:]+:CALLS@@.*){5,}"
+replacement = "$0@@METRIC:MULTIPLE:HIGH_FAN_OUT@@"
+
+# =============================================================================
+# PASS 7: Cleanup Context Lines
+# =============================================================================
+
+# Remove context lines (not needed for graph)
+[[step]]
+type = "substitute"
+description = "Cleanup: Remove context"
+pattern = "@@CTX:[^@]+@@"
+replacement = ""
+flags = ["global"]
+
+# Remove signature details (keep nodes simple)
+[[step]]
+type = "substitute"
+description = "Cleanup: Remove signatures"
+pattern = "@@SIG:[^@]+@@"
+replacement = ""
+flags = ["global"]
+
+# Remove decorator args
+[[step]]
+type = "substitute"
+description = "Cleanup: Remove decorator args"
+pattern = "@@DECOR_ARGS:[^@]+@@"
+replacement = ""
+flags = ["global"]
+
+# =============================================================================
+# OUTPUT FORMAT
+# =============================================================================
+#
+# The output is a graph representation:
+#   @@NODE:FUNC:functionName@@
+#   @@NODE:CLASS:ClassName@@
+#   @@NODE:IMPORT:moduleName@@
+#   @@EDGE:from:to:CALLS@@
+#   @@EDGE:from:to:INHERITS@@
+#   @@EDGE:from:to:IMPORTS@@
+#   @@EDGE:from:to:DECORATES@@
+#   @@METRIC:name:HIGH_FAN_IN@@
+#   @@METRIC:name:HIGH_FAN_OUT@@
+#   @@ATTR:name:property@@
+#   @@PROVIDES:module:(items)@@
+#
+# This format is designed to be parsed by 03-analyze-patterns.toml

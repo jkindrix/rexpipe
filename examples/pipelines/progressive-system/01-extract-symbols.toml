@@ -1,0 +1,230 @@
+name = "extract-symbols"
+version = "1.0.0"
+description = "Stage 1: Extract symbols from source code into structured intermediate format"
+#
+# INPUT: Raw source code (Python, JavaScript, TypeScript, etc.)
+# OUTPUT: Structured symbol table with @@SYM:type:name:signature@@ markers
+#
+# This pipeline extracts:
+# - Function definitions with parameters
+# - Class definitions with methods
+# - Import statements
+# - Global variables/constants
+# - Decorators/annotations
+#
+# The output is an INTERMEDIATE REPRESENTATION designed to be consumed
+# by the next pipeline in the chain (02-build-graph.toml)
+
+# =============================================================================
+# PASS 1: Mark Source Lines with File Context
+# =============================================================================
+
+# Mark Python files (including indented definitions)
+[[step]]
+type = "substitute"
+description = "Context: Mark Python source"
+pattern = "^(\\s*)(def |class |async def |import |from |@)"
+replacement = "$1@@LANG:PY@@$2"
+flags = ["global"]
+
+# Mark JavaScript/TypeScript files (including indented definitions)
+[[step]]
+type = "substitute"
+description = "Context: Mark JS/TS source"
+pattern = "^(\\s*)(function |const |let |var |import |export |class |async function )"
+replacement = "$1@@LANG:JS@@$2"
+flags = ["global"]
+
+# =============================================================================
+# PASS 2: Extract Function Definitions
+# =============================================================================
+
+# Python function: def name(params):
+[[step]]
+type = "substitute"
+description = "Extract: Python function"
+pattern = "@@LANG:PY@@def\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\s*\\(([^)]*)\\)"
+replacement = "@@SYM:FUNC:$1:($2)@@"
+flags = ["global"]
+
+# Python async function
+[[step]]
+type = "substitute"
+description = "Extract: Python async function"
+pattern = "@@LANG:PY@@async\\s+def\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\s*\\(([^)]*)\\)"
+replacement = "@@SYM:ASYNC_FUNC:$1:($2)@@"
+flags = ["global"]
+
+# JavaScript function declaration
+[[step]]
+type = "substitute"
+description = "Extract: JS function declaration"
+pattern = "@@LANG:JS@@function\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\s*\\(([^)]*)\\)"
+replacement = "@@SYM:FUNC:$1:($2)@@"
+flags = ["global"]
+
+# JavaScript arrow function assigned to const
+[[step]]
+type = "substitute"
+description = "Extract: JS arrow function"
+pattern = "@@LANG:JS@@const\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\s*=\\s*\\(([^)]*)\\)\\s*=>"
+replacement = "@@SYM:ARROW_FUNC:$1:($2)@@"
+flags = ["global"]
+
+# JavaScript arrow function single param
+[[step]]
+type = "substitute"
+description = "Extract: JS arrow function single"
+pattern = "@@LANG:JS@@const\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\s*=\\s*([a-zA-Z_][a-zA-Z0-9_]*)\\s*=>"
+replacement = "@@SYM:ARROW_FUNC:$1:($2)@@"
+flags = ["global"]
+
+# =============================================================================
+# PASS 3: Extract Class Definitions
+# =============================================================================
+
+# Python class (use pipe delimiter to avoid call pattern matching)
+[[step]]
+type = "substitute"
+description = "Extract: Python class"
+pattern = "@@LANG:PY@@class\\s+([A-Z][a-zA-Z0-9_]*)\\s*(?:\\(([^)]*)\\))?"
+replacement = "@@SYM:CLASS:$1:$2@@"
+flags = ["global"]
+
+# JavaScript/TypeScript class (use pipe delimiter to avoid call pattern matching)
+[[step]]
+type = "substitute"
+description = "Extract: JS class"
+pattern = "@@LANG:JS@@class\\s+([A-Z][a-zA-Z0-9_]*)(?:\\s+extends\\s+([A-Z][a-zA-Z0-9_]*))?"
+replacement = "@@SYM:CLASS:$1:$2@@"
+flags = ["global"]
+
+# =============================================================================
+# PASS 4: Extract Imports
+# =============================================================================
+
+# Python import
+[[step]]
+type = "substitute"
+description = "Extract: Python import"
+pattern = "@@LANG:PY@@import\\s+([a-zA-Z_][a-zA-Z0-9_.]*)"
+replacement = "@@SYM:IMPORT:$1:module@@"
+flags = ["global"]
+
+# Python from import
+[[step]]
+type = "substitute"
+description = "Extract: Python from import"
+pattern = "@@LANG:PY@@from\\s+([a-zA-Z_][a-zA-Z0-9_.]*)\\s+import\\s+([a-zA-Z_*][a-zA-Z0-9_,\\s]*)"
+replacement = "@@SYM:FROM_IMPORT:$1:($2)@@"
+flags = ["global"]
+
+# JavaScript import
+[[step]]
+type = "substitute"
+description = "Extract: JS import"
+pattern = "@@LANG:JS@@import\\s+\\{([^}]+)\\}\\s+from\\s+['\"]([^'\"]+)['\"]"
+replacement = "@@SYM:IMPORT:$2:($1)@@"
+flags = ["global"]
+
+# JavaScript default import
+[[step]]
+type = "substitute"
+description = "Extract: JS default import"
+pattern = "@@LANG:JS@@import\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\s+from\\s+['\"]([^'\"]+)['\"]"
+replacement = "@@SYM:IMPORT:$2:default($1)@@"
+flags = ["global"]
+
+# =============================================================================
+# PASS 5: Extract Decorators/Annotations
+# =============================================================================
+
+# Python decorator
+[[step]]
+type = "substitute"
+description = "Extract: Python decorator"
+pattern = "@@LANG:PY@@@([a-zA-Z_][a-zA-Z0-9_.]*)(?:\\(([^)]*)\\))?"
+replacement = "@@SYM:DECORATOR:$1:($2)@@"
+flags = ["global"]
+
+# =============================================================================
+# PASS 6: Extract Constants/Globals
+# =============================================================================
+
+# Python constant (ALL_CAPS)
+[[step]]
+type = "substitute"
+description = "Extract: Python constant"
+pattern = "^([A-Z][A-Z0-9_]*)\\s*="
+replacement = "@@SYM:CONST:$1:global@@"
+flags = ["global"]
+
+# JavaScript const (top level, uppercase)
+[[step]]
+type = "substitute"
+description = "Extract: JS constant"
+pattern = "@@LANG:JS@@const\\s+([A-Z][A-Z0-9_]*)\\s*="
+replacement = "@@SYM:CONST:$1:global@@"
+flags = ["global"]
+
+# JavaScript export
+[[step]]
+type = "substitute"
+description = "Extract: JS export"
+pattern = "@@LANG:JS@@export\\s+(const|function|class|default)"
+replacement = "@@SYM:EXPORT:$1:module@@"
+flags = ["global"]
+
+# =============================================================================
+# PASS 7: Extract Method Calls (for later graph building)
+# =============================================================================
+
+# Method calls: obj.method()
+[[step]]
+type = "substitute"
+description = "Extract: Method call"
+pattern = "([a-zA-Z_][a-zA-Z0-9_]*)\\.([a-zA-Z_][a-zA-Z0-9_]*)\\("
+replacement = "@@CALL:$1.$2@@("
+flags = ["global"]
+
+# Function calls: func()
+[[step]]
+type = "substitute"
+description = "Extract: Function call"
+pattern = "([a-zA-Z_][a-zA-Z0-9_]*)\\("
+replacement = "@@CALL:$1@@("
+flags = ["global"]
+
+# =============================================================================
+# PASS 8: Cleanup and Format
+# =============================================================================
+
+# Remove language markers (job done)
+[[step]]
+type = "substitute"
+description = "Cleanup: Remove lang markers"
+pattern = "@@LANG:[A-Z]+@@"
+replacement = ""
+flags = ["global"]
+
+# Mark lines without symbols as context (only lines with no @@ markers)
+[[step]]
+type = "substitute"
+description = "Cleanup: Mark context lines"
+pattern = "^([^@\\n][^@]{0,80})$"
+replacement = "@@CTX:$1@@"
+
+# =============================================================================
+# OUTPUT FORMAT
+# =============================================================================
+#
+# The output is a stream of markers:
+#   @@SYM:FUNC:name:(params)@@
+#   @@SYM:CLASS:name:extends(parent)@@
+#   @@SYM:IMPORT:module:(items)@@
+#   @@SYM:DECORATOR:name:(args)@@
+#   @@SYM:CONST:NAME:global@@
+#   @@CALL:target@@
+#   @@CTX:source line@@
+#
+# This format is designed to be parsed by 02-build-graph.toml
