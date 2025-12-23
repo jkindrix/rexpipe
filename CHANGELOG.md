@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Shorthand config syntax**: Use `[[filter]]`, `[[substitute]]`, `[[extract]]`,
+  `[[validate]]`, `[[transform]]`, and `[[block]]` sections instead of `[[step]]` + `type = "..."`
+  for more concise pipeline configurations
+- **Per-step PCRE mode**: Enable PCRE regex engine (lookahead/lookbehind) for individual
+  steps via `flags = ["pcre"]` without requiring global `--pcre` mode
+- **CLI verbosity flags**: Control logging verbosity with `-v`/`--verbose` flags
+  - `-v` = info, `-vv` = debug, `-vvv` = trace level
+  - RUST_LOG still works as fallback for fine-grained control
+- **Enhanced quiet mode**: `-q`/`--quiet` now also reduces log level to errors-only,
+  providing unified "quiet in every way" behavior. Use `-q -v` to suppress output
+  while still seeing info logs
+- **Step-level trace logging**: When using `-vvv` or `RUST_LOG=rexpipe=trace`,
+  shows which step dropped each line for easier pipeline debugging
+- **Comprehensive help sections**: Added SHORTHAND SYNTAX, FILTER ACTIONS,
+  PER-STEP FLAGS, CONFIG COMPOSITION, and DEBUGGING sections to `--help` output
+
+### Fixed
+
+- **Benchmark CI configuration**: Fixed `cargo bench` to specify benchmark target
+  explicitly, preventing false failures from lib/bin targets
+
 ## [2.0.0] - 2024-12-21
 
 ### Changed
