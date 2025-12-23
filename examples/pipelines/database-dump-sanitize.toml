@@ -1,0 +1,137 @@
+# Database Dump Sanitization Pipeline
+# Sanitizes SQL dump files for sharing, testing, or compliance
+#
+# Usage:
+#   mysqldump mydb | rexpipe -c database-dump-sanitize.toml > sanitized.sql
+#   pg_dump mydb | rexpipe -c database-dump-sanitize.toml > sanitized.sql
+#   cat backup.sql | rexpipe -c database-dump-sanitize.toml > safe.sql
+#
+# Handles:
+#   - Email addresses, phone numbers, SSNs
+#   - Passwords and hashes in INSERT statements
+#   - Connection strings and credentials
+#   - IP addresses and hostnames
+#   - Credit card numbers
+
+name = "database-dump-sanitize"
+description = "Sanitize database dumps for safe sharing or testing"
+version = "1.0.0"
+
+# Step 1: Redact password hashes in INSERT statements
+[[step]]
+type = "substitute"
+description = "Redact bcrypt password hashes"
+pattern = '\$2[aby]\$\d+\$[./A-Za-z0-9]{53}'
+replacement = '$2a$10$[BCRYPT_HASH_REDACTED]'
+flags = ["global"]
+
+# Step 2: Redact MD5/SHA hashes
+[[step]]
+type = "substitute"
+description = "Redact MD5/SHA hashes in password fields"
+pattern = "('password'\\s*,\\s*')[a-fA-F0-9]{32,128}'"
+replacement = "${1}[HASH_REDACTED]'"
+flags = ["global"]
+
+# Step 3: Redact email addresses in VALUES
+[[step]]
+type = "substitute"
+description = "Redact email addresses"
+pattern = "'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}'"
+replacement = "'user_${count}@example.com'"
+flags = ["global"]
+
+# Step 4: Redact phone numbers (various formats)
+[[step]]
+type = "substitute"
+description = "Redact US phone numbers"
+pattern = "'(?:\\+1[-\\s]?)?\\(?\\d{3}\\)?[-\\s.]?\\d{3}[-\\s.]?\\d{4}'"
+replacement = "'555-000-${count}'"
+flags = ["global"]
+
+# Step 5: Redact SSNs
+[[step]]
+type = "substitute"
+description = "Redact Social Security Numbers"
+pattern = "'\\d{3}-\\d{2}-\\d{4}'"
+replacement = "'XXX-XX-XXXX'"
+flags = ["global"]
+
+# Step 6: Redact credit card numbers
+[[step]]
+type = "substitute"
+description = "Redact credit card numbers"
+pattern = "'\\d{4}[- ]?\\d{4}[- ]?\\d{4}[- ]?\\d{4}'"
+replacement = "'XXXX-XXXX-XXXX-XXXX'"
+flags = ["global"]
+
+# Step 7: Redact connection strings
+[[step]]
+type = "substitute"
+description = "Redact database connection strings"
+pattern = "(mysql|postgresql|postgres|mongodb|redis|mssql)://[^\\s\"']+@[^\\s\"']+"
+replacement = '${1}://[USER]:[PASS]@[HOST]/[DB]'
+flags = ["global"]
+
+# Step 8: Redact GRANT statements with passwords
+[[step]]
+type = "substitute"
+description = "Redact GRANT passwords"
+pattern = "(IDENTIFIED BY\\s*')[^']+"
+replacement = "${1}[PASSWORD_REDACTED]"
+flags = ["global", "case_insensitive"]
+
+# Step 9: Redact SET PASSWORD statements
+[[step]]
+type = "substitute"
+description = "Redact SET PASSWORD"
+pattern = "(SET PASSWORD.*=\\s*PASSWORD\\s*\\(')[^']+"
+replacement = "${1}[PASSWORD_REDACTED]"
+flags = ["global", "case_insensitive"]
+
+# Step 10: Redact IP addresses in data
+[[step]]
+type = "substitute"
+description = "Redact IP addresses"
+pattern = "'\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}'"
+replacement = "'10.0.0.1'"
+flags = ["global"]
+
+# Step 11: Redact API keys/tokens in data
+[[step]]
+type = "substitute"
+description = "Redact API tokens"
+pattern = "'(sk_live_|pk_live_|api_key_|token_)[A-Za-z0-9]{20,}'"
+replacement = "'${1}[REDACTED]'"
+flags = ["global"]
+
+# Step 12: Replace real names with generic ones (first names)
+[[step]]
+type = "substitute"
+description = "Replace first_name values"
+pattern = "('first_name'\\s*,\\s*)'[A-Za-z]+'"
+replacement = "${1}'User'"
+flags = ["global"]
+
+# Step 13: Replace last names
+[[step]]
+type = "substitute"
+description = "Replace last_name values"
+pattern = "('last_name'\\s*,\\s*)'[A-Za-z]+'"
+replacement = "${1}'Test'"
+flags = ["global"]
+
+# Step 14: Redact user agent strings (privacy)
+[[step]]
+type = "substitute"
+description = "Redact user agents"
+pattern = "'Mozilla/[^']+'"
+replacement = "'[USER_AGENT_REDACTED]'"
+flags = ["global"]
+
+# Step 15: Keep structure comments but add sanitization notice
+[[step]]
+type = "substitute"
+description = "Add sanitization header"
+pattern = '^(-- MySQL dump|-- PostgreSQL database dump)'
+replacement = '-- SANITIZED DUMP - Sensitive data has been redacted\n${1}'

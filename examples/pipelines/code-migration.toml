@@ -1,0 +1,76 @@
+# Code Migration Pipeline
+# Safe codebase-wide migrations with atomic mode support
+#
+# Usage (dry-run first):
+#   rexpipe -c code-migration.toml -R --dry-run src/
+#
+# Usage (atomic - all-or-nothing):
+#   rexpipe -c code-migration.toml -R -i --atomic --apply src/
+#
+# Usage (with backup):
+#   rexpipe -c code-migration.toml -R -i -b .bak --atomic --apply src/
+#
+# Atomic mode ensures that either ALL files are migrated successfully,
+# or NONE are changed (rollback on any failure).
+
+name = "code-migration"
+description = "Safe codebase-wide migration with atomic rollback"
+version = "1.0.0"
+
+# Example: Migrate deprecated API calls to new API
+
+# Step 1: Rename deprecated function
+[[step]]
+type = "substitute"
+description = "Rename getUser() to fetchUser()"
+pattern = '\bgetUser\s*\('
+replacement = 'fetchUser('
+flags = ["global"]
+
+# Step 2: Update method signature
+[[step]]
+type = "substitute"
+description = "Update getUserById to fetchUserById"
+pattern = '\bgetUserById\s*\('
+replacement = 'fetchUserById('
+flags = ["global"]
+
+# Step 3: Update import statements
+[[step]]
+type = "substitute"
+description = "Update import from old module"
+pattern = "from\\s+['\"]legacy/user['\"]"
+replacement = 'from "services/user"'
+flags = ["global"]
+
+# Step 4: Update require statements
+[[step]]
+type = "substitute"
+description = "Update require from old module"
+pattern = "require\\s*\\(['\"]legacy/user['\"]\\)"
+replacement = "require('services/user')"
+flags = ["global"]
+
+# Step 5: Update configuration keys
+[[step]]
+type = "substitute"
+description = "Rename config key"
+pattern = '\buser_api_endpoint\b'
+replacement = 'user_service_url'
+flags = ["global"]
+
+# Step 6: Update environment variable references
+[[step]]
+type = "substitute"
+description = "Rename env var reference"
+pattern = '\bUSER_API_ENDPOINT\b'
+replacement = 'USER_SERVICE_URL'
+flags = ["global"]
+
+# Step 7: Add deprecation notice to old patterns found
+[[step]]
+type = "substitute"
+description = "Mark remaining legacy patterns"
+pattern = '(legacy_user_\w+)'
+replacement = '/* DEPRECATED: $1 - please migrate */'
+flags = ["global"]

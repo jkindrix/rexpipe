@@ -1,0 +1,69 @@
+# Commit Message Linting Pipeline
+# Validates and formats commit messages
+#
+# Usage (validate only with built-in mode):
+#   rexpipe --conventional-commits < .git/COMMIT_EDITMSG
+#
+# Usage (with this pipeline for custom rules):
+#   rexpipe -c commit-lint.toml < .git/COMMIT_EDITMSG
+#
+# Git hook integration (in .git/hooks/commit-msg):
+#   #!/bin/sh
+#   rexpipe --conventional-commits < "$1" || exit 1
+#
+# Or with pre-commit (see .pre-commit-hooks.yaml)
+
+name = "commit-lint"
+description = "Lint and validate commit messages"
+version = "1.0.0"
+
+# Step 1: Check for valid type prefix
+[[step]]
+type = "validate"
+description = "Require conventional commit type"
+pattern = '^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\(.+\))?(!)?: .+'
+action = "fail"
+
+# Step 2: Ensure first letter of description is lowercase
+[[step]]
+type = "substitute"
+description = "Lowercase first letter of description"
+pattern = '^((?:feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(?:\(.+\))?(?:!)?: )([A-Z])'
+replacement = '${1}${lower:$2}'
+flags = []
+
+# Step 3: Remove trailing periods from subject
+[[step]]
+type = "substitute"
+description = "Remove trailing period from subject"
+pattern = '^([^\n]+)\.\s*$'
+replacement = '$1'
+
+# Step 4: Ensure subject is not too long (soft limit)
+# This marks long subjects but doesn't fail
+[[step]]
+type = "substitute"
+description = "Warn about long subjects (>72 chars)"
+pattern = '^(.{73,})'
+replacement = '$1 [WARNING: subject exceeds 72 chars]'
+
+# Step 5: Highlight breaking changes
+[[step]]
+type = "substitute"
+description = "Highlight breaking changes"
+pattern = '^([^:]+!:)'
+replacement = '[BREAKING] $1'
+
+# Step 6: Highlight scope if present
+[[step]]
+type = "substitute"
+description = "Format scope for visibility"
+pattern = '^\[BREAKING\] ([a-z]+)\(([^)]+)\)'
+replacement = '[BREAKING][$2] $1'
+
+# Step 7: Clean up comment lines (git commit message comments)
+[[step]]
+type = "filter"
+description = "Remove git comment lines"
+pattern = '^#'
+action = "drop_line"

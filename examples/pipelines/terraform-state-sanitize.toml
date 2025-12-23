@@ -1,0 +1,171 @@
+# Terraform State File Sanitization Pipeline
+# Sanitizes terraform.tfstate files for sharing, debugging, or documentation
+#
+# WARNING: Terraform state often contains extremely sensitive data.
+# Always review output before sharing.
+#
+# Usage:
+#   cat terraform.tfstate | rexpipe -c terraform-state-sanitize.toml > sanitized.tfstate
+#   terraform show -json | rexpipe -c terraform-state-sanitize.toml
+#
+# Handles:
+#   - AWS credentials, account IDs, ARNs
+#   - Database passwords, connection strings
+#   - Private keys, certificates
+#   - IP addresses, endpoints
+#   - Secrets from secret managers
+
+name = "terraform-state-sanitize"
+description = "Sanitize Terraform state files for safe sharing"
+version = "1.0.0"
+
+# Step 1: Redact AWS account IDs
+[[step]]
+type = "substitute"
+description = "Redact AWS account IDs"
+pattern = '"(\d{12})"'
+replacement = '"[AWS_ACCOUNT]"'
+flags = ["global"]
+
+# Step 2: Redact ARNs
+[[step]]
+type = "substitute"
+description = "Redact AWS ARNs"
+pattern = '"arn:aws[a-z-]*:[a-z0-9-]+:[a-z0-9-]*:\d{12}:[^"]*"'
+replacement = '"arn:aws:service:region:[ACCOUNT]:[RESOURCE]"'
+flags = ["global"]
+
+# Step 3: Redact AWS access keys
+[[step]]
+type = "substitute"
+description = "Redact AWS access key IDs"
+pattern = '"(AKIA|ASIA)[A-Z0-9]{16}"'
+replacement = '"[AWS_ACCESS_KEY]"'
+flags = ["global"]
+
+# Step 4: Redact AWS secret keys
+[[step]]
+type = "substitute"
+description = "Redact AWS secret access keys"
+pattern = '"secret[_-]?key"\s*:\s*"[^"]{40}"'
+replacement = '"secret_key": "[SECRET_REDACTED]"'
+flags = ["global", "case_insensitive"]
+
+# Step 5: Redact database passwords
+[[step]]
+type = "substitute"
+description = "Redact database passwords"
+pattern = '"(password|master_password|db_password)"\s*:\s*"[^"]*"'
+replacement = '"${1}": "[PASSWORD_REDACTED]"'
+flags = ["global", "case_insensitive"]
+
+# Step 6: Redact connection strings
+[[step]]
+type = "substitute"
+description = "Redact connection strings"
+pattern = '"(postgres|mysql|mongodb|redis|amqp)://[^"]*"'
+replacement = '"${1}://[USER]:[PASS]@[HOST]/[DB]"'
+flags = ["global"]
+
+# Step 7: Redact private keys
+[[step]]
+type = "substitute"
+description = "Redact private keys"
+pattern = '"-----BEGIN [A-Z ]+ PRIVATE KEY-----[^"]+-----END [A-Z ]+ PRIVATE KEY-----"'
+replacement = '"[PRIVATE_KEY_REDACTED]"'
+flags = ["global"]
+
+# Step 8: Redact certificates
+[[step]]
+type = "substitute"
+description = "Redact certificates"
+pattern = '"-----BEGIN CERTIFICATE-----[^"]+-----END CERTIFICATE-----"'
+replacement = '"[CERTIFICATE_REDACTED]"'
+flags = ["global"]
+
+# Step 9: Redact API keys/tokens
+[[step]]
+type = "substitute"
+description = "Redact API keys"
+pattern = '"(api[_-]?key|auth[_-]?token|access[_-]?token)"\s*:\s*"[^"]{16,}"'
+replacement = '"${1}": "[TOKEN_REDACTED]"'
+flags = ["global", "case_insensitive"]
+
+# Step 10: Redact SSH public keys (keep structure, redact content)
+[[step]]
+type = "substitute"
+description = "Redact SSH public keys"
+pattern = '"ssh-(rsa|ed25519|ecdsa) [A-Za-z0-9+/=]+ [^"]*"'
+replacement = '"ssh-${1} [PUBLIC_KEY] user@host"'
+flags = ["global"]
+
+# Step 11: Redact IP addresses
+[[step]]
+type = "substitute"
+description = "Redact IP addresses"
+pattern = '"\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}"'
+replacement = '"[IP_ADDRESS]"'
+flags = ["global"]
+
+# Step 12: Redact CIDR blocks (but preserve structure)
+[[step]]
+type = "substitute"
+description = "Redact CIDR blocks"
+pattern = '"\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/\d{1,2}"'
+replacement = '"10.0.0.0/16"'
+flags = ["global"]
+
+# Step 13: Redact endpoints/URLs
+[[step]]
+type = "substitute"
+description = "Redact custom endpoints"
+pattern = '"endpoint"\s*:\s*"https?://[^"]*"'
+replacement = '"endpoint": "https://[ENDPOINT]"'
+flags = ["global"]
+
+# Step 14: Redact S3 bucket names
+[[step]]
+type = "substitute"
+description = "Redact S3 bucket names"
+pattern = '"bucket"\s*:\s*"[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]"'
+replacement = '"bucket": "[S3_BUCKET]"'
+flags = ["global"]
+
+# Step 15: Redact SNS/SQS ARNs and names
+[[step]]
+type = "substitute"
+description = "Redact queue/topic names"
+pattern = '"(queue_name|topic_name|sns_topic)"\s*:\s*"[^"]*"'
+replacement = '"${1}": "[RESOURCE_NAME]"'
+flags = ["global"]
+
+# Step 16: Redact KMS key IDs
+[[step]]
+type = "substitute"
+description = "Redact KMS key IDs"
+pattern = '"(kms_key_id|key_id)"\s*:\s*"[a-f0-9-]{36}"'
+replacement = '"${1}": "[KMS_KEY]"'
+flags = ["global"]
+
+# Step 17: Redact secrets manager values
+[[step]]
+type = "substitute"
+description = "Redact secrets manager ARNs"
+pattern = '"arn:aws:secretsmanager:[^"]*"'
+replacement = '"arn:aws:secretsmanager:region:[ACCOUNT]:secret:[NAME]"'
+flags = ["global"]
+
+# Step 18: Redact RDS endpoints
+[[step]]
+type = "substitute"
+description = "Redact RDS endpoints"
+pattern = '"[a-z0-9-]+\.[a-z0-9]+\.[a-z]+-[a-z]+-\d\.rds\.amazonaws\.com"'
+replacement = '"[RDS_ENDPOINT].rds.amazonaws.com"'
+flags = ["global"]
+
+# Step 19: Preserve serial numbers but add note
+[[step]]
+type = "substitute"
+description = "Note on serial numbers"
+pattern = '"serial"\s*:\s*(\d+)'
+replacement = '"serial": ${1}'

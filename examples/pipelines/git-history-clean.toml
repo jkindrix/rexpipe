@@ -1,0 +1,147 @@
+# Git History Cleaning Pipeline
+# Alternative to BFG Repo-Cleaner for cleaning sensitive data from git exports
+#
+# Usage:
+#   # Export git log/patches and sanitize
+#   git log -p | rexpipe -c git-history-clean.toml > cleaned-history.patch
+#
+#   # Clean a single file's history
+#   git log -p -- secrets.txt | rexpipe -c git-history-clean.toml
+#
+#   # Sanitize git format-patch output
+#   git format-patch origin/main | xargs -I {} rexpipe -c git-history-clean.toml {}
+#
+# NOTE: This sanitizes exported diffs/patches. For rewriting actual git history,
+# use git-filter-repo or BFG after generating sanitized patches.
+
+name = "git-history-clean"
+description = "Clean sensitive data from git patches and log output"
+version = "1.0.0"
+
+# Step 1: Redact AWS credentials
+[[step]]
+type = "substitute"
+description = "Redact AWS access keys"
+pattern = '\b(AKIA|ASIA)[A-Z0-9]{16}\b'
+replacement = '[AWS_KEY_REDACTED]'
+flags = ["global"]
+
+# Step 2: Redact AWS secret keys (40 char after key= or similar)
+[[step]]
+type = "substitute"
+description = "Redact AWS secret keys"
+pattern = '(secret[_-]?key|aws[_-]?secret)["\s:=]+[A-Za-z0-9+/]{40}'
+replacement = '${1}="[SECRET_REDACTED]"'
+flags = ["global", "case_insensitive"]
+
+# Step 3: Redact GitHub tokens
+[[step]]
+type = "substitute"
+description = "Redact GitHub tokens"
+pattern = '\b(gh[ps]_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9]{22}_[A-Za-z0-9]{59})\b'
+replacement = '[GITHUB_TOKEN_REDACTED]'
+flags = ["global"]
+
+# Step 4: Redact GitLab tokens
+[[step]]
+type = "substitute"
+description = "Redact GitLab tokens"
+pattern = '\bglpat-[A-Za-z0-9]{20}\b'
+replacement = '[GITLAB_TOKEN_REDACTED]'
+flags = ["global"]
+
+# Step 5: Redact Slack tokens
+[[step]]
+type = "substitute"
+description = "Redact Slack tokens"
+pattern = '\bxox[baprs]-[0-9]+-[A-Za-z0-9-]+'
+replacement = '[SLACK_TOKEN_REDACTED]'
+flags = ["global"]
+
+# Step 6: Redact Stripe keys
+[[step]]
+type = "substitute"
+description = "Redact Stripe keys"
+pattern = '\b(sk_live_|pk_live_|rk_live_)[A-Za-z0-9]{24,}\b'
+replacement = '[STRIPE_KEY_REDACTED]'
+flags = ["global"]
+
+# Step 7: Redact SendGrid keys
+[[step]]
+type = "substitute"
+description = "Redact SendGrid API keys"
+pattern = '\bSG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}\b'
+replacement = '[SENDGRID_KEY_REDACTED]'
+flags = ["global"]
+
+# Step 8: Redact Twilio credentials
+[[step]]
+type = "substitute"
+description = "Redact Twilio SIDs and tokens"
+pattern = '\b(AC|SK)[a-fA-F0-9]{32}\b'
+replacement = '[TWILIO_ID_REDACTED]'
+flags = ["global"]
+
+# Step 9: Redact private keys
+[[step]]
+type = "substitute"
+description = "Redact RSA/DSA private key blocks"
+pattern = '-----BEGIN [A-Z ]+ PRIVATE KEY-----[^-]+-----END [A-Z ]+ PRIVATE KEY-----'
+replacement = '[PRIVATE_KEY_REDACTED]'
+flags = ["global"]
+
+# Step 10: Redact SSH private keys
+[[step]]
+type = "substitute"
+description = "Redact SSH private key content"
+pattern = '-----BEGIN OPENSSH PRIVATE KEY-----[^-]+-----END OPENSSH PRIVATE KEY-----'
+replacement = '[SSH_KEY_REDACTED]'
+flags = ["global"]
+
+# Step 11: Redact password assignments
+[[step]]
+type = "substitute"
+description = "Redact password variable assignments"
+pattern = "(password|passwd|pwd|secret|api[_-]?key)\\s*[:=]\\s*[\"'][^\"']{4,}[\"']"
+replacement = '${1}="[REDACTED]"'
+flags = ["global", "case_insensitive"]
+
+# Step 12: Redact connection strings
+[[step]]
+type = "substitute"
+description = "Redact database connection strings"
+pattern = "(mysql|postgresql|postgres|mongodb|redis|amqp)://[^@]+@[^\\s\"')\\]]+"
+replacement = '${1}://[CREDENTIALS]@[HOST]/[DB]'
+flags = ["global"]
+
+# Step 13: Redact .env file values (common pattern)
+[[step]]
+type = "substitute"
+description = "Redact .env secret values"
+pattern = '^([+]?\s*)(DATABASE_URL|SECRET_KEY|API_KEY|PRIVATE_KEY|AUTH_TOKEN)=.+'
+replacement = '${1}${2}=[REDACTED]'
+flags = ["global"]
+
+# Step 14: Redact JWT tokens
+[[step]]
+type = "substitute"
+description = "Redact JWT tokens"
+pattern = '\beyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b'
+replacement = '[JWT_REDACTED]'
+flags = ["global"]
+
+# Step 15: Redact email addresses in commits
+[[step]]
+type = "substitute"
+description = "Redact email addresses"
+pattern = '[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'
+replacement = 'user@example.com'
+flags = ["global"]
+
+# Step 16: Preserve diff structure but redact binary data
+[[step]]
+type = "substitute"
+description = "Redact binary diff content"
+pattern = '(GIT binary patch\n)literalsize \d+\n[A-Za-z0-9+/=\n]+'
+replacement = '${1}[BINARY_DATA_REDACTED]'
+flags = ["global"]

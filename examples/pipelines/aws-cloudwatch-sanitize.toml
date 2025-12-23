@@ -1,0 +1,112 @@
+# AWS CloudWatch Log Sanitization Pipeline
+# Sanitizes CloudWatch logs for sharing, debugging, or compliance
+#
+# Usage:
+#   cat cloudwatch-export.json | rexpipe -c aws-cloudwatch-sanitize.toml
+#   aws logs get-log-events --log-group-name /app/prod | rexpipe -c aws-cloudwatch-sanitize.toml
+#
+# Handles:
+#   - AWS account IDs, ARNs, access keys
+#   - IP addresses, request IDs
+#   - User emails, session tokens
+#   - Lambda request/correlation IDs
+
+name = "aws-cloudwatch-sanitize"
+description = "Sanitize AWS CloudWatch logs for safe sharing"
+version = "1.0.0"
+
+# Step 1: Redact AWS Account IDs (12-digit numbers in specific contexts)
+[[step]]
+type = "substitute"
+description = "Redact AWS account IDs"
+pattern = '(?:arn:aws[^:]*:[^:]*:)[^:]*:(\d{12}):'
+replacement = 'arn:aws:service:region:[ACCOUNT_ID]:'
+flags = ["global"]
+
+# Step 2: Redact full ARNs
+[[step]]
+type = "substitute"
+description = "Redact complete ARNs"
+pattern = "arn:aws[a-z-]*:[a-z0-9-]+:[a-z0-9-]*:\\d{12}:[^\\s\"'\\]}\\n]+"
+replacement = '[ARN_REDACTED]'
+flags = ["global"]
+
+# Step 3: Redact AWS Access Key IDs (AKIA...)
+[[step]]
+type = "substitute"
+description = "Redact AWS access key IDs"
+pattern = '\b(AKIA|ABIA|ACCA|AGPA|AIDA|AIPA|AKIA|ANPA|ANVA|AROA|ASCA|ASIA)[A-Z0-9]{16}\b'
+replacement = '[AWS_ACCESS_KEY]'
+flags = ["global"]
+
+# Step 4: Redact AWS Secret Access Keys (40 char base64)
+[[step]]
+type = "substitute"
+description = "Redact AWS secret access keys"
+pattern = '(?:aws_secret_access_key|secret_key|SecretAccessKey)["\s:=]+[A-Za-z0-9+/]{40}'
+replacement = '$0[SECRET_KEY_REDACTED]'
+flags = ["global", "case_insensitive"]
+
+# Step 5: Redact AWS session tokens
+[[step]]
+type = "substitute"
+description = "Redact AWS session tokens"
+pattern = '(?:aws_session_token|SessionToken)["\s:=]+[A-Za-z0-9+/=]{100,}'
+replacement = '$0[SESSION_TOKEN_REDACTED]'
+flags = ["global", "case_insensitive"]
+
+# Step 6: Redact Lambda request IDs
+[[step]]
+type = "substitute"
+description = "Anonymize Lambda request IDs"
+pattern = '\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b'
+replacement = '[REQUEST_ID]'
+flags = ["global"]
+
+# Step 7: Redact IP addresses
+[[step]]
+type = "substitute"
+description = "Redact IP addresses"
+pattern = '\b(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\b'
+replacement = '[IP_ADDR]'
+flags = ["global"]
+
+# Step 8: Redact email addresses
+[[step]]
+type = "substitute"
+description = "Redact email addresses"
+pattern = '[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'
+replacement = '[EMAIL]'
+flags = ["global"]
+
+# Step 9: Redact S3 bucket names (common patterns)
+[[step]]
+type = "substitute"
+description = "Redact S3 bucket names"
+pattern = 's3://[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]'
+replacement = 's3://[BUCKET]'
+flags = ["global"]
+
+# Step 10: Redact API Gateway request IDs
+[[step]]
+type = "substitute"
+description = "Redact API Gateway request IDs"
+pattern = '\bRequestId: [a-zA-Z0-9-]+'
+replacement = 'RequestId: [REQUEST_ID]'
+flags = ["global"]
+
+# Step 11: Redact X-Ray trace IDs
+[[step]]
+type = "substitute"
+description = "Redact X-Ray trace IDs"
+pattern = '\b1-[0-9a-f]{8}-[0-9a-f]{24}\b'
+replacement = '[XRAY_TRACE_ID]'
+flags = ["global"]
+
+# Step 12: Redact Cognito identity IDs
+[[step]]
+type = "substitute"
+description = "Redact Cognito identity IDs"
+pattern = '\b[a-z]{2}-[a-z]+-\d:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b'
+replacement = '[COGNITO_ID]'
+flags = ["global"]

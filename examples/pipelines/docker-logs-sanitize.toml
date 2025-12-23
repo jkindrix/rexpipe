@@ -1,0 +1,145 @@
+# Docker Logs Sanitization Pipeline
+# Sanitizes Docker container logs for sharing and debugging
+#
+# Usage:
+#   docker logs mycontainer | rexpipe -c docker-logs-sanitize.toml
+#   docker-compose logs | rexpipe -c docker-logs-sanitize.toml
+#   cat /var/lib/docker/containers/*/json.log | rexpipe -c docker-logs-sanitize.toml
+#
+# Handles:
+#   - Container IDs, image names
+#   - Network addresses, ports
+#   - Secrets, environment variables
+#   - Request IDs, session tokens
+
+name = "docker-logs-sanitize"
+description = "Sanitize Docker container logs for safe sharing"
+version = "1.0.0"
+
+# Step 1: Anonymize container IDs (64-char hex)
+[[step]]
+type = "substitute"
+description = "Anonymize full container IDs"
+pattern = '\b[a-f0-9]{64}\b'
+replacement = '[CONTAINER_ID]'
+flags = ["global"]
+
+# Step 2: Anonymize short container IDs (12-char hex at start of log lines)
+[[step]]
+type = "substitute"
+description = "Anonymize short container IDs"
+pattern = '^([a-f0-9]{12})\s+'
+replacement = '[CONTAINER] '
+flags = ["global"]
+
+# Step 3: Anonymize container names in docker-compose output
+[[step]]
+type = "substitute"
+description = "Anonymize container names in compose logs"
+pattern = '^([a-zA-Z0-9_-]+[-_])?([a-zA-Z0-9_-]+)_\d+\s+\|'
+replacement = '[SERVICE] |'
+flags = ["global"]
+
+# Step 4: Redact Docker image digests
+[[step]]
+type = "substitute"
+description = "Redact image digests"
+pattern = '@sha256:[a-f0-9]{64}'
+replacement = '@sha256:[DIGEST]'
+flags = ["global"]
+
+# Step 5: Redact private registry URLs
+[[step]]
+type = "substitute"
+description = "Redact private registry URLs"
+pattern = '\b\d+\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com/[^\s]+'
+replacement = '[ECR_IMAGE]'
+flags = ["global"]
+
+# Step 6: Redact other private registries
+[[step]]
+type = "substitute"
+description = "Redact private registry references"
+pattern = '(gcr\.io|quay\.io|ghcr\.io|azurecr\.io)/[^\s:]+:[^\s]+'
+replacement = '[PRIVATE_IMAGE]'
+flags = ["global"]
+
+# Step 7: Redact IP addresses
+[[step]]
+type = "substitute"
+description = "Redact IP addresses"
+pattern = '\b(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\b'
+replacement = '[IP]'
+flags = ["global"]
+
+# Step 8: Redact IPv6 addresses
+[[step]]
+type = "substitute"
+description = "Redact IPv6 addresses"
+pattern = '\b(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}\b'
+replacement = '[IPv6]'
+flags = ["global"]
+
+# Step 9: Redact environment variable leaks
+[[step]]
+type = "substitute"
+description = "Redact env var assignments in logs"
+pattern = '(DB_PASSWORD|SECRET_KEY|API_KEY|AUTH_TOKEN|PRIVATE_KEY)=[^\s]+'
+replacement = '${1}=[REDACTED]'
+flags = ["global"]
+
+# Step 10: Redact Bearer tokens
+[[step]]
+type = "substitute"
+description = "Redact Bearer tokens"
+pattern = '(Bearer\s+)[A-Za-z0-9._-]+'
+replacement = '${1}[TOKEN]'
+flags = ["global"]
+
+# Step 11: Redact basic auth headers
+[[step]]
+type = "substitute"
+description = "Redact Basic auth headers"
+pattern = '(Basic\s+)[A-Za-z0-9+/=]+'
+replacement = '${1}[CREDENTIALS]'
+flags = ["global"]
+
+# Step 12: Redact session IDs (common patterns)
+[[step]]
+type = "substitute"
+description = "Redact session IDs"
+pattern = '(session[_-]?id|sess|sid)[=:]\s*[A-Za-z0-9._-]{20,}'
+replacement = '${1}=[SESSION]'
+flags = ["global", "case_insensitive"]
+
+# Step 13: Redact request IDs
+[[step]]
+type = "substitute"
+description = "Anonymize request IDs (UUIDs)"
+pattern = '\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b'
+replacement = '[REQUEST_ID]'
+flags = ["global"]
+
+# Step 14: Redact email addresses
+[[step]]
+type = "substitute"
+description = "Redact email addresses"
+pattern = '[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'
+replacement = '[EMAIL]'
+flags = ["global"]
+
+# Step 15: Redact Kubernetes secret references
+[[step]]
+type = "substitute"
+description = "Redact k8s secret values"
+pattern = '(from secret\s+)[^\s]+'
+replacement = '${1}[SECRET]'
+flags = ["global", "case_insensitive"]
+
+# Step 16: Redact Docker network names
+[[step]]
+type = "substitute"
+description = "Anonymize network names"
+pattern = '(network\s+)[a-zA-Z0-9_-]+_(default|bridge|host)'
+replacement = '${1}[NETWORK]_${2}'
+flags = ["global"]

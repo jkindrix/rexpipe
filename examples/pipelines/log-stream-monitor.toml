@@ -1,0 +1,98 @@
+# Log Stream Monitor Pipeline
+# Real-time log monitoring with aggregation for streaming mode
+#
+# Usage:
+#   tail -f /var/log/app.log | rexpipe -c log-stream-monitor.toml --stream
+#   tail -f *.log | rexpipe -c log-stream-monitor.toml --stream --stream-interval 10
+#
+# This pipeline works best with --stream mode which provides:
+#   - Real-time line processing
+#   - Periodic aggregation summaries
+#   - Match rate statistics
+#   - Lines-per-second throughput
+
+name = "log-stream-monitor"
+description = "Real-time log monitoring with error detection and metrics"
+version = "1.0.0"
+
+# Step 1: Highlight ERROR lines in red
+[[step]]
+type = "substitute"
+description = "Highlight ERROR level"
+pattern = '^(.*(ERROR|FATAL|CRITICAL).*)$'
+replacement = '[ERROR] $1'
+flags = ["case_insensitive"]
+
+# Step 2: Highlight WARNING lines
+[[step]]
+type = "substitute"
+description = "Highlight WARN level"
+pattern = '^(.*(WARN|WARNING).*)$'
+replacement = '[WARN] $1'
+flags = ["case_insensitive"]
+
+# Step 3: Extract and normalize timestamps
+[[step]]
+type = "substitute"
+description = "Normalize ISO timestamps"
+pattern = '\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:?\d{2})?'
+replacement = '[TIMESTAMP]'
+
+# Step 4: Redact sensitive data inline
+[[step]]
+type = "substitute"
+description = "Redact potential passwords in URLs"
+pattern = '(://[^:]+:)[^@]+(@)'
+replacement = '${1}[REDACTED]${2}'
+
+# Step 5: Extract request IDs for tracing
+[[step]]
+type = "substitute"
+description = "Highlight request IDs"
+pattern = '\b(request[-_]?id|trace[-_]?id|correlation[-_]?id)[=: ]*([a-f0-9-]{8,36})\b'
+replacement = '[REQ:$2]'
+flags = ["case_insensitive"]
+
+# Step 6: Extract response times
+[[step]]
+type = "substitute"
+description = "Highlight response times"
+pattern = '\b(response[-_]?time|latency|duration)[=: ]*(\d+(?:\.\d+)?)\s*(ms|s|seconds?)?\b'
+replacement = '[LATENCY:${2}${3}]'
+flags = ["case_insensitive"]
+
+# Step 7: Detect stack traces
+[[step]]
+type = "substitute"
+description = "Mark stack trace frames"
+pattern = '^\s+at\s+(.+?)(?:\((.+?:\d+:\d+)\)|$)'
+replacement = '  [TRACE] $1 $2'
+
+# Finalize: Count error types for summary
+[finalize]
+enabled = true
+
+[[finalize.counters]]
+name = "errors"
+pattern = '\[ERROR\]'
+description = "Total error lines"
+
+[[finalize.counters]]
+name = "warnings"
+pattern = '\[WARN\]'
+description = "Total warning lines"
+
+[[finalize.counters]]
+name = "traces"
+pattern = '\[TRACE\]'
+description = "Stack trace frames"
+
+template = """
+--- Log Stream Summary ---
+Errors:     {{counters.errors}}
+Warnings:   {{counters.warnings}}
+Stack frames: {{counters.traces}}
+--------------------------
+
+{{output}}
+"""
