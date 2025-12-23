@@ -368,6 +368,38 @@ When loaded, the child config:
 - Merges pattern includes
 - Can override name, description, and version
 
+### IDE Integration & Schema Validation
+
+rexpipe provides a JSON Schema for pipeline configuration files, enabling:
+- **Autocomplete** for all configuration options
+- **Validation** of step types, actions, and settings
+- **Inline documentation** with field descriptions
+
+**VS Code** (with [Even Better TOML](https://marketplace.visualstudio.com/items?itemName=tamasfe.even-better-toml)):
+```json
+// .vscode/settings.json
+{
+  "evenBetterToml.schema.associations": {
+    "*-pipeline.toml": "./schemas/rexpipe-pipeline.schema.json"
+  }
+}
+```
+
+**JetBrains IDEs**: Settings → Languages & Frameworks → Schemas and DTDs → JSON Schema Mappings
+
+**Neovim** (taplo LSP):
+```lua
+require('lspconfig').taplo.setup({
+  settings = {
+    taplo = { config = { schema = { associations = {
+      [".*-pipeline\\.toml"] = "./schemas/rexpipe-pipeline.schema.json"
+    }}}}
+  }
+})
+```
+
+See [`schemas/README.md`](schemas/README.md) for complete setup instructions.
+
 ## Pattern Libraries
 
 Pattern libraries allow you to define reusable regex patterns in separate files and reference them across multiple pipelines using `${pattern.name}` syntax.

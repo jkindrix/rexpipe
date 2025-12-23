@@ -1,3 +1,77 @@
+//! Pipeline configuration and step definitions.
+//!
+//! This module defines the core data structures for rexpipe pipelines:
+//! - `PipelineConfig`: The root configuration containing steps and settings
+//! - `PipelineStep`: Individual processing steps (substitute, filter, etc.)
+//! - `PipelineSettings`: Global options like timeouts and regex modes
+//!
+//! # Configuration Formats
+//!
+//! Pipelines can be defined in TOML or JSON format, or created programmatically.
+//!
+//! # Examples
+//!
+//! ## Creating a Pipeline Programmatically
+//!
+//! ```rust
+//! use rexpipe::pipeline::{PipelineConfig, PipelineStep, StepType};
+//!
+//! // Create from inline pattern (simplest approach)
+//! let config = PipelineConfig::from_inline_pattern(r"\d+", Some("NUMBER"));
+//! assert_eq!(config.step.len(), 1);
+//! ```
+//!
+//! ## Loading from TOML
+//!
+//! ```rust
+//! use rexpipe::pipeline::PipelineConfig;
+//!
+//! let toml = r#"
+//! name = "example"
+//! description = "Replace numbers with NUM"
+//!
+//! [[step]]
+//! type = "substitute"
+//! pattern = '\d+'
+//! replacement = "NUM"
+//! "#;
+//!
+//! let config: PipelineConfig = toml::from_str(toml).unwrap();
+//! assert_eq!(config.name, Some("example".to_string()));
+//! ```
+//!
+//! ## Multi-Step Pipeline
+//!
+//! ```rust
+//! use rexpipe::pipeline::PipelineConfig;
+//!
+//! let toml = r#"
+//! [[step]]
+//! type = "filter"
+//! pattern = "DEBUG"
+//! action = "drop_line"
+//!
+//! [[step]]
+//! type = "substitute"
+//! pattern = "ERROR"
+//! replacement = "[ERROR]"
+//! "#;
+//!
+//! let config: PipelineConfig = toml::from_str(toml).unwrap();
+//! assert_eq!(config.step.len(), 2);
+//! ```
+//!
+//! # Step Types
+//!
+//! | Type | Description | Key Fields |
+//! |------|-------------|------------|
+//! | `substitute` | Replace pattern matches | `pattern`, `replacement` |
+//! | `filter` | Keep/drop lines | `pattern`, `action` |
+//! | `extract` | Extract matched portions | `pattern`, `output_format` |
+//! | `validate` | Assert pattern presence | `pattern`, `on_mismatch` |
+//! | `transform` | Transform matched text | `pattern`, `transform` |
+//! | `block` | Multi-line processing | `pattern`, `end_pattern`, `action` |
+
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::fs;

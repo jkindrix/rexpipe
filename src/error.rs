@@ -13,6 +13,52 @@
 //! All error types include actionable suggestions to help users fix issues.
 //!
 //! These types integrate seamlessly with `anyhow` for rich error context.
+//!
+//! # Examples
+//!
+//! ## Pattern Error with Auto-Generated Hints
+//!
+//! ```rust
+//! use rexpipe::error::PatternError;
+//!
+//! // Create an invalid regex error - hints are auto-generated
+//! let error = PatternError::invalid_regex(
+//!     r"(\w+",
+//!     "Unclosed group at position 4",
+//! );
+//!
+//! // Error display includes the pattern and message
+//! let display = format!("{}", error);
+//! assert!(display.contains("Unclosed group"));
+//! ```
+//!
+//! ## Configuration Error Handling
+//!
+//! ```rust
+//! use rexpipe::error::ConfigError;
+//! use std::path::PathBuf;
+//!
+//! // Create a config not found error
+//! let error = ConfigError::NotFound {
+//!     path: PathBuf::from("/path/to/missing.toml"),
+//! };
+//! assert!(error.to_string().contains("missing.toml"));
+//! ```
+//!
+//! ## Validation Error with Suggestions
+//!
+//! ```rust
+//! use rexpipe::error::ValidationError;
+//!
+//! let error = ValidationError::EmptyPipeline;
+//! let msg = error.to_string();
+//! assert!(msg.contains("empty") || msg.contains("Pipeline"));
+//!
+//! // Get a suggestion for fixing the error
+//! if let Some(suggestion) = error.suggestion() {
+//!     println!("Suggestion: {}", suggestion);
+//! }
+//! ```
 
 use std::path::PathBuf;
 use thiserror::Error;
