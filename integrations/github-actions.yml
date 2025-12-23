@@ -1,0 +1,156 @@
+# GitHub Actions workflow for rexpipe
+# Copy to .github/workflows/rexpipe.yml in your project
+#
+# This workflow demonstrates multiple rexpipe use cases:
+# 1. Secret detection in PRs
+# 2. PII scanning before merge
+# 3. Log sanitization for artifacts
+# 4. Pipeline validation
+
+name: rexpipe Checks
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  # Job 1: Detect secrets in changed files
+  secret-scan:
+    name: Secret Detection
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for diff
+
+      - name: Install rexpipe
+        uses: baptiste0928/cargo-install@v3
+        with:
+          crate: rexpipe
+          version: "^2.0"
+
+      - name: Get changed files
+        id: changed
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            FILES=$(git diff --name-only ${{ github.event.pull_request.base.sha }} ${{ github.sha }} | tr '\n' ' ')
+          else
+            FILES=$(git diff --name-only HEAD~1 HEAD | tr '\n' ' ')
+          fi
+          echo "files=$FILES" >> $GITHUB_OUTPUT
+
+      - name: Scan for secrets
+        if: steps.changed.outputs.files != ''
+        run: |
+          echo "Scanning files: ${{ steps.changed.outputs.files }}"
+          rexpipe \
+            --pattern '(api[_-]?key|password|secret|token|credential)\s*[:=]\s*["\x27][^\x27"]{8,}' \
+            --pattern '\b(AKIA|ASIA)[A-Z0-9]{16}\b' \
+            --pattern '\b(gh[ps]_[A-Za-z0-9]{36})\b' \
+            --dry-run \
+            --text \
+            ${{ steps.changed.outputs.files }} || {
+              echo "::error::Potential secrets detected! Please review the output above."
+              exit 1
+            }
+
+  # Job 2: Validate rexpipe pipeline configurations
+  validate-pipelines:
+    name: Validate Pipelines
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install rexpipe
+        uses: baptiste0928/cargo-install@v3
+        with:
+          crate: rexpipe
+          version: "^2.0"
+
+      - name: Validate pipeline configs
+        run: |
+          find . -name "*.toml" -path "*/pipelines/*" -exec rexpipe --validate {} \;
+
+  # Job 3: Run custom pipeline on PR
+  custom-checks:
+    name: Custom Checks
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install rexpipe
+        uses: baptiste0928/cargo-install@v3
+        with:
+          crate: rexpipe
+          version: "^2.0"
+
+      - name: Check for deprecated patterns
+        run: |
+          # Example: Check for deprecated API usage
+          rexpipe \
+            --pattern 'DEPRECATED_API|legacy_function|old_endpoint' \
+            --recursive \
+            --glob '*.py' \
+            --glob '*.js' \
+            --glob '*.ts' \
+            --text \
+            src/ || echo "::warning::Deprecated patterns found"
+
+  # Job 4: Sanitize logs before upload
+  sanitize-artifacts:
+    name: Sanitize Artifacts
+    runs-on: ubuntu-latest
+    needs: [secret-scan]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install rexpipe
+        uses: baptiste0928/cargo-install@v3
+        with:
+          crate: rexpipe
+          version: "^2.0"
+
+      - name: Run tests and capture output
+        run: |
+          # Your test command here
+          echo "Running tests..."
+          # npm test 2>&1 | tee test-output.log
+          echo "Test output with secret=abc123 and email user@company.com" > test-output.log
+
+      - name: Sanitize log output
+        run: |
+          rexpipe \
+            --config examples/pipelines/secrets-redact.toml \
+            test-output.log \
+            --in-place \
+            --apply
+
+      - name: Upload sanitized logs
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-logs
+          path: test-output.log
+
+# Example matrix job for multi-platform testing
+# Uncomment to enable:
+#
+#   multi-platform:
+#     name: Test on ${{ matrix.os }}
+#     runs-on: ${{ matrix.os }}
+#     strategy:
+#       matrix:
+#         os: [ubuntu-latest, macos-latest, windows-latest]
+#     steps:
+#       - uses: actions/checkout@v4
+#       - uses: baptiste0928/cargo-install@v3
+#         with:
+#           crate: rexpipe
+#           version: "^2.0"
+#       - run: rexpipe --version

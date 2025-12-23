@@ -1,0 +1,88 @@
+# Example .pre-commit-config.yaml for using rexpipe hooks
+# Copy this to your project root as .pre-commit-config.yaml
+#
+# Installation:
+#   pip install pre-commit
+#   pre-commit install
+#
+# Manual run:
+#   pre-commit run --all-files
+
+repos:
+  # rexpipe hooks for secret and PII detection
+  - repo: https://github.com/jkindrix/rexpipe
+    rev: v2.0.0  # Use the latest release
+    hooks:
+      # Check for hardcoded secrets in all text files
+      - id: rexpipe-secrets
+        name: Detect secrets
+        stages: [commit]
+
+      # Check for PII (emails, SSNs, phone numbers)
+      - id: rexpipe-pii
+        name: Detect PII
+        stages: [commit]
+        # Exclude test fixtures and documentation
+        exclude: |
+          (?x)^(
+            tests/fixtures/.*|
+            docs/examples/.*|
+            .*\.md$
+          )$
+
+      # Custom pipeline for project-specific rules
+      - id: rexpipe-custom
+        name: Project-specific checks
+        args:
+          - '--config'
+          - '.rexpipe/project-rules.toml'
+          - '--dry-run'
+          - '--quiet'
+        stages: [commit]
+        # Only check source files
+        files: '\.(py|js|ts|rs|go)$'
+
+  # Alternative: Run rexpipe as a local hook (no internet required)
+  - repo: local
+    hooks:
+      - id: rexpipe-local-secrets
+        name: Local secret detection
+        entry: rexpipe
+        args:
+          - '-p'
+          - '(api[_-]?key|password|secret|token)\s*[:=]\s*["\x27][^\x27"]{8,}'
+          - '--dry-run'
+          - '--quiet'
+        language: system
+        types: [text]
+        pass_filenames: true
+
+      - id: rexpipe-terraform-check
+        name: Check Terraform for secrets
+        entry: rexpipe
+        args:
+          - '--config'
+          - 'examples/pipelines/terraform-state-sanitize.toml'
+          - '--dry-run'
+          - '--quiet'
+        language: system
+        files: '\.tf$'
+        pass_filenames: true
+
+# Tips:
+#
+# 1. Use --dry-run --quiet to just detect, not modify
+# 2. Add --text to force text output instead of JSON
+# 3. Use 'exclude' to skip false-positive-prone files
+# 4. Use 'files' to limit to specific file types
+# 5. Create project-specific pipelines in .rexpipe/ directory
+#
+# Example project pipeline (.rexpipe/project-rules.toml):
+#
+#   name = "project-rules"
+#
+#   [[step]]
+#   type = "filter"
+#   pattern = "DEPRECATED_API"
+#   action = "keep_line"
+#   description = "Flag deprecated API usage"

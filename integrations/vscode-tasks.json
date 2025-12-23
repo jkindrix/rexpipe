@@ -1,0 +1,189 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "rexpipe: Check for secrets",
+      "type": "shell",
+      "command": "rexpipe",
+      "args": [
+        "--pattern", "(api[_-]?key|password|secret|token)\\s*[:=]\\s*[\"'][^\"']{8,}",
+        "--pattern", "\\b(AKIA|ASIA)[A-Z0-9]{16}\\b",
+        "--recursive",
+        "--glob", "*.{js,ts,py,rs,go,java,rb}",
+        "--dry-run",
+        "--text",
+        "."
+      ],
+      "group": "test",
+      "presentation": {
+        "reveal": "always",
+        "panel": "new"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "rexpipe: Check for PII",
+      "type": "shell",
+      "command": "rexpipe",
+      "args": [
+        "--pattern", "[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}",
+        "--pattern", "\\b\\d{3}-\\d{2}-\\d{4}\\b",
+        "--recursive",
+        "--glob", "*.{json,yaml,yml,csv,txt}",
+        "--dry-run",
+        "--text",
+        "."
+      ],
+      "group": "test",
+      "presentation": {
+        "reveal": "always",
+        "panel": "new"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "rexpipe: Discover patterns in file",
+      "type": "shell",
+      "command": "rexpipe",
+      "args": [
+        "--discover",
+        "${file}"
+      ],
+      "group": "none",
+      "presentation": {
+        "reveal": "always",
+        "panel": "new"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "rexpipe: Extract TODOs from project",
+      "type": "shell",
+      "command": "rexpipe",
+      "args": [
+        "--pattern", "TODO|FIXME|HACK|XXX",
+        "--recursive",
+        "--glob", "*.{js,ts,py,rs,go,java,rb}",
+        "--text",
+        "src/"
+      ],
+      "group": "none",
+      "presentation": {
+        "reveal": "always",
+        "panel": "new"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "rexpipe: Run pipeline on file",
+      "type": "shell",
+      "command": "rexpipe",
+      "args": [
+        "--config", "${input:pipelineFile}",
+        "--text",
+        "${file}"
+      ],
+      "group": "none",
+      "presentation": {
+        "reveal": "always",
+        "panel": "new"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "rexpipe: Validate pipeline config",
+      "type": "shell",
+      "command": "rexpipe",
+      "args": [
+        "--validate",
+        "${file}"
+      ],
+      "group": "test",
+      "presentation": {
+        "reveal": "always",
+        "panel": "new"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "rexpipe: Explain pipeline",
+      "type": "shell",
+      "command": "rexpipe",
+      "args": [
+        "--explain",
+        "--config", "${file}"
+      ],
+      "group": "none",
+      "presentation": {
+        "reveal": "always",
+        "panel": "new"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "rexpipe: Preview in-place changes (dry-run)",
+      "type": "shell",
+      "command": "rexpipe",
+      "args": [
+        "--config", "${input:pipelineFile}",
+        "--in-place",
+        "--dry-run",
+        "${file}"
+      ],
+      "group": "none",
+      "presentation": {
+        "reveal": "always",
+        "panel": "new"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "rexpipe: Redact secrets in file",
+      "type": "shell",
+      "command": "rexpipe",
+      "args": [
+        "--pattern", "(password|secret|api[_-]?key)\\s*[:=]\\s*[\"'][^\"']+[\"']",
+        "--replacement", "${1}=\"[REDACTED]\"",
+        "--text",
+        "${file}"
+      ],
+      "group": "none",
+      "presentation": {
+        "reveal": "always",
+        "panel": "new"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "rexpipe: Find deprecated patterns",
+      "type": "shell",
+      "command": "rexpipe",
+      "args": [
+        "--pattern", "${input:deprecatedPattern}",
+        "--recursive",
+        "--text",
+        "."
+      ],
+      "group": "none",
+      "presentation": {
+        "reveal": "always",
+        "panel": "new"
+      },
+      "problemMatcher": []
+    }
+  ],
+  "inputs": [
+    {
+      "id": "pipelineFile",
+      "type": "promptString",
+      "description": "Path to pipeline TOML file",
+      "default": "pipeline.toml"
+    },
+    {
+      "id": "deprecatedPattern",
+      "type": "promptString",
+      "description": "Pattern to search for",
+      "default": "DEPRECATED|legacy|old_api"
+    }
+  ]
+}

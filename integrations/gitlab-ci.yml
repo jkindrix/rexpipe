@@ -1,0 +1,185 @@
+# GitLab CI configuration for rexpipe
+# Copy to .gitlab-ci.yml in your project root
+#
+# This configuration demonstrates:
+# 1. Secret detection in merge requests
+# 2. PII scanning
+# 3. Log sanitization
+# 4. Pipeline validation
+
+stages:
+  - validate
+  - security
+  - sanitize
+
+variables:
+  REXPIPE_VERSION: "2.0.0"
+  CARGO_HOME: $CI_PROJECT_DIR/.cargo
+
+# Cache cargo installation
+.cargo-cache: &cargo-cache
+  cache:
+    key: rexpipe-${REXPIPE_VERSION}
+    paths:
+      - .cargo/bin/
+      - .cargo/registry/
+      - .cargo/git/
+
+# Template for rexpipe installation
+.install-rexpipe: &install-rexpipe
+  before_script:
+    - |
+      if [ ! -f "$CARGO_HOME/bin/rexpipe" ]; then
+        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+        source $CARGO_HOME/env
+        cargo install rexpipe --version $REXPIPE_VERSION
+      fi
+    - export PATH="$CARGO_HOME/bin:$PATH"
+    - rexpipe --version
+
+# Job 1: Validate pipeline configurations
+validate-pipelines:
+  stage: validate
+  image: rust:latest
+  <<: *cargo-cache
+  <<: *install-rexpipe
+  script:
+    - |
+      find . -name "*.toml" -path "*pipelines*" | while read file; do
+        echo "Validating: $file"
+        rexpipe --validate "$file"
+      done
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes:
+        - "**/*.toml"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      changes:
+        - "**/*.toml"
+
+# Job 2: Scan for secrets in merge requests
+secret-scan:
+  stage: security
+  image: rust:latest
+  <<: *cargo-cache
+  <<: *install-rexpipe
+  script:
+    - |
+      echo "Scanning for secrets in changed files..."
+
+      # Get changed files in MR
+      if [ -n "$CI_MERGE_REQUEST_DIFF_BASE_SHA" ]; then
+        CHANGED_FILES=$(git diff --name-only $CI_MERGE_REQUEST_DIFF_BASE_SHA $CI_COMMIT_SHA)
+      else
+        CHANGED_FILES=$(git diff --name-only HEAD~1 HEAD)
+      fi
+
+      if [ -z "$CHANGED_FILES" ]; then
+        echo "No files changed"
+        exit 0
+      fi
+
+      echo "Changed files:"
+      echo "$CHANGED_FILES"
+
+      # Scan for secrets
+      echo "$CHANGED_FILES" | xargs rexpipe \
+        --pattern '(api[_-]?key|password|secret|token)\s*[:=]\s*["\x27][^\x27"]{8,}' \
+        --pattern '\b(AKIA|ASIA)[A-Z0-9]{16}\b' \
+        --pattern '\bglpat-[A-Za-z0-9]{20}\b' \
+        --dry-run \
+        --text || {
+          echo "ERROR: Potential secrets detected!"
+          exit 1
+        }
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+
+# Job 3: PII detection
+pii-scan:
+  stage: security
+  image: rust:latest
+  <<: *cargo-cache
+  <<: *install-rexpipe
+  script:
+    - |
+      echo "Scanning for PII..."
+      rexpipe \
+        --pattern '\b\d{3}-\d{2}-\d{4}\b' \
+        --pattern '[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}' \
+        --pattern '\b\d{4}[- ]?\d{4}[- ]?\d{4}[- ]?\d{4}\b' \
+        --recursive \
+        --glob '*.json' \
+        --glob '*.yaml' \
+        --glob '*.yml' \
+        --glob '*.csv' \
+        --dry-run \
+        --text \
+        . || echo "WARNING: Potential PII detected"
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+  allow_failure: true
+
+# Job 4: Sanitize artifacts before upload
+sanitize-logs:
+  stage: sanitize
+  image: rust:latest
+  <<: *cargo-cache
+  <<: *install-rexpipe
+  script:
+    - |
+      # Find all log files
+      find . -name "*.log" -type f | while read logfile; do
+        echo "Sanitizing: $logfile"
+        rexpipe \
+          --pattern '[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}' \
+          --replacement '[EMAIL]' \
+          --pattern '\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b' \
+          --replacement '[IP]' \
+          --in-place \
+          --apply \
+          "$logfile"
+      done
+  artifacts:
+    paths:
+      - "**/*.log"
+    expire_in: 1 week
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+
+# Job 5: Database dump sanitization (manual trigger)
+sanitize-db-dump:
+  stage: sanitize
+  image: rust:latest
+  <<: *cargo-cache
+  <<: *install-rexpipe
+  script:
+    - |
+      if [ -f "$DB_DUMP_FILE" ]; then
+        echo "Sanitizing database dump..."
+        rexpipe \
+          --config examples/pipelines/database-dump-sanitize.toml \
+          "$DB_DUMP_FILE" \
+          --output sanitized-dump.sql
+      else
+        echo "No dump file specified (set DB_DUMP_FILE variable)"
+        exit 1
+      fi
+  artifacts:
+    paths:
+      - sanitized-dump.sql
+    expire_in: 1 day
+  rules:
+    - when: manual
+  variables:
+    DB_DUMP_FILE: ""
+
+# Example: Include in downstream projects
+#
+# In your project's .gitlab-ci.yml:
+#
+#   include:
+#     - project: 'your-group/rexpipe'
+#       file: '/integrations/gitlab-ci.yml'
+#       ref: v2.0.0
