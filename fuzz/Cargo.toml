@@ -11,6 +11,8 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "0.4"
 arbitrary = { version = "1", features = ["derive"] }
+tempfile = "3.14"
+toml = "0.8"
 
 [dependencies.rexpipe]
 path = ".."

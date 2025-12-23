@@ -7,7 +7,7 @@
 
 use arbitrary::Arbitrary;
 use libfuzzer_sys::fuzz_target;
-use rexpipe::pipeline::{FilterAction, PipelineConfig, PipelineSettings, PipelineStep, StepType};
+use rexpipe::pipeline::{PipelineConfig, PipelineSettings, PipelineStep, StepAction, StepType};
 use rexpipe::processor::StreamProcessor;
 use std::io::Cursor;
 
@@ -49,12 +49,12 @@ fn to_step_type(val: u8) -> StepType {
     }
 }
 
-fn to_filter_action(val: u8) -> FilterAction {
+fn to_step_action(val: u8) -> StepAction {
     match val % 4 {
-        0 => FilterAction::KeepLine,
-        1 => FilterAction::DropLine,
-        2 => FilterAction::KeepMatch,
-        _ => FilterAction::DropMatch,
+        0 => StepAction::KeepLine,
+        1 => StepAction::DropLine,
+        2 => StepAction::KeepMatch,
+        _ => StepAction::DropMatch,
     }
 }
 
@@ -90,7 +90,7 @@ fuzz_target!(|fuzz_input: FuzzInput| {
                     None
                 },
                 action: if step_type == StepType::Filter {
-                    Some(to_filter_action(s.filter_action))
+                    Some(to_step_action(s.filter_action))
                 } else {
                     None
                 },
@@ -98,6 +98,7 @@ fuzz_target!(|fuzz_input: FuzzInput| {
                 flags: None,
                 description: None,
                 enabled: Some(s.enabled),
+                ..Default::default()
             }
         })
         .collect();
@@ -117,8 +118,10 @@ fuzz_target!(|fuzz_input: FuzzInput| {
             pcre_mode: false, // Disabled for fuzzing to avoid PCRE-specific issues
             context_before: 0,
             context_after: 0,
+            ..Default::default()
         },
         step: steps,
+        ..Default::default()
     };
 
     // Try to create processor and run
