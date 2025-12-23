@@ -4,9 +4,9 @@ use clap_complete::{Generator, Shell, generate};
 use clap_mangen::Man;
 use log::{debug, info};
 use std::fs::File;
-use std::io::{self, BufReader, IsTerminal};
 #[cfg(feature = "tree-sitter")]
 use std::io::Read;
+use std::io::{self, BufReader, IsTerminal};
 use std::path::{Path, PathBuf};
 
 // Import from the library crate
@@ -1781,58 +1781,62 @@ fn run_multi_file_mode(
     };
 
     // Filter by git-diff if enabled
-    let files_to_process: Vec<PathBuf> = if let Some(git_ref) = matches.get_one::<String>("git-diff") {
-        match GitDiff::discover(".", git_ref) {
-            Ok(git_diff) => {
-                match git_diff.changed_files() {
-                    Ok(changed_files) => {
-                        let changed_set: std::collections::HashSet<_> = changed_files.into_iter().collect();
-                        let filtered: Vec<PathBuf> = files_to_process
-                            .into_iter()
-                            .filter(|f| {
-                                // Check if file is in changed set (handle both absolute and relative paths)
-                                let abs_path = std::fs::canonicalize(f).unwrap_or_else(|_| f.clone());
-                                changed_set.iter().any(|changed| {
-                                    let changed_abs = std::fs::canonicalize(changed).unwrap_or_else(|_| changed.clone());
-                                    abs_path == changed_abs
+    let files_to_process: Vec<PathBuf> =
+        if let Some(git_ref) = matches.get_one::<String>("git-diff") {
+            match GitDiff::discover(".", git_ref) {
+                Ok(git_diff) => {
+                    match git_diff.changed_files() {
+                        Ok(changed_files) => {
+                            let changed_set: std::collections::HashSet<_> =
+                                changed_files.into_iter().collect();
+                            let filtered: Vec<PathBuf> = files_to_process
+                                .into_iter()
+                                .filter(|f| {
+                                    // Check if file is in changed set (handle both absolute and relative paths)
+                                    let abs_path =
+                                        std::fs::canonicalize(f).unwrap_or_else(|_| f.clone());
+                                    changed_set.iter().any(|changed| {
+                                        let changed_abs = std::fs::canonicalize(changed)
+                                            .unwrap_or_else(|_| changed.clone());
+                                        abs_path == changed_abs
+                                    })
                                 })
-                            })
-                            .collect();
+                                .collect();
 
-                        if !quiet && filtered.len() < files.len() {
-                            eprintln!(
-                                "Git diff: processing {} of {} files (changed since {})",
-                                filtered.len(),
-                                files.len(),
-                                git_ref
-                            );
-                        }
+                            if !quiet && filtered.len() < files.len() {
+                                eprintln!(
+                                    "Git diff: processing {} of {} files (changed since {})",
+                                    filtered.len(),
+                                    files.len(),
+                                    git_ref
+                                );
+                            }
 
-                        if filtered.is_empty() && !quiet {
-                            eprintln!("Git diff: no files changed since {}", git_ref);
-                            return Ok(());
-                        }
+                            if filtered.is_empty() && !quiet {
+                                eprintln!("Git diff: no files changed since {}", git_ref);
+                                return Ok(());
+                            }
 
-                        filtered
-                    }
-                    Err(e) => {
-                        if !quiet {
-                            eprintln!("Warning: Could not get changed files from git: {}", e);
+                            filtered
                         }
-                        files_to_process
+                        Err(e) => {
+                            if !quiet {
+                                eprintln!("Warning: Could not get changed files from git: {}", e);
+                            }
+                            files_to_process
+                        }
                     }
                 }
-            }
-            Err(e) => {
-                if !quiet {
-                    eprintln!("Warning: Could not initialize git diff: {}", e);
+                Err(e) => {
+                    if !quiet {
+                        eprintln!("Warning: Could not initialize git diff: {}", e);
+                    }
+                    files_to_process
                 }
-                files_to_process
             }
-        }
-    } else {
-        files_to_process
-    };
+        } else {
+            files_to_process
+        };
 
     // Handle cross-file consistency checking
     if let Some(cross_file_path) = matches.get_one::<String>("cross-file") {
@@ -1942,7 +1946,9 @@ fn run_multi_file_mode(
                                             fixes_applied, files_modified
                                         );
                                         if explicit_dry_run {
-                                            eprintln!("Remove --dry-run and use --apply -i to apply fixes");
+                                            eprintln!(
+                                                "Remove --dry-run and use --apply -i to apply fixes"
+                                            );
                                         } else {
                                             eprintln!("Use --apply with -i to apply fixes");
                                         }
@@ -2075,7 +2081,15 @@ fn run_multi_file_mode(
         return Ok(());
     } else if matches.get_flag("atomic") && options.in_place {
         // Atomic mode: process to temp files first, then commit or rollback
-        return run_atomic_multi_file_processing(config, &processor, &files_to_process, &options, &mut checkpoint, quiet, json_output);
+        return run_atomic_multi_file_processing(
+            config,
+            &processor,
+            &files_to_process,
+            &options,
+            &mut checkpoint,
+            quiet,
+            json_output,
+        );
     } else {
         #[cfg(feature = "async")]
         if use_async {
@@ -2875,7 +2889,9 @@ fn display_checkpoint_info(checkpoint_path: &str) -> Result<()> {
                         grown_count += 1;
                         let new_bytes = current_size - file_state.size;
                         format!("📈 GROWN (+{} bytes to process)", new_bytes)
-                    } else if let (Some(ckpt_mtime), Some(curr_mtime)) = (file_state.mtime, current_mtime) {
+                    } else if let (Some(ckpt_mtime), Some(curr_mtime)) =
+                        (file_state.mtime, current_mtime)
+                    {
                         if curr_mtime > ckpt_mtime {
                             stale_count += 1;
                             "⚠️ STALE (modified since checkpoint)".to_string()
@@ -2893,7 +2909,10 @@ fn display_checkpoint_info(checkpoint_path: &str) -> Result<()> {
             };
 
             println!("    Status: {}", status);
-            println!("    Offset: {} bytes (line {})", file_state.byte_offset, file_state.line_number);
+            println!(
+                "    Offset: {} bytes (line {})",
+                file_state.byte_offset, file_state.line_number
+            );
             println!("    Size at checkpoint: {} bytes", file_state.size);
             if let Some(mtime) = file_state.mtime {
                 println!("    Modified at checkpoint: {}", format_time(mtime));
@@ -2901,7 +2920,10 @@ fn display_checkpoint_info(checkpoint_path: &str) -> Result<()> {
             if let Some(ref hash) = file_state.content_hash {
                 println!("    Hash: {}...", &hash[..hash.len().min(16)]);
             }
-            println!("    Last Processed: {}", format_time(file_state.last_processed));
+            println!(
+                "    Last Processed: {}",
+                format_time(file_state.last_processed)
+            );
             println!();
         }
 
@@ -3099,12 +3121,14 @@ fn run_processing_mode(
         return Ok(());
     }
 
-    let output: Box<dyn io::Write> = if let Some(output_file) = matches.get_one::<String>("output")
-    {
-        Box::new(File::create(output_file)?)
-    } else {
-        Box::new(io::stdout())
-    };
+    // Note: `mut` is required when tree-sitter feature is enabled for write_all()
+    #[allow(unused_mut)]
+    let mut output: Box<dyn io::Write> =
+        if let Some(output_file) = matches.get_one::<String>("output") {
+            Box::new(File::create(output_file)?)
+        } else {
+            Box::new(io::stdout())
+        };
 
     let result = if use_syntax_aware {
         #[cfg(feature = "tree-sitter")]
@@ -3191,12 +3215,15 @@ fn output_verification_summary(
             "no_matches"
         };
 
-        let bidirectional = bidir_stats.as_ref().filter(|s| s.total_mappings > 0).map(|s| BidirStats {
-            total_mappings: s.total_mappings,
-            unique_originals: s.unique_originals,
-            unique_transformed: s.unique_transformed,
-            steps_with_mappings: s.steps_with_mappings,
-        });
+        let bidirectional = bidir_stats
+            .as_ref()
+            .filter(|s| s.total_mappings > 0)
+            .map(|s| BidirStats {
+                total_mappings: s.total_mappings,
+                unique_originals: s.unique_originals,
+                unique_transformed: s.unique_transformed,
+                steps_with_mappings: s.steps_with_mappings,
+            });
 
         let verification = VerificationResult {
             status: status.to_string(),
@@ -3323,32 +3350,27 @@ fn run_pattern_discovery(matches: &clap::ArgMatches) -> Result<()> {
         (
             "ipv4",
             r"IPv4 addresses",
-            Regex::new(r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b")
-                .expect("static ipv4 pattern"),
+            Regex::new(r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b").expect("static ipv4 pattern"),
         ),
         (
             "phone_us",
             r"US phone numbers",
-            Regex::new(r"\b\d{3}[-.]?\d{3}[-.]?\d{4}\b")
-                .expect("static phone pattern"),
+            Regex::new(r"\b\d{3}[-.]?\d{3}[-.]?\d{4}\b").expect("static phone pattern"),
         ),
         (
             "date_iso",
             r"ISO dates (YYYY-MM-DD)",
-            Regex::new(r"\b\d{4}-\d{2}-\d{2}\b")
-                .expect("static date_iso pattern"),
+            Regex::new(r"\b\d{4}-\d{2}-\d{2}\b").expect("static date_iso pattern"),
         ),
         (
             "date_us",
             r"US dates (MM/DD/YYYY)",
-            Regex::new(r"\b\d{1,2}/\d{1,2}/\d{4}\b")
-                .expect("static date_us pattern"),
+            Regex::new(r"\b\d{1,2}/\d{1,2}/\d{4}\b").expect("static date_us pattern"),
         ),
         (
             "time_24h",
             r"24-hour time",
-            Regex::new(r"\b\d{1,2}:\d{2}(:\d{2})?\b")
-                .expect("static time_24h pattern"),
+            Regex::new(r"\b\d{1,2}:\d{2}(:\d{2})?\b").expect("static time_24h pattern"),
         ),
         (
             "uuid",
@@ -3361,20 +3383,17 @@ fn run_pattern_discovery(matches: &clap::ArgMatches) -> Result<()> {
         (
             "hex_id",
             r"Hex identifiers (8+ chars)",
-            Regex::new(r"\b[0-9a-fA-F]{8,}\b")
-                .expect("static hex_id pattern"),
+            Regex::new(r"\b[0-9a-fA-F]{8,}\b").expect("static hex_id pattern"),
         ),
         (
             "url",
             r"URLs",
-            Regex::new(r#"https?://[^\s<>"']+"#)
-                .expect("static url pattern"),
+            Regex::new(r#"https?://[^\s<>"']+"#).expect("static url pattern"),
         ),
         (
             "ssn",
             r"SSN-like patterns",
-            Regex::new(r"\b\d{3}-\d{2}-\d{4}\b")
-                .expect("static ssn pattern"),
+            Regex::new(r"\b\d{3}-\d{2}-\d{4}\b").expect("static ssn pattern"),
         ),
         (
             "credit_card",
@@ -3385,14 +3404,12 @@ fn run_pattern_discovery(matches: &clap::ArgMatches) -> Result<()> {
         (
             "api_key",
             r"API key patterns",
-            Regex::new(r"\b[A-Za-z0-9_-]{20,}\b")
-                .expect("static api_key pattern"),
+            Regex::new(r"\b[A-Za-z0-9_-]{20,}\b").expect("static api_key pattern"),
         ),
         (
             "base64_blob",
             r"Base64 blobs (20+ chars)",
-            Regex::new(r"\b[A-Za-z0-9+/]{20,}={0,2}\b")
-                .expect("static base64_blob pattern"),
+            Regex::new(r"\b[A-Za-z0-9+/]{20,}={0,2}\b").expect("static base64_blob pattern"),
         ),
     ];
 
@@ -3521,8 +3538,13 @@ fn run_pattern_learning(matches: &clap::ArgMatches) -> Result<()> {
 
     // Load positive examples from file
     if let Some(file_path) = matches.get_one::<String>("positive-file") {
-        let content = std::fs::read_to_string(file_path)
-            .map_err(|e| anyhow!("Failed to read positive examples file '{}': {}", file_path, e))?;
+        let content = std::fs::read_to_string(file_path).map_err(|e| {
+            anyhow!(
+                "Failed to read positive examples file '{}': {}",
+                file_path,
+                e
+            )
+        })?;
         for line in content.lines() {
             let line = line.trim();
             if !line.is_empty() && !line.starts_with('#') {
@@ -3533,8 +3555,13 @@ fn run_pattern_learning(matches: &clap::ArgMatches) -> Result<()> {
 
     // Load negative examples from file
     if let Some(file_path) = matches.get_one::<String>("negative-file") {
-        let content = std::fs::read_to_string(file_path)
-            .map_err(|e| anyhow!("Failed to read negative examples file '{}': {}", file_path, e))?;
+        let content = std::fs::read_to_string(file_path).map_err(|e| {
+            anyhow!(
+                "Failed to read negative examples file '{}': {}",
+                file_path,
+                e
+            )
+        })?;
         for line in content.lines() {
             let line = line.trim();
             if !line.is_empty() && !line.starts_with('#') {
@@ -3578,8 +3605,10 @@ fn run_pattern_learning(matches: &clap::ArgMatches) -> Result<()> {
     }
 
     // Collect examples for testing patterns
-    let positive_examples: Vec<String> = learner.positive_examples().map(|s| s.to_string()).collect();
-    let negative_examples: Vec<String> = learner.negative_examples().map(|s| s.to_string()).collect();
+    let positive_examples: Vec<String> =
+        learner.positive_examples().map(|s| s.to_string()).collect();
+    let negative_examples: Vec<String> =
+        learner.negative_examples().map(|s| s.to_string()).collect();
 
     // Learn patterns
     match learner.learn() {
@@ -3618,7 +3647,11 @@ fn run_pattern_learning(matches: &clap::ArgMatches) -> Result<()> {
                         if !neg_matches.is_empty() {
                             println!(
                                 "   ⚠ False positives: {}",
-                                neg_matches.iter().map(|s| format!("\"{}\"", s)).collect::<Vec<_>>().join(", ")
+                                neg_matches
+                                    .iter()
+                                    .map(|s| format!("\"{}\"", s))
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
                             );
                         }
                     }
@@ -3858,7 +3891,10 @@ fn run_atomic_multi_file_processing(
     use std::io::Write;
 
     if !quiet {
-        eprintln!("Atomic mode: processing {} files to staging...", files.len());
+        eprintln!(
+            "Atomic mode: processing {} files to staging...",
+            files.len()
+        );
     }
 
     // Create temp directory for staging
@@ -3897,12 +3933,16 @@ fn run_atomic_multi_file_processing(
                 match std::fs::File::create(&temp_path) {
                     Ok(mut f) => {
                         if let Err(e) = f.write_all(&output) {
-                            results.push((file.clone(), Err(anyhow!("Failed to write temp: {}", e))));
+                            results
+                                .push((file.clone(), Err(anyhow!("Failed to write temp: {}", e))));
                             all_success = false;
                             continue;
                         }
                         staged.push((file.clone(), temp_path.clone()));
-                        results.push((file.clone(), Ok(String::from_utf8_lossy(&output).to_string())));
+                        results.push((
+                            file.clone(),
+                            Ok(String::from_utf8_lossy(&output).to_string()),
+                        ));
                     }
                     Err(e) => {
                         results.push((file.clone(), Err(anyhow!("Failed to create temp: {}", e))));
@@ -3920,7 +3960,10 @@ fn run_atomic_multi_file_processing(
     // Stage 2: Commit or rollback
     if all_success && !staged.is_empty() {
         if !quiet {
-            eprintln!("Atomic mode: all {} files processed successfully, committing...", staged.len());
+            eprintln!(
+                "Atomic mode: all {} files processed successfully, committing...",
+                staged.len()
+            );
         }
 
         // Create backups if requested
@@ -3931,7 +3974,11 @@ fn run_atomic_multi_file_processing(
             if let Some(suffix) = backup_suffix {
                 let backup_path = PathBuf::from(format!("{}{}", original.display(), suffix));
                 if let Err(e) = std::fs::copy(original, &backup_path) {
-                    eprintln!("Warning: Failed to create backup for {}: {}", original.display(), e);
+                    eprintln!(
+                        "Warning: Failed to create backup for {}: {}",
+                        original.display(),
+                        e
+                    );
                 }
             }
 
@@ -3961,7 +4008,6 @@ fn run_atomic_multi_file_processing(
                 .save()
                 .map_err(|e| anyhow!("Failed to save checkpoint: {}", e))?;
         }
-
     } else {
         // Rollback: delete all temp files
         if !quiet {
@@ -3977,7 +4023,8 @@ fn run_atomic_multi_file_processing(
 
         // Report errors
         if json_output {
-            let errors: Vec<_> = results.iter()
+            let errors: Vec<_> = results
+                .iter()
                 .filter_map(|(path, result)| {
                     result.as_ref().err().map(|e| {
                         serde_json::json!({
@@ -3987,10 +4034,13 @@ fn run_atomic_multi_file_processing(
                     })
                 })
                 .collect();
-            println!("{}", serde_json::json!({
-                "status": "rollback",
-                "errors": errors
-            }));
+            println!(
+                "{}",
+                serde_json::json!({
+                    "status": "rollback",
+                    "errors": errors
+                })
+            );
         } else {
             for (path, result) in &results {
                 if let Err(e) = result {
@@ -4048,7 +4098,10 @@ fn run_conventional_commits_validation(matches: &clap::ArgMatches) -> Result<()>
 
     // Conventional Commits pattern:
     // ^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\(.+\))?(!)?: .+$
-    let valid_types = ["feat", "fix", "docs", "style", "refactor", "perf", "test", "build", "ci", "chore", "revert"];
+    let valid_types = [
+        "feat", "fix", "docs", "style", "refactor", "perf", "test", "build", "ci", "chore",
+        "revert",
+    ];
 
     // Parse type
     let type_end = first_line.find(['(', ':', '!']);
@@ -4109,7 +4162,8 @@ fn run_conventional_commits_validation(matches: &clap::ArgMatches) -> Result<()>
     }
 
     // Check for breaking change in footer
-    let has_breaking_footer = commit_msg.contains("BREAKING CHANGE:") || commit_msg.contains("BREAKING-CHANGE:");
+    let has_breaking_footer =
+        commit_msg.contains("BREAKING CHANGE:") || commit_msg.contains("BREAKING-CHANGE:");
 
     // Success - output parsed information in JSON if requested
     let use_json = matches.get_flag("json") || !io::stdout().is_terminal();
@@ -4149,7 +4203,10 @@ fn run_streaming_mode(
     use std::io::{BufRead, Write};
     use std::time::{Duration, Instant};
 
-    let interval_secs = matches.get_one::<u64>("stream-interval").copied().unwrap_or(5);
+    let interval_secs = matches
+        .get_one::<u64>("stream-interval")
+        .copied()
+        .unwrap_or(5);
     let interval = Duration::from_secs(interval_secs);
     let use_json = matches.get_flag("json") || matches.get_flag("jsonl");
     let quiet = matches.get_flag("quiet");
@@ -4174,15 +4231,22 @@ fn run_streaming_mode(
     }
 
     // Build compiled patterns for matching
-    let patterns: Vec<(String, Option<regex::Regex>)> = config.step.iter().map(|step| {
-        let name = step.description.clone().unwrap_or_else(|| step.pattern.clone());
-        let re = if !step.pattern.is_empty() {
-            regex::Regex::new(&step.pattern).ok()
-        } else {
-            None
-        };
-        (name, re)
-    }).collect();
+    let patterns: Vec<(String, Option<regex::Regex>)> = config
+        .step
+        .iter()
+        .map(|step| {
+            let name = step
+                .description
+                .clone()
+                .unwrap_or_else(|| step.pattern.clone());
+            let re = if !step.pattern.is_empty() {
+                regex::Regex::new(&step.pattern).ok()
+            } else {
+                None
+            };
+            (name, re)
+        })
+        .collect();
 
     // Process lines manually for streaming with aggregation
     let stdout = io::stdout();
@@ -4239,9 +4303,14 @@ fn run_streaming_mode(
             } else {
                 eprintln!("--- Streaming Summary ({:?} elapsed) ---", elapsed);
                 eprintln!("  Lines processed: {}", total_lines);
-                eprintln!("  Total matches: {} ({:.1}%)",
+                eprintln!(
+                    "  Total matches: {} ({:.1}%)",
                     total_matches,
-                    if total_lines > 0 { (total_matches as f64 / total_lines as f64) * 100.0 } else { 0.0 }
+                    if total_lines > 0 {
+                        (total_matches as f64 / total_lines as f64) * 100.0
+                    } else {
+                        0.0
+                    }
                 );
                 if !match_counts.is_empty() {
                     eprintln!("  By pattern:");
@@ -4277,12 +4346,20 @@ fn run_streaming_mode(
         eprintln!("\n=== Final Summary ===");
         eprintln!("  Total time: {:.2}s", elapsed.as_secs_f64());
         eprintln!("  Lines processed: {}", total_lines);
-        eprintln!("  Total matches: {} ({:.1}%)",
+        eprintln!(
+            "  Total matches: {} ({:.1}%)",
             total_matches,
-            if total_lines > 0 { (total_matches as f64 / total_lines as f64) * 100.0 } else { 0.0 }
+            if total_lines > 0 {
+                (total_matches as f64 / total_lines as f64) * 100.0
+            } else {
+                0.0
+            }
         );
         if total_lines > 0 {
-            eprintln!("  Lines/sec: {:.0}", total_lines as f64 / elapsed.as_secs_f64().max(0.001));
+            eprintln!(
+                "  Lines/sec: {:.0}",
+                total_lines as f64 / elapsed.as_secs_f64().max(0.001)
+            );
         }
     }
 
@@ -4302,7 +4379,9 @@ fn run_test_data_generation(
     let mut rng = rand::thread_rng();
 
     // Extract patterns from steps (only steps with non-empty patterns)
-    let patterns: Vec<(&str, Option<&str>)> = config.step.iter()
+    let patterns: Vec<(&str, Option<&str>)> = config
+        .step
+        .iter()
         .filter(|step| !step.pattern.is_empty())
         .map(|step| (step.pattern.as_str(), step.description.as_deref()))
         .collect();
@@ -4320,12 +4399,15 @@ fn run_test_data_generation(
         let sample = generate_sample_from_pattern(pattern, i, &mut rng);
 
         if use_json {
-            generated.push(serde_json::json!({
-                "index": i,
-                "pattern": pattern,
-                "description": description,
-                "sample": sample,
-            }).to_string());
+            generated.push(
+                serde_json::json!({
+                    "index": i,
+                    "pattern": pattern,
+                    "description": description,
+                    "sample": sample,
+                })
+                .to_string(),
+            );
         } else {
             generated.push(sample);
         }
@@ -4369,15 +4451,31 @@ fn generate_sample_from_pattern(pattern: &str, index: u32, rng: &mut impl rand::
         .replace(r"[A-Z]+", "EXAMPLE")
         .replace(r"[0-9]+", &format!("{}", rng.gen_range(1000..9999)))
         // Email-like patterns
-        .replace(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", &format!("user{}@example.com", index))
+        .replace(
+            r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}",
+            &format!("user{}@example.com", index),
+        )
         // IP-like patterns
-        .replace(r"\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}", &format!("192.168.{}.{}", rng.gen_range(0..255), rng.gen_range(1..255)))
+        .replace(
+            r"\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}",
+            &format!(
+                "192.168.{}.{}",
+                rng.gen_range(0..255),
+                rng.gen_range(1..255)
+            ),
+        )
         // UUID-like patterns
-        .replace(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
-            &format!("{:08x}-{:04x}-{:04x}-{:04x}-{:012x}",
-                rng.gen_range(0u32..u32::MAX), rng.gen_range(0u16..u16::MAX),
-                rng.gen_range(0u16..u16::MAX), rng.gen_range(0u16..u16::MAX),
-                rng.gen_range(0u64..0xffffffffffff)))
+        .replace(
+            r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
+            &format!(
+                "{:08x}-{:04x}-{:04x}-{:04x}-{:012x}",
+                rng.gen_range(0u32..u32::MAX),
+                rng.gen_range(0u16..u16::MAX),
+                rng.gen_range(0u16..u16::MAX),
+                rng.gen_range(0u16..u16::MAX),
+                rng.gen_range(0u64..0xffffffffffff)
+            ),
+        )
         // Quantifiers
         .replace("+", "")
         .replace("*", "")

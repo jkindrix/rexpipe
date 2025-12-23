@@ -740,9 +740,9 @@ impl PluginRegistry {
         let mut child = Command::new(shell_cmd.0)
             .arg(shell_cmd.1)
             .arg(command)
-            .stdin(Stdio::piped())    // Capture stdin for safe input passing
-            .stdout(Stdio::piped())   // Capture output for return value
-            .stderr(Stdio::piped())   // Capture errors for diagnostics
+            .stdin(Stdio::piped()) // Capture stdin for safe input passing
+            .stdout(Stdio::piped()) // Capture output for return value
+            .stderr(Stdio::piped()) // Capture errors for diagnostics
             .spawn()
             .map_err(|e| format!("Failed to spawn shell command: {}", e))?;
 

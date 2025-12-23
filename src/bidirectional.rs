@@ -48,7 +48,18 @@ fn unescape_regex(s: &str) -> String {
             if let Some(&next) = chars.peek() {
                 if matches!(
                     next,
-                    '\\' | '.' | '+' | '*' | '?' | '(' | ')' | '[' | ']' | '{' | '}' | '|' | '^'
+                    '\\' | '.'
+                        | '+'
+                        | '*'
+                        | '?'
+                        | '('
+                        | ')'
+                        | '['
+                        | ']'
+                        | '{'
+                        | '}'
+                        | '|'
+                        | '^'
                         | '$'
                 ) {
                     // Skip the backslash, use the metacharacter literally.
@@ -302,8 +313,7 @@ impl MappingStore {
 
     /// Get statistics about the mapping store.
     pub fn stats(&self) -> MappingStats {
-        let unique_steps: std::collections::HashSet<usize> =
-            self.by_step.keys().copied().collect();
+        let unique_steps: std::collections::HashSet<usize> = self.by_step.keys().copied().collect();
 
         MappingStats {
             total_mappings: self.forward.len(),

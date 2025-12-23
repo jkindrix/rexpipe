@@ -3,6 +3,10 @@
 //! These tests verify the command-line interface works correctly,
 //! testing flags, options, error handling, and exit codes.
 
+// Allow deprecated cargo_bin until assert_cmd provides a stable replacement.
+// The deprecation only affects custom build-dir configurations which we don't use.
+#![allow(deprecated)]
+
 use assert_cmd::Command;
 use predicates::prelude::*;
 use std::fs::File;

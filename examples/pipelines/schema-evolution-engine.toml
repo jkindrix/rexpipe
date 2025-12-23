@@ -2,11 +2,16 @@ name = "schema-evolution-engine"
 version = "1.0.0"
 description = "Analyzes schema changes between versions, generates migration scripts, validates compatibility"
 #
-# REQUIRES: PCRE mode (-P flag) for lookahead with backreference patterns
+# REQUIRES: rexpipe built with `--features pcre` for lookahead patterns.
+# Install with: cargo install rexpipe --features pcre
 #
 # Usage:
 #   # Compare two schema versions and generate migration
-#   cat schema_v1.sql schema_v2.sql | rexpipe -P -c schema-evolution-engine.toml
+#   cat schema_v1.sql schema_v2.sql | rexpipe -c schema-evolution-engine.toml
+
+# Enable PCRE mode for lookahead pattern support
+[settings]
+pcre_mode = true
 #
 # This pipeline implements a SCHEMA EVOLUTION ENGINE that:
 #

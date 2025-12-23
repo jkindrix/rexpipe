@@ -355,7 +355,10 @@ version = "1.0.0"
 
     assert!(result.is_ok());
     let library = result.unwrap();
-    assert!(library.patterns.is_empty(), "Empty library should have no patterns");
+    assert!(
+        library.patterns.is_empty(),
+        "Empty library should have no patterns"
+    );
 }
 
 #[test]
@@ -386,10 +389,7 @@ shared = 'second_value'
 
     let mut resolver = LibraryResolver::new(Some(dir.path()));
     // Load both libraries
-    let result = resolver.load_libraries(&[
-        "first.toml".to_string(),
-        "second.toml".to_string(),
-    ]);
+    let result = resolver.load_libraries(&["first.toml".to_string(), "second.toml".to_string()]);
 
     assert!(result.is_ok());
     let library = result.unwrap();
@@ -432,9 +432,7 @@ pattern = 'deeply_nested'
     );
 
     let mut resolver = LibraryResolver::new(Some(dir.path()));
-    let library = resolver
-        .load_libraries(&["deep.toml".to_string()])
-        .unwrap();
+    let library = resolver.load_libraries(&["deep.toml".to_string()]).unwrap();
 
     assert_eq!(
         library.get("level1.level2.level3.level4.pattern"),

@@ -566,7 +566,11 @@ impl PatternLearner {
             return None;
         }
 
-        if self.positive_examples.iter().any(|ex| ex.len() > MAX_EXAMPLE_LENGTH) {
+        if self
+            .positive_examples
+            .iter()
+            .any(|ex| ex.len() > MAX_EXAMPLE_LENGTH)
+        {
             return None;
         }
 
@@ -1256,7 +1260,10 @@ mod tests {
         let has_alternation = patterns.iter().any(|p| {
             p.pattern.contains('|') && p.pattern.contains("cat") && p.pattern.contains("dog")
         });
-        assert!(has_alternation, "Should learn alternation pattern for small enumerable sets");
+        assert!(
+            has_alternation,
+            "Should learn alternation pattern for small enumerable sets"
+        );
     }
 
     #[test]
@@ -1271,8 +1278,13 @@ mod tests {
         let patterns = learner.learn().unwrap();
 
         // Should find an anchored pattern
-        let has_anchored = patterns.iter().any(|p| p.pattern.starts_with('^') || p.pattern.ends_with('$'));
-        assert!(has_anchored, "Should learn anchored patterns when examples have consistent boundaries");
+        let has_anchored = patterns
+            .iter()
+            .any(|p| p.pattern.starts_with('^') || p.pattern.ends_with('$'));
+        assert!(
+            has_anchored,
+            "Should learn anchored patterns when examples have consistent boundaries"
+        );
     }
 
     #[test]
@@ -1292,7 +1304,10 @@ mod tests {
         let _has_range_quantifier = patterns.iter().any(|p| {
             p.pattern.contains("{2,4}") || p.pattern.contains("{2,") || p.pattern.contains(",4}")
         });
-        assert!(!patterns.is_empty(), "Should learn some pattern for variable-length examples");
+        assert!(
+            !patterns.is_empty(),
+            "Should learn some pattern for variable-length examples"
+        );
     }
 
     #[test]
@@ -1307,7 +1322,8 @@ mod tests {
         // Email template has no captures by default, alternation does
         // Just verify the field is correctly populated
         for pattern in &patterns {
-            let expected_has_captures = pattern.pattern.contains('(') && pattern.pattern.contains(')');
+            let expected_has_captures =
+                pattern.pattern.contains('(') && pattern.pattern.contains(')');
             assert_eq!(
                 pattern.has_captures, expected_has_captures,
                 "has_captures should match pattern content for: {}",

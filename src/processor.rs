@@ -412,7 +412,10 @@ impl FinalizeState {
                 counter_data.insert("unique".to_string(), serde_json::json!(true));
             }
 
-            counters_obj.insert(counter.name.clone(), serde_json::Value::Object(counter_data));
+            counters_obj.insert(
+                counter.name.clone(),
+                serde_json::Value::Object(counter_data),
+            );
         }
 
         serde_json::json!({
@@ -515,9 +518,7 @@ impl CompiledPattern {
             }
             CompiledPattern::Fixed(s) => {
                 if text.contains(s) {
-                    Some(PatternMatch {
-                        matched: s.clone(),
-                    })
+                    Some(PatternMatch { matched: s.clone() })
                 } else {
                     None
                 }
@@ -687,7 +688,13 @@ impl CompiledPattern {
     ///
     /// This method finds captures for the match at the given position and expands
     /// backreferences like `$1`, `$2`, etc. in the replacement string.
-    pub fn expand_captures(&self, text: &str, start: usize, _end: usize, replacement: &str) -> String {
+    pub fn expand_captures(
+        &self,
+        text: &str,
+        start: usize,
+        _end: usize,
+        replacement: &str,
+    ) -> String {
         match self {
             CompiledPattern::Standard(re) => {
                 // Find captures for this specific match
@@ -1369,9 +1376,15 @@ impl StreamProcessor {
             eprintln!(
                 "Warning: Complex pattern detected (score: {})\n  Pattern: {}\n  Issue: {}\n  Tip: {}",
                 complexity.score,
-                if pattern.len() > 60 { format!("{}...", &pattern[..60]) } else { pattern.to_string() },
+                if pattern.len() > 60 {
+                    format!("{}...", &pattern[..60])
+                } else {
+                    pattern.to_string()
+                },
                 complexity.explanation,
-                complexity.optimization_hint.unwrap_or_else(|| "Consider simplifying the pattern".to_string())
+                complexity
+                    .optimization_hint
+                    .unwrap_or_else(|| "Consider simplifying the pattern".to_string())
             );
         }
 
@@ -1498,7 +1511,10 @@ impl StreamProcessor {
         if pattern.contains("\\p{") || pattern.contains("\\P{") {
             score += 15;
             issues.push("Unicode character classes");
-            hint = Some("Unicode classes can be slow; consider ASCII alternatives if applicable".to_string());
+            hint = Some(
+                "Unicode classes can be slow; consider ASCII alternatives if applicable"
+                    .to_string(),
+            );
         }
 
         // Check for complex alternations
@@ -1506,7 +1522,8 @@ impl StreamProcessor {
         if alternation_count > 10 {
             score += ((alternation_count - 10) * 3) as u32;
             issues.push("many alternations");
-            hint = Some("Consider using character classes instead of long alternations".to_string());
+            hint =
+                Some("Consider using character classes instead of long alternations".to_string());
         }
 
         // Check for greedy quantifiers in succession (.*.*) - often indicates inefficient pattern
@@ -2584,9 +2601,7 @@ impl StreamProcessor {
 
             let elapsed = step_start.elapsed().as_millis() as u64;
             step_result.set_processing_time(elapsed);
-            self.stats
-                .step_timings
-                .insert(step_index, elapsed);
+            self.stats.step_timings.insert(step_index, elapsed);
             result.add_step_result(step_result);
         }
 
@@ -2613,7 +2628,8 @@ impl StreamProcessor {
         step_result: &mut StepResult,
     ) -> Result<(String, bool)> {
         // Check if we need variable expansion
-        let needs_var_expansion = replacement.contains("${seq}") || replacement.contains("${count}");
+        let needs_var_expansion =
+            replacement.contains("${seq}") || replacement.contains("${count}");
 
         // Check if bidirectional recording is needed
         let record_mappings = self
@@ -2669,7 +2685,12 @@ impl StreamProcessor {
         let matches_to_process = if ctx.is_global {
             matches
         } else {
-            vec![matches.into_iter().next().expect("matches verified non-empty above")]
+            vec![
+                matches
+                    .into_iter()
+                    .next()
+                    .expect("matches verified non-empty above"),
+            ]
         };
 
         let mut result = String::new();
@@ -2690,12 +2711,15 @@ impl StreamProcessor {
             let count_val = self.global_match_count;
 
             // Expand variables in replacement
-            let expanded = ctx.replacement
+            let expanded = ctx
+                .replacement
                 .replace("${seq}", &seq_val.to_string())
                 .replace("${count}", &count_val.to_string());
 
             // Expand capture groups using the pattern
-            let final_replacement = ctx.pattern.expand_captures(ctx.input, start, end, &expanded);
+            let final_replacement = ctx
+                .pattern
+                .expand_captures(ctx.input, start, end, &expanded);
 
             // Record bidirectional mapping if enabled
             if ctx.record_mappings {
@@ -3166,7 +3190,7 @@ impl StreamProcessor {
         // Create result with basic stats
         let result = PipelineResult {
             lines_processed: content.lines().count() as u64,
-            matches_found: transformations as u64, // Approximate: each transformation is a match
+            matches_found: transformations, // Approximate: each transformation is a match
             transformations_applied: transformations,
             errors: Vec::new(),
             step_results: Vec::new(),
@@ -3197,7 +3221,7 @@ impl StreamProcessor {
     pub fn process_file<W: Write>(
         &mut self,
         file_path: &std::path::Path,
-        writer: W,
+        mut writer: W,
     ) -> Result<PipelineResult> {
         #[cfg(feature = "tree-sitter")]
         if self.has_syntax_aware_steps() {
@@ -3209,7 +3233,7 @@ impl StreamProcessor {
             let language = file_path
                 .extension()
                 .and_then(|ext| ext.to_str())
-                .and_then(|ext| Self::detect_language_from_extension(ext));
+                .and_then(Self::detect_language_from_extension);
 
             let (output, result) = self.process_file_content(&content, language)?;
             writer.write_all(output.as_bytes())?;
@@ -3222,7 +3246,6 @@ impl StreamProcessor {
         let reader = std::io::BufReader::new(file);
         self.process_stream(reader, writer)
     }
-
 }
 
 impl ProcessorStats {

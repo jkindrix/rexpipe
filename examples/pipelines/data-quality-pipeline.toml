@@ -2,9 +2,16 @@ name = "data-quality-pipeline"
 version = "1.0.0"
 description = "Progressive data quality pipeline: Profile → Validate → Cleanse → Standardize → Enrich → Verify"
 #
+# REQUIRES: rexpipe built with `--features pcre` for backreference support in Stage 5.
+# Install with: cargo install rexpipe --features pcre
+#
 # Usage: cat raw-data.csv | rexpipe -c data-quality-pipeline.toml > clean-data.csv
 #
 # This pipeline implements a COMPLETE DATA QUALITY FRAMEWORK with 7 progressive stages:
+
+# Enable PCRE mode for backreference support (used in duplicate detection)
+[settings]
+pcre_mode = true
 #
 #   Stage 1: Profile       → Analyze data patterns, identify field types
 #   Stage 2: Validate      → Check constraints, flag anomalies
