@@ -168,34 +168,61 @@ cat redacted.txt | rexpipe -c redact.toml --reverse --mapping-file mappings.json
 # redact-reversible.toml
 name = "reversible-redact"
 
-[settings]
-bidirectional = true
+[bidirectional]
+enabled = true
+mapping_file = "mappings.json"
 
 [[step]]
 type = "substitute"
 pattern = "[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}"
-replacement = "[EMAIL_${count}]"
-reversible = true
+replacement = "[EMAIL_${seq}]"
+flags = ["global"]
 
 [[step]]
 type = "substitute"
 pattern = "\\b\\d{3}-\\d{2}-\\d{4}\\b"
-replacement = "[SSN_${count}]"
-reversible = true
+replacement = "[SSN_${seq}]"
+flags = ["global"]
 ```
+
+**Variables available in replacements:**
+- `${seq}` - Per-step sequence counter (resets for each step)
+- `${count}` - Global match counter across all steps
 
 **Workflow:**
 ```bash
-# Step 1: Redact for sharing
+# Step 1: Redact for sharing (forward direction is default)
 echo "Contact: john@acme.com, SSN: 123-45-6789" | \
-  rexpipe -c redact-reversible.toml --mapping-file map.json
+  rexpipe -c redact-reversible.toml
 
 # Output: Contact: [EMAIL_1], SSN: [SSN_1]
-# map.json contains: {"EMAIL_1": "john@acme.com", "SSN_1": "123-45-6789"}
+# mappings.json is automatically saved with original → redacted mappings
 
-# Step 2: Later, restore original values
+# Step 2: Create a reverse config (same steps, direction = reverse)
+cat > restore.toml << 'EOF'
+name = "restore-redact"
+
+[bidirectional]
+enabled = true
+direction = "reverse"
+mapping_file = "mappings.json"
+
+[[step]]
+type = "substitute"
+pattern = "[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}"
+replacement = "[EMAIL_${seq}]"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+pattern = "\\b\\d{3}-\\d{2}-\\d{4}\\b"
+replacement = "[SSN_${seq}]"
+flags = ["global"]
+EOF
+
+# Step 3: Restore original values
 echo "Contact: [EMAIL_1], SSN: [SSN_1]" | \
-  rexpipe -c redact-reversible.toml --reverse --mapping-file map.json
+  rexpipe -c restore.toml
 
 # Output: Contact: john@acme.com, SSN: 123-45-6789
 ```

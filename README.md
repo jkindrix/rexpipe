@@ -934,6 +934,83 @@ rexpipe -c config.toml --watch --in-place ./data/*.txt
 
 Press Ctrl+C to exit watch mode.
 
+## Advanced CLI Modes
+
+### Conventional Commits Validation
+
+Validate commit messages against the [Conventional Commits](https://www.conventionalcommits.org/) specification:
+
+```bash
+# Validate a commit message
+echo "feat(cli): add new streaming mode" | rexpipe --conventional-commits
+
+# Use in git hooks (.git/hooks/commit-msg)
+#!/bin/sh
+rexpipe --conventional-commits < "$1" || exit 1
+```
+
+Valid types: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, `revert`
+
+### Streaming Mode with Aggregation
+
+Real-time processing with periodic statistics:
+
+```bash
+# Monitor logs with 10-second summaries
+tail -f /var/log/app.log | rexpipe -c log-monitor.toml --stream --stream-interval 10
+
+# JSON output for monitoring dashboards
+tail -f app.log | rexpipe -c errors.toml --stream --json
+```
+
+Streaming mode provides:
+- Real-time line processing
+- Periodic match count summaries
+- Match rate statistics
+- Lines-per-second throughput
+
+### Git Diff-Aware Processing
+
+Only process files changed since a git reference:
+
+```bash
+# Process files changed since main branch
+rexpipe -c migrate.toml -R --git-diff main src/
+
+# Process files changed in last commit
+rexpipe -c lint.toml -R --git-diff HEAD~1 .
+```
+
+### Atomic Multi-File Transforms
+
+Process multiple files atomically - all succeed or all rollback:
+
+```bash
+# Atomic migration with backup
+rexpipe -c migration.toml -R -i --atomic -b .bak --apply src/
+
+# Dry-run first
+rexpipe -c migration.toml -R -i --atomic --dry-run src/
+```
+
+Atomic mode ensures:
+- All files are processed to staging first
+- Changes only committed if all files succeed
+- Automatic rollback on any failure
+- Optional backup creation
+
+### Test Data Generation
+
+Generate sample data from pipeline patterns:
+
+```bash
+# Generate 10 samples matching patterns
+rexpipe -c email-validator.toml --generate 10
+
+# JSON output with pattern metadata
+rexpipe -c secrets.toml --generate 5 --json
+```
+
 ## JSON Output
 
 All JSON output uses a standardized schema with metadata for forward compatibility:
@@ -1827,6 +1904,40 @@ language = "rust"
 exclude_scopes = ["tests", "comments", "strings"]
 description = "Update API calls in production code only"
 ```
+
+## Documentation
+
+| Document | Description |
+|----------|-------------|
+| [ADVANCED_FEATURES.md](ADVANCED_FEATURES.md) | Pattern learning, discovery, bidirectional transforms, syntax-aware matching |
+| [BENCHMARKS.md](BENCHMARKS.md) | Performance comparisons with sed/grep, memory usage analysis |
+| [docs/SYNTAX_AWARE.md](docs/SYNTAX_AWARE.md) | Tree-sitter integration guide, supported languages, scope reference |
+
+## Integrations
+
+Ready-to-use configurations for popular tools:
+
+| Integration | Location |
+|-------------|----------|
+| Pre-commit hooks | [.pre-commit-hooks.yaml](.pre-commit-hooks.yaml) |
+| GitHub Actions | [integrations/github-actions.yml](integrations/github-actions.yml) |
+| GitLab CI | [integrations/gitlab-ci.yml](integrations/gitlab-ci.yml) |
+| Shell aliases | [integrations/shell-aliases.sh](integrations/shell-aliases.sh) |
+| VSCode tasks | [integrations/vscode-tasks.json](integrations/vscode-tasks.json) |
+
+See [integrations/README.md](integrations/README.md) for setup instructions.
+
+## Test Data
+
+Sample files for experimenting with rexpipe:
+
+```bash
+cd test-data
+rexpipe --discover sample-secrets.txt
+rexpipe -c ../examples/pipelines/secrets-redact.toml sample-secrets.txt
+```
+
+See [test-data/README.md](test-data/README.md) for more examples.
 
 ## Acknowledgments
 

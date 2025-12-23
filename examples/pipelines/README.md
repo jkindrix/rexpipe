@@ -54,6 +54,17 @@ Pipelines for security scanning, secret detection, and compliance.
 | [`legal-anonymize.toml`](legal-anonymize.toml) | Anonymize legal documents | `cat contract.txt \| rexpipe -c legal-anonymize.toml` |
 | [`ioc-extract.toml`](ioc-extract.toml) | Extract Indicators of Compromise for threat intel | `cat suspicious.log \| rexpipe -c ioc-extract.toml` |
 
+### Real-World Sanitization
+Production-ready pipelines for sanitizing cloud, infrastructure, and database artifacts.
+
+| Pipeline | Description | Usage |
+|----------|-------------|-------|
+| [`aws-cloudwatch-sanitize.toml`](aws-cloudwatch-sanitize.toml) | Sanitize AWS CloudWatch logs (account IDs, ARNs, keys) | `aws logs get-log-events ... \| rexpipe -c aws-cloudwatch-sanitize.toml` |
+| [`database-dump-sanitize.toml`](database-dump-sanitize.toml) | Sanitize SQL dumps (passwords, PII, connection strings) | `mysqldump mydb \| rexpipe -c database-dump-sanitize.toml` |
+| [`docker-logs-sanitize.toml`](docker-logs-sanitize.toml) | Sanitize Docker/container logs for sharing | `docker logs app \| rexpipe -c docker-logs-sanitize.toml` |
+| [`git-history-clean.toml`](git-history-clean.toml) | Clean secrets from git patches (BFG alternative) | `git log -p \| rexpipe -c git-history-clean.toml` |
+| [`terraform-state-sanitize.toml`](terraform-state-sanitize.toml) | Sanitize terraform.tfstate for sharing | `cat terraform.tfstate \| rexpipe -c terraform-state-sanitize.toml` |
+
 ### Code Analysis & Migration
 Pipelines for analyzing, transforming, and migrating codebases.
 
@@ -106,6 +117,15 @@ Pipelines for DevOps workflows, Git, Docker, Kubernetes.
 | [`env-to-docker.toml`](env-to-docker.toml) | Convert .env to Dockerfile ENV | `cat .env \| rexpipe -c env-to-docker.toml` |
 | [`k8s-sanitize.toml`](k8s-sanitize.toml) | Sanitize Kubernetes manifests | `cat deploy.yaml \| rexpipe -c k8s-sanitize.toml` |
 | [`shell-history-audit.toml`](shell-history-audit.toml) | Audit shell history for security | `cat ~/.bash_history \| rexpipe -c shell-history-audit.toml` |
+| [`commit-lint.toml`](commit-lint.toml) | Lint and validate commit messages | `rexpipe --conventional-commits < .git/COMMIT_EDITMSG` |
+
+### Real-Time Streaming & Migration
+Pipelines designed for streaming mode and atomic operations.
+
+| Pipeline | Description | Usage |
+|----------|-------------|-------|
+| [`log-stream-monitor.toml`](log-stream-monitor.toml) | Real-time log monitoring with metrics | `tail -f app.log \| rexpipe -c log-stream-monitor.toml --stream` |
+| [`code-migration.toml`](code-migration.toml) | Safe codebase migration with atomic rollback | `rexpipe -c code-migration.toml -R -i --atomic --apply src/` |
 
 ### Publishing & Documentation
 Pipelines for content creation and document processing.
