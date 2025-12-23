@@ -1,0 +1,124 @@
+# Syntax-Aware Refactoring Pipeline
+# Uses tree-sitter to match only in specific syntax contexts
+#
+# Usage:
+#   rexpipe -c syntax-aware-refactor.toml --scope code --language python src/*.py
+
+name = "syntax-aware-refactor"
+version = "1.0.0"
+description = "Refactor code symbols without affecting strings or comments"
+
+[settings]
+# These can be overridden via CLI: --scope, --language
+default_scope = "code"
+default_language = "python"
+
+# =============================================================================
+# Function Renames (only in code, not strings/comments)
+# =============================================================================
+
+[[step]]
+type = "substitute"
+description = "Rename deprecated function"
+pattern = "\\bget_user_data\\b"
+replacement = "fetch_user_profile"
+scope = "code"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Rename another deprecated function"
+pattern = "\\bsend_notification\\b"
+replacement = "dispatch_notification"
+scope = "code"
+flags = ["global"]
+
+# =============================================================================
+# Class Renames
+# =============================================================================
+
+[[step]]
+type = "substitute"
+description = "Rename legacy class"
+pattern = "\\bUserManager\\b"
+replacement = "UserService"
+scope = "code"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Rename legacy class"
+pattern = "\\bDataStore\\b"
+replacement = "Repository"
+scope = "code"
+flags = ["global"]
+
+# =============================================================================
+# Variable Naming Convention Updates
+# =============================================================================
+
+[[step]]
+type = "substitute"
+description = "Update variable naming (camelCase to snake_case)"
+pattern = "\\buserName\\b"
+replacement = "user_name"
+scope = "code"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Update variable naming"
+pattern = "\\bisActive\\b"
+replacement = "is_active"
+scope = "code"
+flags = ["global"]
+
+# =============================================================================
+# API Updates
+# =============================================================================
+
+[[step]]
+type = "substitute"
+description = "Update API endpoint constant"
+pattern = '"/api/v1/'
+replacement = '"/api/v2/'
+scope = "code"
+flags = ["global"]
+
+# =============================================================================
+# String Literal Updates (scope = "string")
+# =============================================================================
+
+[[step]]
+type = "substitute"
+description = "Update error messages in strings"
+pattern = "User not found"
+replacement = "User does not exist"
+scope = "string"
+flags = ["global"]
+
+# =============================================================================
+# TODO Comments (scope = "comment")
+# =============================================================================
+
+[[step]]
+type = "substitute"
+description = "Mark TODOs with owner"
+pattern = "TODO:"
+replacement = "TODO(@team):"
+scope = "comment"
+flags = ["global"]
+
+# =============================================================================
+# Example: What this prevents
+# =============================================================================
+#
+# Input:
+#   def get_user_data(id):
+#       # get_user_data is deprecated
+#       return f"get_user_data called for {id}"
+#
+# With scope = "code":
+#   def fetch_user_profile(id):          # ← renamed
+#       # get_user_data is deprecated    # ← NOT changed (comment)
+#       return f"get_user_data called for {id}"  # ← NOT changed (string)

@@ -1,0 +1,151 @@
+# Incremental Log Processor
+# Uses checkpointing to process only new log entries
+#
+# Usage:
+#   # First run - processes entire file
+#   rexpipe -c incremental-log-processor.toml --checkpoint /var/lib/rexpipe/app.json < app.log
+#
+#   # Subsequent runs - only new entries
+#   rexpipe -c incremental-log-processor.toml --checkpoint /var/lib/rexpipe/app.json --resume < app.log
+#
+#   # With tail for real-time monitoring
+#   tail -f app.log | rexpipe -c incremental-log-processor.toml --checkpoint /var/lib/rexpipe/app.json
+
+name = "incremental-log-processor"
+version = "1.0.0"
+description = "Process logs incrementally with checkpoint support"
+
+[settings]
+# Enable checkpointing features
+checkpoint_enabled = true
+checkpoint_auto_save = true
+checkpoint_save_interval_lines = 1000
+
+# =============================================================================
+# PASS 1: Normalize Timestamps
+# =============================================================================
+
+[[step]]
+type = "substitute"
+description = "ISO timestamp normalization"
+pattern = "(\\d{4})/(\\d{2})/(\\d{2}) (\\d{2}):(\\d{2}):(\\d{2})"
+replacement = "$1-$2-$3T$4:$5:$6Z"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Unix timestamp to ISO"
+pattern = "\\b(\\d{10})\\b"
+replacement = "@@UNIX_TS:$1@@"
+flags = ["global"]
+
+# =============================================================================
+# PASS 2: Extract and Classify Log Levels
+# =============================================================================
+
+[[step]]
+type = "substitute"
+description = "Normalize ERROR level"
+pattern = "\\[(ERROR|ERR|FATAL|CRITICAL)\\]"
+replacement = "[ERROR]"
+flags = ["global", "case_insensitive"]
+
+[[step]]
+type = "substitute"
+description = "Normalize WARN level"
+pattern = "\\[(WARN|WARNING)\\]"
+replacement = "[WARN]"
+flags = ["global", "case_insensitive"]
+
+[[step]]
+type = "substitute"
+description = "Normalize INFO level"
+pattern = "\\[(INFO|INFORMATION)\\]"
+replacement = "[INFO]"
+flags = ["global", "case_insensitive"]
+
+[[step]]
+type = "substitute"
+description = "Normalize DEBUG level"
+pattern = "\\[(DEBUG|TRACE|VERBOSE)\\]"
+replacement = "[DEBUG]"
+flags = ["global", "case_insensitive"]
+
+# =============================================================================
+# PASS 3: Extract Key Metrics
+# =============================================================================
+
+[[step]]
+type = "substitute"
+description = "Tag response times"
+pattern = "(\\d+)ms"
+replacement = "@@METRIC:response_time:$1@@"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Tag status codes"
+pattern = "HTTP/(\\d\\.\\d)\\s+(\\d{3})"
+replacement = "HTTP/$1 @@STATUS:$2@@"
+flags = ["global"]
+
+# =============================================================================
+# PASS 4: Alert Conditions
+# =============================================================================
+
+[[step]]
+type = "substitute"
+description = "Mark high latency (>1000ms)"
+pattern = "@@METRIC:response_time:(\\d{4,})@@"
+replacement = "@@ALERT:HIGH_LATENCY:$1ms@@"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Mark 5xx errors"
+pattern = "@@STATUS:5(\\d{2})@@"
+replacement = "@@ALERT:SERVER_ERROR:5$1@@"
+flags = ["global"]
+
+# =============================================================================
+# Finalize: Summary Statistics
+# =============================================================================
+
+[finalize]
+enabled = true
+
+[[finalize.counters]]
+name = "errors"
+pattern = "\\[ERROR\\]"
+description = "Error count"
+
+[[finalize.counters]]
+name = "warnings"
+pattern = "\\[WARN\\]"
+description = "Warning count"
+
+[[finalize.counters]]
+name = "high_latency"
+pattern = "@@ALERT:HIGH_LATENCY"
+description = "High latency alerts"
+
+[[finalize.counters]]
+name = "server_errors"
+pattern = "@@ALERT:SERVER_ERROR"
+description = "Server error alerts"
+
+template = """
+# Log Processing Summary
+# Checkpoint: Processed incrementally since last run
+
+| Metric | Count |
+|--------|-------|
+| Errors | {{counters.errors}} |
+| Warnings | {{counters.warnings}} |
+| High Latency Alerts | {{counters.high_latency}} |
+| Server Errors | {{counters.server_errors}} |
+
+## Processed Entries:
+
+{{output}}
+"""

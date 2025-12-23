@@ -1,0 +1,101 @@
+# Cross-File Consistency Rules
+# Ensures patterns remain synchronized across related files
+#
+# Usage:
+#   rexpipe --cross-file examples/advanced/cross-file-rules.toml -R .
+
+name = "cross-file-consistency"
+version = "1.0.0"
+description = "Rules for ensuring cross-file pattern consistency"
+
+# =============================================================================
+# API Version Synchronization
+# =============================================================================
+
+[[cross_file_rule]]
+name = "api-version-source-tests"
+description = "API version in source files must match test files"
+trigger_pattern = "api/v[0-9]+/"
+trigger_files = "src/**/*.ts"
+related_files = "test/**/*.test.ts"
+ensure_pattern = "api/v[0-9]+/"
+action = "warn"
+
+[[cross_file_rule]]
+name = "api-version-docs"
+description = "API version in docs must match source"
+trigger_pattern = "api/v[0-9]+/"
+trigger_files = "src/**/*.ts"
+related_files = "docs/**/*.md"
+ensure_pattern = "api/v[0-9]+/"
+action = "warn"
+
+# =============================================================================
+# Environment Configuration Sync
+# =============================================================================
+
+[[cross_file_rule]]
+name = "env-example-completeness"
+description = "All env vars in .env.example should exist in .env.production"
+trigger_pattern = "^[A-Z_]+=.*"
+trigger_files = ".env.example"
+related_files = ".env.production"
+ensure_pattern = "^[A-Z_]+="
+action = "warn"
+
+[[cross_file_rule]]
+name = "docker-compose-env"
+description = "Docker compose should use vars from .env.example"
+trigger_pattern = "\\$\\{([A-Z_]+)\\}"
+trigger_files = "docker-compose.yml"
+related_files = ".env.example"
+ensure_pattern = "$1="
+action = "warn"
+
+# =============================================================================
+# Package Version Consistency
+# =============================================================================
+
+[[cross_file_rule]]
+name = "version-package-lock"
+description = "package.json version should match package-lock.json"
+trigger_pattern = '"version":\\s*"([^"]+)"'
+trigger_files = "package.json"
+related_files = "package-lock.json"
+ensure_pattern = '"version":\\s*"$1"'
+action = "fail"
+
+[[cross_file_rule]]
+name = "version-changelog"
+description = "Package version should be documented in CHANGELOG"
+trigger_pattern = '"version":\\s*"([^"]+)"'
+trigger_files = "package.json"
+related_files = "CHANGELOG.md"
+ensure_pattern = "## \\[$1\\]"
+action = "warn"
+
+# =============================================================================
+# Import/Export Consistency
+# =============================================================================
+
+[[cross_file_rule]]
+name = "index-exports"
+description = "Exported modules should exist in index file"
+trigger_pattern = "export\\s+\\*\\s+from\\s+['\"]\\./([^'\"]+)['\"]"
+trigger_files = "src/index.ts"
+related_files = "src/$1.ts"
+ensure_pattern = "export"
+action = "fail"
+
+# =============================================================================
+# Test Coverage
+# =============================================================================
+
+[[cross_file_rule]]
+name = "component-has-test"
+description = "Each component should have a corresponding test file"
+trigger_pattern = "export\\s+(function|class|const)\\s+(\\w+)"
+trigger_files = "src/components/**/*.tsx"
+related_files = "src/components/**/*.test.tsx"
+ensure_pattern = "(describe|test|it).*$2"
+action = "warn"

@@ -1,0 +1,103 @@
+# Reversible Redaction Pipeline
+# Transforms can be reversed using mapping files
+#
+# Usage (forward - redact):
+#   cat data.txt | rexpipe -c reversible-redaction.toml --mapping-file mappings.json
+#
+# Usage (reverse - restore):
+#   cat redacted.txt | rexpipe -c reversible-redaction.toml --reverse --mapping-file mappings.json
+
+name = "reversible-redaction"
+version = "1.0.0"
+description = "Redact PII with ability to restore original values"
+
+[settings]
+bidirectional = true
+
+# =============================================================================
+# Email Addresses
+# =============================================================================
+
+[[step]]
+type = "substitute"
+description = "Redact email addresses (reversible)"
+pattern = "[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}"
+replacement = "[EMAIL_${seq}]"
+reversible = true
+flags = ["global"]
+
+# =============================================================================
+# Social Security Numbers
+# =============================================================================
+
+[[step]]
+type = "substitute"
+description = "Redact SSNs (reversible)"
+pattern = "\\b\\d{3}-\\d{2}-\\d{4}\\b"
+replacement = "[SSN_${seq}]"
+reversible = true
+flags = ["global"]
+
+# =============================================================================
+# Phone Numbers
+# =============================================================================
+
+[[step]]
+type = "substitute"
+description = "Redact phone numbers (reversible)"
+pattern = "\\b(?:\\+1[-.]?)?\\(?\\d{3}\\)?[-.]?\\d{3}[-.]?\\d{4}\\b"
+replacement = "[PHONE_${seq}]"
+reversible = true
+flags = ["global"]
+
+# =============================================================================
+# Credit Card Numbers
+# =============================================================================
+
+[[step]]
+type = "substitute"
+description = "Redact credit card numbers (reversible)"
+pattern = "\\b(?:\\d{4}[-\\s]?){3}\\d{4}\\b"
+replacement = "[CC_${seq}]"
+reversible = true
+flags = ["global"]
+
+# =============================================================================
+# IP Addresses
+# =============================================================================
+
+[[step]]
+type = "substitute"
+description = "Redact IP addresses (reversible)"
+pattern = "\\b\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\b"
+replacement = "[IP_${seq}]"
+reversible = true
+flags = ["global"]
+
+# =============================================================================
+# Names (requires context - basic heuristic)
+# =============================================================================
+
+[[step]]
+type = "substitute"
+description = "Redact names after 'Name:' labels (reversible)"
+pattern = "(Name:\\s*)([A-Z][a-z]+\\s+[A-Z][a-z]+)"
+replacement = "$1[NAME_${seq}]"
+reversible = true
+flags = ["global"]
+
+# =============================================================================
+# Mapping File Format (auto-generated)
+# =============================================================================
+#
+# {
+#   "version": "1.0",
+#   "pipeline": "reversible-redaction",
+#   "created": "2024-01-15T10:30:00Z",
+#   "mappings": {
+#     "[EMAIL_1]": "john.doe@example.com",
+#     "[EMAIL_2]": "jane.smith@company.org",
+#     "[SSN_1]": "123-45-6789",
+#     "[PHONE_1]": "+1-555-123-4567"
+#   }
+# }

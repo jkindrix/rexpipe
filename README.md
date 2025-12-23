@@ -79,6 +79,22 @@ This enables:
 
 See [`examples/pipelines/progressive-system/`](examples/pipelines/progressive-system/) for a complete 4-stage code analysis system.
 
+## Advanced Capabilities
+
+Beyond basic pattern matching, rexpipe offers sophisticated features for complex workflows:
+
+| Feature | Description |
+|---------|-------------|
+| **Pattern Learning** | Infer regex from positive/negative examples (`--learn`) |
+| **Pattern Discovery** | Auto-detect emails, IPs, dates, API keys in data (`--discover`) |
+| **Bidirectional Transforms** | Reversible redaction with mapping files |
+| **Syntax-Aware Matching** | Tree-sitter scopes (code/string/comment) |
+| **Cross-File Operations** | Ensure consistency across related files |
+| **Checkpointing** | Incremental processing of growing files |
+| **Pipeline Networks** | Fan-out/fan-in parallel processing patterns |
+
+See [ADVANCED_FEATURES.md](ADVANCED_FEATURES.md) for complete documentation and [examples/advanced/](examples/advanced/) for working examples.
+
 ## Key Features
 
 - **JSON output for scripting** - When stdout is not a TTY, output is JSON by default
