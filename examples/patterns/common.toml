@@ -17,9 +17,13 @@ email = '[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'
 url = 'https?://[^\s<>]+'
 url_strict = 'https?://(?:www\.)?[-a-zA-Z0-9@:%._+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b[-a-zA-Z0-9()@:%_+.~#?&/=]*'
 
-# Phone numbers (various formats)
-phone_us = '(?:\+?1[-.\s]?)?\(?[0-9]{3}\)?[-.\s]?[0-9]{3}[-.\s]?[0-9]{4}'
-phone_intl = '\+[0-9]{1,3}[-.\s]?[0-9]{1,14}'
+# Phone numbers (require separators to avoid false positives with numeric IDs)
+# Matches: (555) 123-4567, 555-123-4567, 555.123.4567
+# Does NOT match: 5551234567 (bare digits that could be API keys/IDs)
+phone_us_parens = '\([0-9]{3}\)\s*[0-9]{3}[-.\s]?[0-9]{4}'
+phone_us_dashes = '\b[0-9]{3}[-.\s][0-9]{3}[-.\s][0-9]{4}\b'
+phone_us = '(?:\([0-9]{3}\)\s*[0-9]{3}[-.\s]?[0-9]{4}|\b[0-9]{3}[-.\s][0-9]{3}[-.\s][0-9]{4}\b)'
+phone_intl = '\+[0-9]{1,3}[-.\s][0-9]{1,14}'
 
 # UUIDs
 uuid = '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}'
@@ -109,8 +113,10 @@ password_field = "\\b(?:password|passwd|pwd|secret)[\"']?\\s*[:=]\\s*[\"']?[^\\s
 aws_access_key = '\bAKIA[0-9A-Z]{16}\b'
 aws_secret_key = '\b[a-zA-Z0-9/+=]{40}\b'
 
-# Credit card (basic pattern, not validation)
-credit_card = '\b(?:\d{4}[-\s]?){3}\d{4}\b'
+# Credit card (requires separators to avoid false positives)
+# Matches: 4111-1111-1111-1111, 4111 1111 1111 1111
+# Does NOT match: 4111111111111111 (bare digits)
+credit_card = '\b\d{4}[-\s]\d{4}[-\s]\d{4}[-\s]\d{4}\b'
 
 # SSN (US)
 ssn = '\b\d{3}-\d{2}-\d{4}\b'
