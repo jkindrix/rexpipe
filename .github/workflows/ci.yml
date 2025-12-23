@@ -284,7 +284,7 @@ jobs:
             ${{ runner.os }}-cargo-bench-
 
       - name: Run benchmarks
-        run: cargo bench --no-fail-fast -- --noplot
+        run: cargo bench --bench processing_benchmark -- --noplot
 
       - name: Archive benchmark results
         uses: actions/upload-artifact@v4
