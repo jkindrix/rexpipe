@@ -54,6 +54,12 @@ jobs:
             artifact: rexpipe-windows-x86_64
             binary: rexpipe.exe
 
+          # Windows ARM64
+          - os: windows-latest
+            target: aarch64-pc-windows-msvc
+            artifact: rexpipe-windows-aarch64
+            binary: rexpipe.exe
+
     steps:
       - uses: actions/checkout@v4
 
@@ -125,11 +131,38 @@ jobs:
             ${{ matrix.artifact }}.tar.gz
             ${{ matrix.artifact }}.zip
 
+  # Generate SBOM (Software Bill of Materials) for supply chain security
+  sbom:
+    name: Generate SBOM
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-sbom
+        uses: psastras/sbom-rs/actions/install-cargo-sbom@cargo-sbom-latest
+
+      - name: Generate CycloneDX SBOM (JSON)
+        run: cargo sbom --output-format cyclone_dx_json_1_6 > sbom-cyclonedx.json
+
+      - name: Generate SPDX SBOM (JSON)
+        run: cargo sbom --output-format spdx_json_2_3 > sbom-spdx.json
+
+      - name: Upload SBOM artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: |
+            sbom-cyclonedx.json
+            sbom-spdx.json
+
   # Create GitHub release
   release:
     name: Create Release
     runs-on: ubuntu-latest
-    needs: build
+    needs: [build, sbom]
     permissions:
       contents: write
     steps:
@@ -146,8 +179,12 @@ jobs:
       - name: Generate checksums
         run: |
           cd artifacts
+          # Move archives to root
           find . -type f \( -name "*.tar.gz" -o -name "*.zip" \) -exec mv {} . \;
-          sha256sum *.tar.gz *.zip > checksums-sha256.txt
+          # Move SBOM files to root
+          find . -name "sbom-*.json" -exec mv {} . \;
+          # Generate checksums for all release artifacts
+          sha256sum *.tar.gz *.zip sbom-*.json > checksums-sha256.txt
           cat checksums-sha256.txt
 
       - name: Extract changelog
@@ -177,6 +214,7 @@ jobs:
           files: |
             artifacts/*.tar.gz
             artifacts/*.zip
+            artifacts/sbom-*.json
             artifacts/checksums-sha256.txt
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
