@@ -600,6 +600,7 @@ impl SyntaxAnalyzer {
     }
 
     /// Recursively collect nodes matching the given types.
+    #[allow(clippy::only_used_in_recursion)]
     fn collect_matching_nodes(
         &self,
         node: tree_sitter::Node,
@@ -727,6 +728,163 @@ impl SyntaxAnalyzer {
         }
 
         result
+    }
+
+    /// Extract all matches that fall within scoped ranges.
+    ///
+    /// Returns a vector of matched strings that are both:
+    /// 1. Matched by the pattern
+    /// 2. Entirely within a scoped range
+    ///
+    /// # Arguments
+    /// * `source` - The source code to search
+    /// * `pattern` - The regex pattern to match
+    /// * `filter` - The scope filter to apply
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let matches = analyzer.scoped_extract(source, &pattern, &ScopeFilter::Code);
+    /// // Returns only matches that are in code, not in strings or comments
+    /// ```
+    pub fn scoped_extract(
+        &mut self,
+        source: &str,
+        pattern: &regex::Regex,
+        filter: &ScopeFilter,
+    ) -> Vec<String> {
+        let scope_ranges = self.find_scope_ranges(source, filter);
+        let mut results = Vec::new();
+
+        for m in pattern.find_iter(source) {
+            let match_range = ByteRange::new(m.start(), m.end());
+            // Check if the match falls entirely within a scoped range
+            if scope_ranges
+                .iter()
+                .any(|r| r.start <= match_range.start && r.end >= match_range.end)
+            {
+                results.push(m.as_str().to_string());
+            }
+        }
+
+        results
+    }
+
+    /// Apply a transformation function to matches within scoped ranges.
+    ///
+    /// Similar to `scoped_replace`, but uses a closure to transform matches
+    /// instead of a fixed replacement string.
+    ///
+    /// # Arguments
+    /// * `source` - The source code to transform
+    /// * `pattern` - The regex pattern to match
+    /// * `transformer` - Function that takes a matched string and returns the replacement
+    /// * `filter` - The scope filter to apply
+    ///
+    /// # Returns
+    ///
+    /// The source with all in-scope matches transformed.
+    pub fn scoped_transform<F>(
+        &mut self,
+        source: &str,
+        pattern: &regex::Regex,
+        transformer: F,
+        filter: &ScopeFilter,
+    ) -> String
+    where
+        F: Fn(&str) -> String,
+    {
+        let scope_ranges = self.find_scope_ranges(source, filter);
+
+        // Collect all matches that are in scope
+        let mut matches: Vec<(usize, usize, String)> = Vec::new();
+        for m in pattern.find_iter(source) {
+            let match_range = ByteRange::new(m.start(), m.end());
+            if scope_ranges
+                .iter()
+                .any(|r| r.start <= match_range.start && r.end >= match_range.end)
+            {
+                matches.push((m.start(), m.end(), m.as_str().to_string()));
+            }
+        }
+
+        // Apply transformations in reverse order to preserve byte positions
+        let mut result = source.to_string();
+        for (start, end, matched) in matches.into_iter().rev() {
+            let transformed = transformer(&matched);
+            result.replace_range(start..end, &transformed);
+        }
+
+        result
+    }
+
+    /// Check if all matches of a pattern fall within scoped ranges.
+    ///
+    /// This is useful for validation - checking that certain patterns
+    /// only appear in expected scopes (e.g., ensuring `unsafe` only appears in code).
+    ///
+    /// # Arguments
+    /// * `source` - The source code to validate
+    /// * `pattern` - The regex pattern to check
+    /// * `filter` - The scope filter - matches should be within this scope
+    ///
+    /// # Returns
+    ///
+    /// `true` if all matches are within scope, `false` if any match is outside scope.
+    /// Returns `true` if there are no matches (vacuous truth).
+    pub fn validate_in_scope(
+        &mut self,
+        source: &str,
+        pattern: &regex::Regex,
+        filter: &ScopeFilter,
+    ) -> bool {
+        let scope_ranges = self.find_scope_ranges(source, filter);
+
+        for m in pattern.find_iter(source) {
+            let match_range = ByteRange::new(m.start(), m.end());
+            // Check if the match falls entirely within any scoped range
+            let in_scope = scope_ranges
+                .iter()
+                .any(|r| r.start <= match_range.start && r.end >= match_range.end);
+            if !in_scope {
+                return false;
+            }
+        }
+
+        true
+    }
+
+    /// Get matches with their scope status for detailed validation reporting.
+    ///
+    /// Returns each match along with whether it's in scope, useful for
+    /// generating detailed validation error messages.
+    ///
+    /// # Arguments
+    /// * `source` - The source code to validate
+    /// * `pattern` - The regex pattern to check
+    /// * `filter` - The scope filter
+    ///
+    /// # Returns
+    ///
+    /// Vector of (matched_text, byte_range, is_in_scope) tuples.
+    pub fn validate_matches_detailed(
+        &mut self,
+        source: &str,
+        pattern: &regex::Regex,
+        filter: &ScopeFilter,
+    ) -> Vec<(String, ByteRange, bool)> {
+        let scope_ranges = self.find_scope_ranges(source, filter);
+        let mut results = Vec::new();
+
+        for m in pattern.find_iter(source) {
+            let match_range = ByteRange::new(m.start(), m.end());
+            let in_scope = scope_ranges
+                .iter()
+                .any(|r| r.start <= match_range.start && r.end >= match_range.end);
+            results.push((m.as_str().to_string(), match_range, in_scope));
+        }
+
+        results
     }
 }
 
@@ -941,5 +1099,125 @@ func BenchmarkSpeed(b *testing.B) {
             2,
             "Should match 'testing' in Test and Benchmark functions"
         );
+    }
+
+    #[test]
+    fn test_scoped_extract() {
+        let mut analyzer = SyntaxAnalyzer::new(Language::Rust).unwrap();
+        let source = r#"
+fn main() {
+    let foo = "foo_string";  // foo_comment
+    let bar = 42;
+}
+"#;
+        let pattern = regex::Regex::new(r"foo").unwrap();
+
+        // Extract only from code scope (not strings or comments)
+        let code_extracts = analyzer.scoped_extract(source, &pattern, &ScopeFilter::Code);
+        assert_eq!(code_extracts.len(), 1, "Should extract 'foo' only from code");
+        assert_eq!(code_extracts[0], "foo");
+
+        // Extract only from strings scope
+        let string_extracts = analyzer.scoped_extract(source, &pattern, &ScopeFilter::Strings);
+        assert_eq!(
+            string_extracts.len(),
+            1,
+            "Should extract 'foo' only from strings"
+        );
+        assert_eq!(string_extracts[0], "foo");
+
+        // Extract only from comments scope
+        let comment_extracts = analyzer.scoped_extract(source, &pattern, &ScopeFilter::Comments);
+        assert_eq!(
+            comment_extracts.len(),
+            1,
+            "Should extract 'foo' only from comments"
+        );
+    }
+
+    #[test]
+    fn test_scoped_transform() {
+        let mut analyzer = SyntaxAnalyzer::new(Language::Rust).unwrap();
+        let source = r#"
+fn main() {
+    let hello = "hello";  // hello comment
+}
+"#;
+        let pattern = regex::Regex::new(r"hello").unwrap();
+
+        // Transform only in code scope - uppercase
+        let result =
+            analyzer.scoped_transform(source, &pattern, |s| s.to_uppercase(), &ScopeFilter::Code);
+
+        // Variable name should be uppercased
+        assert!(result.contains("HELLO"), "Variable name should be uppercased");
+        // String content should remain unchanged
+        assert!(
+            result.contains("\"hello\""),
+            "String should remain unchanged"
+        );
+        // Comment should remain unchanged
+        assert!(
+            result.contains("// hello"),
+            "Comment should remain unchanged"
+        );
+    }
+
+    #[test]
+    fn test_validate_in_scope() {
+        let mut analyzer = SyntaxAnalyzer::new(Language::Rust).unwrap();
+
+        // Source where "debug" appears only in a string
+        let string_only_source = r#"
+fn main() {
+    let msg = "debug mode";
+}
+"#;
+        let pattern = regex::Regex::new(r"debug").unwrap();
+
+        // All "debug" matches should be in strings scope
+        assert!(
+            analyzer.validate_in_scope(string_only_source, &pattern, &ScopeFilter::Strings),
+            "All 'debug' should be in strings scope"
+        );
+
+        // "debug" is NOT in code scope (it's in a string)
+        assert!(
+            !analyzer.validate_in_scope(string_only_source, &pattern, &ScopeFilter::Code),
+            "'debug' in string should fail code scope validation"
+        );
+
+        // Source where pattern appears only in code
+        let code_only_source = r#"
+fn main() {
+    let debug_mode = true;
+}
+"#;
+
+        // All matches should be in code scope
+        assert!(
+            analyzer.validate_in_scope(code_only_source, &pattern, &ScopeFilter::Code),
+            "'debug' in variable name should pass code scope validation"
+        );
+    }
+
+    #[test]
+    fn test_validate_matches_detailed() {
+        let mut analyzer = SyntaxAnalyzer::new(Language::Rust).unwrap();
+        let source = r#"
+fn main() {
+    let msg = "TODO: fix this";  // TODO: review
+}
+"#;
+        let pattern = regex::Regex::new(r"TODO").unwrap();
+
+        let details = analyzer.validate_matches_detailed(source, &pattern, &ScopeFilter::Code);
+
+        // Should find 2 TODOs (one in string, one in comment)
+        assert_eq!(details.len(), 2, "Should find 2 TODO matches");
+
+        // Neither should be in code scope (both in string and comment)
+        let in_code_count = details.iter().filter(|(_, _, in_scope)| *in_scope).count();
+        assert_eq!(in_code_count, 0, "No TODO should be in code scope");
     }
 }
