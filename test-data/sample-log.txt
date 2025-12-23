@@ -1,0 +1,20 @@
+2024-12-21 10:15:23 [INFO] Application started successfully
+2024-12-21 10:15:24 [DEBUG] Connecting to database at 192.168.1.100:5432
+2024-12-21 10:15:25 [INFO] Database connection established
+2024-12-21 10:15:26 [DEBUG] Loading configuration from /etc/app/config.yaml
+2024-12-21 10:15:27 [INFO] User login: john.doe@example.com from 192.168.1.50
+2024-12-21 10:15:28 [WARN] High memory usage: 85%
+2024-12-21 10:15:29 [ERROR] Failed to connect to cache server at 192.168.1.101:6379
+2024-12-21 10:15:30 [INFO] Retry attempt 1 for cache connection
+2024-12-21 10:15:31 [INFO] Cache connection restored
+2024-12-21 10:15:32 [DEBUG] Processing request from user_id=12345
+2024-12-21 10:15:33 [INFO] Request completed in 145ms
+2024-12-21 10:15:34 [WARN] Slow query detected: 2.3s for users table
+2024-12-21 10:15:35 [INFO] User logout: jane.smith@company.org
+2024-12-21 10:15:36 [ERROR] Payment processing failed for order_id=67890
+2024-12-21 10:15:37 [INFO] Email notification sent to admin@example.com
+2024-12-21 10:15:38 [DEBUG] Cleaning up temporary files
+2024-12-21 10:15:39 [INFO] Background job completed: data_sync
+2024-12-21 10:15:40 [WARN] API rate limit approaching: 95% used
+2024-12-21 10:15:41 [ERROR] SSL certificate verification failed for https://api.external.com
+2024-12-21 10:15:42 [INFO] Fallback to HTTP completed successfully

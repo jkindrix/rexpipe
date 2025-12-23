@@ -1,0 +1,39 @@
+# Sample file with PII patterns for testing detection and redaction
+
+# Customer Records
+Name: John Smith
+Email: john.smith@example.com
+Phone: (555) 123-4567
+SSN: 123-45-6789
+Credit Card: 4111-1111-1111-1111
+
+---
+
+Name: Jane Doe
+Email: jane.doe@company.org
+Phone: 555.987.6543
+SSN: 987-65-4321
+Credit Card: 5500 0000 0000 0004
+
+---
+
+# Mixed format examples
+Contact: sarah.johnson@mail.co.uk | +1-555-246-8135
+ID: 111-22-3333 (Please verify)
+
+# Embedded in text
+Please contact our support team at support@helpdesk.com or call us at 1-800-555-0199.
+Your confirmation number is #ABC123 and your account ends in 4242.
+
+# International formats
+UK Phone: +44 20 7946 0958
+German Phone: +49 30 12345678
+EU Email: user@domain.eu
+Australian Email: contact@business.com.au
+
+# Multiple on one line
+Records: alice@test.com (SSN: 222-33-4444), bob@test.com (SSN: 333-44-5555)
+
+# IP addresses (can be PII in some contexts)
+User logged in from 192.168.1.100
+Previous session: 10.0.0.50
