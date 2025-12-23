@@ -605,9 +605,31 @@ pub fn resolve_pattern_references(
     }
 }
 
-/// Check if a string contains pattern references
+/// Check if a string contains pattern references (library references, not variable expansions)
+///
+/// Pattern library references use the format `${library.pattern.name}` while
+/// variable expansions use `${seq}` or `${count}`. This function returns true
+/// only for library references, not variable expansions.
 pub fn has_pattern_references(input: &str) -> bool {
-    input.contains("${")
+    // Find all ${...} sequences
+    let mut i = 0;
+    let bytes = input.as_bytes();
+    while i < bytes.len().saturating_sub(1) {
+        if bytes[i] == b'$' && bytes.get(i + 1) == Some(&b'{') {
+            // Find the closing brace
+            if let Some(end) = input[i..].find('}') {
+                let ref_content = &input[i + 2..i + end];
+                // Skip known variable expansions
+                if ref_content != "seq" && ref_content != "count" {
+                    return true;
+                }
+            }
+            i += 2;
+        } else {
+            i += 1;
+        }
+    }
+    false
 }
 
 /// Recursively flatten patterns to dot notation

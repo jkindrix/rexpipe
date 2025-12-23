@@ -540,9 +540,12 @@ pub fn generate_reverse_pipeline(
         match step.step_type {
             StepType::Substitute => {
                 // Swap pattern and replacement
+                // The replacement becomes the new pattern, so we need to escape any
+                // regex metacharacters in it to match the literal replacement text
                 if let Some(ref replacement) = step.replacement {
                     let old_pattern = step.pattern.clone();
-                    step.pattern = replacement.clone();
+                    // Escape regex metacharacters in the replacement to use as literal pattern
+                    step.pattern = regex::escape(replacement);
                     step.replacement = Some(old_pattern);
                 }
             }

@@ -11,8 +11,9 @@ name = "reversible-redaction"
 version = "1.0.0"
 description = "Redact PII with ability to restore original values"
 
-[settings]
-bidirectional = true
+[bidirectional]
+enabled = true
+mapping_file = ".rexpipe-mappings.json"
 
 # =============================================================================
 # Email Addresses

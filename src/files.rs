@@ -1209,14 +1209,11 @@ impl MultiFileProcessor {
         trace!("Processing file: {}", path.display());
         let mut processor = StreamProcessor::new(self.config.clone())?;
 
-        // Read the file
-        let file = File::open(path)?;
-        let reader = BufReader::new(file);
-
         if self.options.in_place {
             // Process to a temporary buffer, then write back atomically
+            // Use process_file which handles syntax-aware processing automatically
             let mut output = Vec::new();
-            let pipeline_result = processor.process_stream(reader, &mut output)?;
+            let pipeline_result = processor.process_file(path, &mut output)?;
 
             // Atomic write: write to temp file, then rename
             // This ensures we never leave the file in a partial state
@@ -1260,8 +1257,9 @@ impl MultiFileProcessor {
             })
         } else {
             // Just process and count matches
+            // Use process_file which handles syntax-aware processing automatically
             let mut output = std::io::sink();
-            let pipeline_result = processor.process_stream(reader, &mut output)?;
+            let pipeline_result = processor.process_file(path, &mut output)?;
 
             Ok(FileResult {
                 path: path.to_path_buf(),
@@ -1277,10 +1275,9 @@ impl MultiFileProcessor {
     pub fn count_matches(&self, files: &[PathBuf]) -> Result<MultiFileResult> {
         let processor_fn = |path: &Path| -> Result<(u64, u64)> {
             let mut processor = StreamProcessor::new(self.config.clone())?;
-            let file = File::open(path)?;
-            let reader = BufReader::new(file);
             let mut output = std::io::sink();
-            let result = processor.process_stream(reader, &mut output)?;
+            // Use process_file which handles syntax-aware processing automatically
+            let result = processor.process_file(path, &mut output)?;
             Ok((result.matches_found, result.lines_processed))
         };
 
@@ -1426,10 +1423,9 @@ impl MultiFileProcessor {
         // Read the original file
         let original = fs::read_to_string(path)?;
 
-        // Process through the pipeline
-        let reader = std::io::Cursor::new(original.as_bytes());
+        // Process through the pipeline using process_file for syntax-aware support
         let mut output = Vec::new();
-        let result = processor.process_stream(reader, &mut output)?;
+        let result = processor.process_file(path, &mut output)?;
 
         // If no transformations, return None
         if result.transformations_applied == 0 {
@@ -1751,18 +1747,14 @@ pub mod async_processing {
         config: &PipelineConfig,
         options: &FileProcessingOptions,
     ) -> Result<FileResult, String> {
-        let content = async_fs::read_to_string(path)
-            .await
-            .map_err(|e| format!("Failed to read file: {}", e))?;
-
         let mut processor = StreamProcessor::new(config.clone())
             .map_err(|e| format!("Failed to create processor: {}", e))?;
 
-        let reader = std::io::Cursor::new(content.as_bytes());
+        // Use process_file for syntax-aware support
         let mut output = Vec::new();
         let pipeline_result = processor
-            .process_stream(reader, &mut output)
-            .map_err(|e| format!("Failed to process stream: {}", e))?;
+            .process_file(path, &mut output)
+            .map_err(|e| format!("Failed to process file: {}", e))?;
 
         if options.in_place {
             // Atomic write: write to temp file, then rename
@@ -1817,18 +1809,14 @@ pub mod async_processing {
         path: &Path,
         config: &PipelineConfig,
     ) -> Result<(u64, u64), String> {
-        let content = async_fs::read_to_string(path)
-            .await
-            .map_err(|e| format!("Failed to read file: {}", e))?;
-
         let mut processor = StreamProcessor::new(config.clone())
             .map_err(|e| format!("Failed to create processor: {}", e))?;
 
-        let reader = std::io::Cursor::new(content.as_bytes());
+        // Use process_file for syntax-aware support
         let mut output = std::io::sink();
         let result = processor
-            .process_stream(reader, &mut output)
-            .map_err(|e| format!("Failed to process stream: {}", e))?;
+            .process_file(path, &mut output)
+            .map_err(|e| format!("Failed to process file: {}", e))?;
 
         Ok((result.matches_found, result.lines_processed))
     }
