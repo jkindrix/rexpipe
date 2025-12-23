@@ -86,8 +86,6 @@ scripting, pipelines, and programmatic use.
   - Structure-aware pattern matching using tree-sitter parsing
   - Scopes: `code`, `strings`, `comments`, `functions`, `tests`
   - 7 languages: Rust, Python, JavaScript, TypeScript, Go, JSON, YAML
-- **Streaming Pipeline Server**: `--server` mode for network-based processing
-- **Continuous Streaming Mode**: `--stream` with URI-based sources and sinks
 
 ### Removed
 
