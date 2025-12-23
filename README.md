@@ -1,5 +1,12 @@
 # rexpipe
 
+[![CI](https://github.com/jkindrix/rexpipe/workflows/CI/badge.svg)](https://github.com/jkindrix/rexpipe/actions)
+[![codecov](https://codecov.io/gh/jkindrix/rexpipe/branch/main/graph/badge.svg)](https://codecov.io/gh/jkindrix/rexpipe)
+[![Crates.io](https://img.shields.io/crates/v/rexpipe.svg)](https://crates.io/crates/rexpipe)
+[![docs.rs](https://docs.rs/rexpipe/badge.svg)](https://docs.rs/rexpipe)
+[![MSRV](https://img.shields.io/badge/MSRV-1.85-blue.svg)](https://blog.rust-lang.org/2025/02/20/Rust-1.85.0.html)
+[![License](https://img.shields.io/crates/l/rexpipe.svg)](https://github.com/jkindrix/rexpipe#license)
+
 **DevOps-first text transformation with pattern learning, reversibility, and cross-file consistency.**
 
 rexpipe is a multi-stage regex pipeline system designed for DevOps, Security, and Compliance teams. Define transformations as version-controlled TOML files, infer patterns from examples instead of writing regex, and ensure consistency across your entire codebase.
