@@ -3221,7 +3221,10 @@ impl StreamProcessor {
             let regex = match regex::Regex::new(pattern_str) {
                 Ok(r) => r,
                 Err(e) => {
-                    log::warn!("Failed to compile pattern for syntax-aware processing: {}", e);
+                    log::warn!(
+                        "Failed to compile pattern for syntax-aware processing: {}",
+                        e
+                    );
                     continue;
                 }
             };
@@ -3281,7 +3284,14 @@ impl StreamProcessor {
                         result = analyzer.scoped_transform(
                             &result,
                             &regex,
-                            |matched| Self::transform_match(matched, transform_action, &extra, shell_timeout),
+                            |matched| {
+                                Self::transform_match(
+                                    matched,
+                                    transform_action,
+                                    &extra,
+                                    shell_timeout,
+                                )
+                            },
                             scope,
                         );
                     }
@@ -3371,6 +3381,9 @@ impl StreamProcessor {
     ///
     /// # Returns
     /// The pipeline result with processing statistics.
+    // When tree-sitter is disabled, `writer` is passed directly to process_stream
+    // which takes ownership, so `mut` is only needed for tree-sitter's write_all()
+    #[cfg_attr(not(feature = "tree-sitter"), allow(unused_mut))]
     pub fn process_file<W: Write>(
         &mut self,
         file_path: &std::path::Path,
