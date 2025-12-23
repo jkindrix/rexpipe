@@ -2868,36 +2868,43 @@ fn run_pattern_discovery(matches: &clap::ArgMatches) -> Result<()> {
     use std::io::BufRead;
 
     // Common pattern templates to search for
+    // Note: All patterns are hardcoded and validated at compile time
     let pattern_templates: Vec<(&str, &str, Regex)> = vec![
         (
             "email",
             r"Email addresses",
-            Regex::new(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}").unwrap(),
+            Regex::new(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}")
+                .expect("static email pattern"),
         ),
         (
             "ipv4",
             r"IPv4 addresses",
-            Regex::new(r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b").unwrap(),
+            Regex::new(r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b")
+                .expect("static ipv4 pattern"),
         ),
         (
             "phone_us",
             r"US phone numbers",
-            Regex::new(r"\b\d{3}[-.]?\d{3}[-.]?\d{4}\b").unwrap(),
+            Regex::new(r"\b\d{3}[-.]?\d{3}[-.]?\d{4}\b")
+                .expect("static phone pattern"),
         ),
         (
             "date_iso",
             r"ISO dates (YYYY-MM-DD)",
-            Regex::new(r"\b\d{4}-\d{2}-\d{2}\b").unwrap(),
+            Regex::new(r"\b\d{4}-\d{2}-\d{2}\b")
+                .expect("static date_iso pattern"),
         ),
         (
             "date_us",
             r"US dates (MM/DD/YYYY)",
-            Regex::new(r"\b\d{1,2}/\d{1,2}/\d{4}\b").unwrap(),
+            Regex::new(r"\b\d{1,2}/\d{1,2}/\d{4}\b")
+                .expect("static date_us pattern"),
         ),
         (
             "time_24h",
             r"24-hour time",
-            Regex::new(r"\b\d{1,2}:\d{2}(:\d{2})?\b").unwrap(),
+            Regex::new(r"\b\d{1,2}:\d{2}(:\d{2})?\b")
+                .expect("static time_24h pattern"),
         ),
         (
             "uuid",
@@ -2905,37 +2912,43 @@ fn run_pattern_discovery(matches: &clap::ArgMatches) -> Result<()> {
             Regex::new(
                 r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b",
             )
-            .unwrap(),
+            .expect("static uuid pattern"),
         ),
         (
             "hex_id",
             r"Hex identifiers (8+ chars)",
-            Regex::new(r"\b[0-9a-fA-F]{8,}\b").unwrap(),
+            Regex::new(r"\b[0-9a-fA-F]{8,}\b")
+                .expect("static hex_id pattern"),
         ),
         (
             "url",
             r"URLs",
-            Regex::new(r#"https?://[^\s<>"']+"#).unwrap(),
+            Regex::new(r#"https?://[^\s<>"']+"#)
+                .expect("static url pattern"),
         ),
         (
             "ssn",
             r"SSN-like patterns",
-            Regex::new(r"\b\d{3}-\d{2}-\d{4}\b").unwrap(),
+            Regex::new(r"\b\d{3}-\d{2}-\d{4}\b")
+                .expect("static ssn pattern"),
         ),
         (
             "credit_card",
             r"Credit card patterns",
-            Regex::new(r"\b\d{4}[- ]?\d{4}[- ]?\d{4}[- ]?\d{4}\b").unwrap(),
+            Regex::new(r"\b\d{4}[- ]?\d{4}[- ]?\d{4}[- ]?\d{4}\b")
+                .expect("static credit_card pattern"),
         ),
         (
             "api_key",
             r"API key patterns",
-            Regex::new(r"\b[A-Za-z0-9_-]{20,}\b").unwrap(),
+            Regex::new(r"\b[A-Za-z0-9_-]{20,}\b")
+                .expect("static api_key pattern"),
         ),
         (
             "base64_blob",
             r"Base64 blobs (20+ chars)",
-            Regex::new(r"\b[A-Za-z0-9+/]{20,}={0,2}\b").unwrap(),
+            Regex::new(r"\b[A-Za-z0-9+/]{20,}={0,2}\b")
+                .expect("static base64_blob pattern"),
         ),
     ];
 

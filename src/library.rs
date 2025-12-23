@@ -222,13 +222,19 @@ impl LibraryResolver {
     ///
     /// Search order:
     /// 1. Relative to the config file (if base_path is Some)
-    /// 2. Global ~/.rexpipe/patterns/ directory
+    /// 2. Current working directory
+    /// 3. Global ~/.rexpipe/patterns/ directory
     pub fn new(base_path: Option<&Path>) -> Self {
         let mut search_paths = Vec::new();
 
         // Add base path (relative to config file)
         if let Some(base) = base_path {
             search_paths.push(base.to_path_buf());
+        }
+
+        // Add current working directory for portable configs
+        if let Ok(cwd) = std::env::current_dir() {
+            search_paths.push(cwd);
         }
 
         // Add global patterns directory
