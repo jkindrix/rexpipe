@@ -1,0 +1,247 @@
+name = "ioc-extract"
+version = "1.0.0"
+description = "Extract Indicators of Compromise (IOCs) from threat intelligence reports"
+# Usage: cat threat-report.txt | rexpipe -c ioc-extract.toml
+#
+# Extracts: IP addresses, domains, URLs, file hashes, email addresses,
+# CVE IDs, MITRE ATT&CK IDs, Bitcoin addresses, and malware signatures
+#
+# Perfect for: Threat intel analysis, SIEM ingestion prep, IOC feeds
+
+# =============================================================================
+# PHASE 1: Network Indicators
+# =============================================================================
+
+# IPv4 addresses (defanged and normal)
+# Handles: 192.168.1.1, 192[.]168[.]1[.]1, 192.168.1[.]1
+[[step]]
+type = "substitute"
+description = "Normalize defanged IPs"
+pattern = "\\[(\\.)\\]"
+replacement = "$1"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Extract IPv4"
+pattern = "\\b(\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3})\\b"
+replacement = "[IPv4:$1]"
+flags = ["global"]
+
+# IPv6 addresses
+[[step]]
+type = "substitute"
+description = "Extract IPv6"
+pattern = "\\b((?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4})\\b"
+replacement = "[IPv6:$1]"
+flags = ["global"]
+
+# CIDR ranges
+[[step]]
+type = "substitute"
+description = "Extract CIDR"
+pattern = "\\[IPv4:(\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3})\\](/\\d{1,2})\\b"
+replacement = "[CIDR:$1$2]"
+flags = ["global"]
+
+# Domains (defanged and normal)
+# Handles: evil.com, evil[.]com, hxxp://evil.com
+[[step]]
+type = "substitute"
+description = "Normalize hxxp"
+pattern = "hxxps?"
+replacement = "http"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Extract domains"
+pattern = "\\b([a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\\.)+(?:com|net|org|io|ru|cn|xyz|top|tk|ml|ga|cf|info|biz|cc|pw|su|onion)\\b"
+replacement = "[DOMAIN:$0]"
+flags = ["global"]
+
+# URLs (full extraction)
+[[step]]
+type = "substitute"
+description = "Extract URLs"
+pattern = "(https?://[^\\s<>\"']+)"
+replacement = "[URL:$1]"
+flags = ["global"]
+
+# =============================================================================
+# PHASE 2: File-Based Indicators
+# =============================================================================
+
+# MD5 hashes (32 hex chars)
+[[step]]
+type = "substitute"
+description = "Extract MD5"
+pattern = "\\b([a-fA-F0-9]{32})\\b"
+replacement = "[MD5:$1]"
+flags = ["global"]
+
+# SHA1 hashes (40 hex chars)
+[[step]]
+type = "substitute"
+description = "Extract SHA1"
+pattern = "\\b([a-fA-F0-9]{40})\\b"
+replacement = "[SHA1:$1]"
+flags = ["global"]
+
+# SHA256 hashes (64 hex chars)
+[[step]]
+type = "substitute"
+description = "Extract SHA256"
+pattern = "\\b([a-fA-F0-9]{64})\\b"
+replacement = "[SHA256:$1]"
+flags = ["global"]
+
+# Suspicious file extensions
+[[step]]
+type = "substitute"
+description = "Flag suspicious files"
+pattern = "\\b([a-zA-Z0-9_-]+\\.(exe|dll|scr|bat|cmd|ps1|vbs|js|hta|wsf|jar|msi|com|pif))\\b"
+replacement = "[SUSPICIOUS_FILE:$1]"
+flags = ["global"]
+
+# =============================================================================
+# PHASE 3: Identity/Account Indicators
+# =============================================================================
+
+# Email addresses (often C2 or phishing related)
+[[step]]
+type = "substitute"
+description = "Extract emails"
+pattern = "([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,})"
+replacement = "[EMAIL:$1]"
+flags = ["global"]
+
+# Bitcoin addresses
+[[step]]
+type = "substitute"
+description = "Extract Bitcoin addresses"
+pattern = "\\b([13][a-km-zA-HJ-NP-Z1-9]{25,34})\\b"
+replacement = "[BTC:$1]"
+flags = ["global"]
+
+# Ethereum addresses
+[[step]]
+type = "substitute"
+description = "Extract Ethereum addresses"
+pattern = "\\b(0x[a-fA-F0-9]{40})\\b"
+replacement = "[ETH:$1]"
+flags = ["global"]
+
+# Monero addresses
+[[step]]
+type = "substitute"
+description = "Extract Monero addresses"
+pattern = "\\b(4[0-9AB][1-9A-HJ-NP-Za-km-z]{93})\\b"
+replacement = "[XMR:$1]"
+flags = ["global"]
+
+# =============================================================================
+# PHASE 4: Vulnerability/Technique Identifiers
+# =============================================================================
+
+# CVE IDs
+[[step]]
+type = "substitute"
+description = "Extract CVE IDs"
+pattern = "(CVE-\\d{4}-\\d{4,})"
+replacement = "[CVE:$1]"
+flags = ["global"]
+
+# MITRE ATT&CK Technique IDs
+[[step]]
+type = "substitute"
+description = "Extract MITRE ATT&CK"
+pattern = "\\b(T\\d{4}(?:\\.\\d{3})?)\\b"
+replacement = "[ATTACK:$1]"
+flags = ["global"]
+
+# CWE IDs
+[[step]]
+type = "substitute"
+description = "Extract CWE IDs"
+pattern = "(CWE-\\d+)"
+replacement = "[CWE:$1]"
+flags = ["global"]
+
+# =============================================================================
+# PHASE 5: Malware/Campaign Identifiers
+# =============================================================================
+
+# Common malware family naming patterns
+[[step]]
+type = "substitute"
+description = "Extract malware families"
+pattern = "(?i)\\b(trojan|ransomware|backdoor|rootkit|worm|botnet|rat|stealer|loader|dropper)[.: ]+([A-Za-z0-9_-]+)"
+replacement = "[MALWARE:$1/$2]"
+flags = ["global"]
+
+# APT group references
+[[step]]
+type = "substitute"
+description = "Extract APT groups"
+pattern = "\\b(APT[- ]?\\d+|APT[- ]?[A-Z][a-z]+)\\b"
+replacement = "[APT:$1]"
+flags = ["global"]
+
+# Threat actor names (common patterns)
+[[step]]
+type = "substitute"
+description = "Extract threat actors"
+pattern = "(?i)\\b(fancy bear|cozy bear|lazarus|apt28|apt29|turla|carbanak|fin7|sandworm|equation group|shadow brokers)\\b"
+replacement = "[ACTOR:$1]"
+flags = ["global"]
+
+# =============================================================================
+# PHASE 6: Registry/System Indicators
+# =============================================================================
+
+# Windows registry paths
+[[step]]
+type = "substitute"
+description = "Extract registry keys"
+pattern = "(HKEY_[A-Z_]+(?:\\\\[^\\s\\\\\"]+)+)"
+replacement = "[REGISTRY:$1]"
+flags = ["global"]
+
+# Short registry notation
+[[step]]
+type = "substitute"
+description = "Extract registry (short)"
+pattern = "(HK(?:LM|CU|CR|U|CC)(?:\\\\[^\\s\\\\\"]+)+)"
+replacement = "[REGISTRY:$1]"
+flags = ["global"]
+
+# Windows file paths
+[[step]]
+type = "substitute"
+description = "Extract Windows paths"
+pattern = "([A-Za-z]:\\\\(?:[^\\s\\\\\"]+\\\\)*[^\\s\\\\\"]+)"
+replacement = "[PATH:$1]"
+flags = ["global"]
+
+# Unix file paths
+[[step]]
+type = "substitute"
+description = "Extract Unix paths"
+pattern = "(/(?:usr|var|tmp|etc|home|opt|bin|sbin)/[^\\s\"']+)"
+replacement = "[PATH:$1]"
+flags = ["global"]
+
+# =============================================================================
+# FINALIZE: Create IOC summary
+# =============================================================================
+
+[finalize]
+enabled = true
+template = """
+=== IOC EXTRACTION SUMMARY ===
+Processed: {{lines_processed}} lines
+Matches: {{total_matches}} indicators found
+
+{{output}}
+"""

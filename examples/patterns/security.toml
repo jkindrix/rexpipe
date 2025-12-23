@@ -1,0 +1,132 @@
+# Security Pattern Library
+# Patterns for detecting secrets, credentials, and sensitive data
+#
+# Usage in pipelines:
+#   patterns_include = ["patterns/security.toml"]
+#   pattern = '${cloud.aws_access_key}'
+
+name = "Security Patterns"
+description = "Secret detection patterns for security scanning and compliance"
+version = "1.0.0"
+
+# Include common patterns for base functionality
+patterns_include = ["common.toml"]
+
+[patterns.cloud]
+# AWS credentials
+aws_access_key = '\bAKIA[0-9A-Z]{16}\b'
+aws_secret_key = '\b[A-Za-z0-9/+=]{40}\b'
+aws_session_token = '\bFwoG[A-Za-z0-9/+=]{100,}\b'
+aws_arn = 'arn:aws:[a-z0-9-]+:[a-z0-9-]*:[0-9]*:[a-zA-Z0-9/_-]+'
+
+# Google Cloud
+gcp_api_key = '\bAIza[0-9A-Za-z_-]{35}\b'
+gcp_service_account = '"type":\s*"service_account"'
+gcp_oauth_token = 'ya29\.[0-9A-Za-z_-]+'
+
+# Azure
+azure_storage_key = '\b[A-Za-z0-9/+=]{88}\b'
+azure_connection_string = 'DefaultEndpointsProtocol=https;AccountName=[^;]+;AccountKey=[^;]+'
+azure_sas_token = '\?sv=[0-9-]+&[^"\s]+'
+
+# DigitalOcean
+digitalocean_token = '\b(dop_v1_[a-f0-9]{64}|doo_v1_[a-f0-9]{64})\b'
+
+# Heroku
+heroku_api_key = '\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b'
+
+[patterns.api]
+# GitHub tokens
+github_pat = '\bghp_[a-zA-Z0-9]{36}\b'
+github_oauth = '\bgho_[a-zA-Z0-9]{36}\b'
+github_app_token = '\b(ghu|ghs)_[a-zA-Z0-9]{36}\b'
+github_refresh_token = '\bghr_[a-zA-Z0-9]{36}\b'
+
+# GitLab
+gitlab_token = '\bglpat-[a-zA-Z0-9_-]{20}\b'
+
+# Slack
+slack_token = '\bxox[baprs]-[0-9]{10,13}-[0-9]{10,13}[a-zA-Z0-9-]*\b'
+slack_webhook = 'https://hooks\.slack\.com/services/T[A-Z0-9]+/B[A-Z0-9]+/[a-zA-Z0-9]+'
+
+# Discord
+discord_token = '[MN][A-Za-z0-9]{23,}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{27}'
+discord_webhook = 'https://discord(?:app)?\.com/api/webhooks/[0-9]+/[A-Za-z0-9_-]+'
+
+# Stripe
+stripe_live_key = '\bsk_live_[0-9a-zA-Z]{24,}\b'
+stripe_test_key = '\bsk_test_[0-9a-zA-Z]{24,}\b'
+stripe_restricted = '\brk_live_[0-9a-zA-Z]{24,}\b'
+
+# Twilio
+twilio_account_sid = '\bAC[a-f0-9]{32}\b'
+twilio_auth_token = '\b[a-f0-9]{32}\b'
+
+# SendGrid
+sendgrid_api_key = '\bSG\.[a-zA-Z0-9_-]{22}\.[a-zA-Z0-9_-]{43}\b'
+
+# Mailchimp
+mailchimp_api_key = '[a-f0-9]{32}-us[0-9]{1,2}'
+
+# NPM
+npm_token = '\bnpm_[a-zA-Z0-9]{36}\b'
+
+# PyPI
+pypi_token = '\bpypi-[A-Za-z0-9_-]{50,}\b'
+
+[patterns.database]
+# Connection strings
+postgres_url = 'postgres(?:ql)?://[^:]+:[^@]+@[^/]+/[^\s?]+'
+mysql_url = 'mysql://[^:]+:[^@]+@[^/]+/[^\s?]+'
+mongodb_url = 'mongodb(?:\+srv)?://[^:]+:[^@]+@[^\s]+'
+redis_url = 'redis://[^:]*:[^@]+@[^:]+:[0-9]+(?:/[0-9]+)?'
+mssql_url = 'Server=[^;]+;.*Password=[^;]+'
+
+# JDBC connection strings
+jdbc_connection = 'jdbc:[a-z]+://[^\s;]+(?:;[^\s;=]+=[^\s;]+)*'
+
+[patterns.crypto]
+# Private keys (header detection)
+rsa_private = '-----BEGIN RSA PRIVATE KEY-----'
+ec_private = '-----BEGIN EC PRIVATE KEY-----'
+openssh_private = '-----BEGIN OPENSSH PRIVATE KEY-----'
+pgp_private = '-----BEGIN PGP PRIVATE KEY BLOCK-----'
+generic_private = '-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP )?PRIVATE KEY-----'
+
+# Certificates
+x509_cert = '-----BEGIN CERTIFICATE-----'
+pkcs12 = '-----BEGIN PKCS12-----'
+
+# JWT tokens
+jwt_token = '\beyJ[A-Za-z0-9_-]*\.eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]*\b'
+
+# Base64-encoded secrets (generic, high false positive rate)
+base64_secret = '\b[A-Za-z0-9+/]{40,}={0,2}\b'
+
+[patterns.generic]
+# Generic secret patterns
+password_assignment = "(?i)(?:password|passwd|pwd|secret|token|key|apikey|api_key|auth)\\s*[=:]\\s*[\"']?[^\\s\"']{8,}[\"']?"
+bearer_token = '\bBearer\s+[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b'
+basic_auth = '\bBasic\s+[A-Za-z0-9+/]+=*\b'
+authorization_header = 'Authorization:\s*(?:Bearer|Basic|Token)\s+[^\s]+'
+
+# High entropy strings (potential secrets)
+hex_32 = '\b[a-fA-F0-9]{32}\b'
+hex_40 = '\b[a-fA-F0-9]{40}\b'
+hex_64 = '\b[a-fA-F0-9]{64}\b'
+
+# Environment variable assignments with sensitive names
+env_secret = '(?i)^(?:export\s+)?(?:AWS_|GITHUB_|SLACK_|STRIPE_|DATABASE_|DB_|API_|SECRET_|TOKEN_|KEY_|PASSWORD_|AUTH_)[A-Z_]+=[^\s]+'
+
+[patterns.network]
+# Internal/private network exposure
+private_ip_class_a = '\b10\.\d{1,3}\.\d{1,3}\.\d{1,3}\b'
+private_ip_class_b = '\b172\.(?:1[6-9]|2[0-9]|3[0-1])\.\d{1,3}\.\d{1,3}\b'
+private_ip_class_c = '\b192\.168\.\d{1,3}\.\d{1,3}\b'
+localhost = '\b(?:localhost|127\.0\.0\.1|::1)\b'
+
+# URLs with embedded credentials
+url_with_creds = 'https?://[^:]+:[^@]+@[^\s]+'
+
+# Internal hostnames
+internal_host = '\b[a-z0-9-]+\.(?:internal|local|corp|private|intranet)\b'

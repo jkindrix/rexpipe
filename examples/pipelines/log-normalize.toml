@@ -7,29 +7,37 @@ description = "Normalize logs from various sources into consistent format"
 # PHASE 1: Normalize timestamp formats
 # =============================================================================
 
+# JSON timestamp field - process FIRST to extract before other patterns run
+[[step]]
+type = "substitute"
+pattern = "\"(timestamp|time|@timestamp|ts)\":\\s*\"([^\"]+)\""
+replacement = "[TS:$2]"
+
 # Nginx/Apache combined log format timestamp: [10/Oct/2023:13:55:36 -0700]
 [[step]]
 type = "substitute"
 pattern = "\\[(\\d{2})/(\\w{3})/(\\d{4}):(\\d{2}:\\d{2}:\\d{2}) [+-]\\d{4}\\]"
-replacement = "[$3-$2-$1T$4]"
+replacement = "[TS:$3-$2-$1T$4]"
 
-# Syslog format: Oct 10 13:55:36
+# Syslog format: Oct 10 13:55:36 (at start of line)
 [[step]]
 type = "substitute"
 pattern = "^(\\w{3})\\s+(\\d{1,2}) (\\d{2}:\\d{2}:\\d{2})"
-replacement = "[2024-$1-$2T$3]"
+replacement = "[TS:2024-$1-$2T$3]"
 
-# ISO8601 with T: 2023-10-10T13:55:36.123Z
+# ISO8601 with T: 2023-10-10T13:55:36.123Z (at word boundary, not already bracketed)
+# Matches standalone ISO timestamps - JSON ones are already handled above
 [[step]]
 type = "substitute"
-pattern = "(\\d{4}-\\d{2}-\\d{2})T(\\d{2}:\\d{2}:\\d{2})\\.?\\d*Z?"
-replacement = "[$1T$2]"
+pattern = "(?:^|\\s)(\\d{4}-\\d{2}-\\d{2})T(\\d{2}:\\d{2}:\\d{2})\\.?\\d*Z?(?:\\s|$)"
+replacement = " [TS:$1T$2] "
 
-# JSON timestamp field
+# Normalize all timestamp markers to consistent format
 [[step]]
 type = "substitute"
-pattern = "\"(timestamp|time|@timestamp|ts)\":\\s*\"([^\"]+)\""
-replacement = "[$2]"
+pattern = "\\[TS:([^\\]]+)\\]"
+replacement = "[$1]"
+flags = ["global"]
 
 # =============================================================================
 # PHASE 2: Normalize severity levels
@@ -69,41 +77,71 @@ replacement = "FATAL"
 # PHASE 3: Extract and normalize common fields
 # =============================================================================
 
-# HTTP status codes - tag by category
-[[step]]
-type = "substitute"
-pattern = "\\b(2\\d{2})\\b"
-replacement = "[OK:$1]"
-
-[[step]]
-type = "substitute"
-pattern = "\\b(3\\d{2})\\b"
-replacement = "[REDIRECT:$1]"
-
-[[step]]
-type = "substitute"
-pattern = "\\b(4\\d{2})\\b"
-replacement = "[CLIENT_ERR:$1]"
-
-[[step]]
-type = "substitute"
-pattern = "\\b(5\\d{2})\\b"
-replacement = "[SERVER_ERR:$1]"
-
-# HTTP methods
+# HTTP methods - process first to provide context for status codes
 [[step]]
 type = "substitute"
 pattern = "\"(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS) "
 replacement = "[$1] \""
 
+# HTTP status codes - only match after HTTP version or in typical log positions
+# Match: HTTP/1.1" 200 or similar patterns
+[[step]]
+type = "substitute"
+pattern = "HTTP/[0-9.]+\"?\\s+(2\\d{2})\\b"
+replacement = "HTTP\" [OK:$1]"
+
+[[step]]
+type = "substitute"
+pattern = "HTTP/[0-9.]+\"?\\s+(3\\d{2})\\b"
+replacement = "HTTP\" [REDIRECT:$1]"
+
+[[step]]
+type = "substitute"
+pattern = "HTTP/[0-9.]+\"?\\s+(4\\d{2})\\b"
+replacement = "HTTP\" [CLIENT_ERR:$1]"
+
+[[step]]
+type = "substitute"
+pattern = "HTTP/[0-9.]+\"?\\s+(5\\d{2})\\b"
+replacement = "HTTP\" [SERVER_ERR:$1]"
+
+# Also match standalone status codes preceded by whitespace and followed by size
+[[step]]
+type = "substitute"
+pattern = "\\s(2\\d{2})\\s+\\d+\\s*$"
+replacement = " [OK:$1] "
+
+[[step]]
+type = "substitute"
+pattern = "\\s(4\\d{2})\\s+\\d+\\s*$"
+replacement = " [CLIENT_ERR:$1] "
+
+[[step]]
+type = "substitute"
+pattern = "\\s(5\\d{2})\\s+\\d+\\s*$"
+replacement = " [SERVER_ERR:$1] "
+
 # =============================================================================
 # PHASE 4: Clean JSON log artifacts
 # =============================================================================
 
-# Remove JSON wrapper noise
+# Remove JSON wrapper noise - handle different field orders
+# Pattern 1: level/severity first, then message
 [[step]]
 type = "substitute"
-pattern = "^\\{\"(level|severity)\":\"([^\"]+)\",\"(message|msg)\":\"([^\"]+)\".*\\}$"
+pattern = "^\\{[^}]*\"(level|severity)\":\\s*\"([^\"]+)\"[^}]*\"(message|msg)\":\\s*\"([^\"]+)\"[^}]*\\}$"
+replacement = "$2 $4"
+
+# Pattern 2: message first, then level
+[[step]]
+type = "substitute"
+pattern = "^\\{[^}]*\"(message|msg)\":\\s*\"([^\"]+)\"[^}]*\"(level|severity)\":\\s*\"([^\"]+)\"[^}]*\\}$"
+replacement = "$4 $2"
+
+# Pattern 3: timestamp, level, message (common structured logging)
+[[step]]
+type = "substitute"
+pattern = "^\\{\\s*\\[[^\\]]+\\][^}]*\"(level|severity)\":\\s*\"([^\"]+)\"[^}]*\"(message|msg)\":\\s*\"([^\"]+)\"[^}]*\\}$"
 replacement = "$2 $4"
 
 # Clean escaped quotes in messages

@@ -1,0 +1,555 @@
+name = "api-spec-generator"
+version = "1.0.0"
+description = "Compiler-like pipeline: extracts route definitions from code and generates OpenAPI specification"
+#
+# Usage: rexpipe -c api-spec-generator.toml -R --include '*.{rs,ts,py,go}' src/
+#
+# This pipeline acts as a COMPILER FRONT-END that:
+#   1. Lexes source code to identify tokens
+#   2. Parses route definitions (decorators, macros, function signatures)
+#   3. Extracts parameter types and response schemas
+#   4. Builds an intermediate representation
+#   5. Generates OpenAPI 3.0 specification
+#
+# This demonstrates rexpipe as a CODE GENERATOR, not just a transformer.
+# Input: Source code with route definitions
+# Output: Valid OpenAPI YAML specification
+#
+# Supported frameworks:
+#   - Rust: Actix-web, Axum, Rocket
+#   - TypeScript: Express, Fastify, NestJS
+#   - Python: FastAPI, Flask, Django
+#   - Go: Gin, Echo, Chi
+
+# =============================================================================
+# LEXICAL ANALYSIS
+# Identify route-related tokens across frameworks
+# =============================================================================
+
+# --- Rust Frameworks ---
+
+# Actix-web routes
+[[step]]
+type = "substitute"
+description = "Lex: Actix route macro"
+pattern = "#\\[(get|post|put|delete|patch)\\(\"([^\"]+)\"\\)\\]\\s*(?:pub\\s+)?async\\s+fn\\s+([a-z_]+)"
+replacement = "@@ROUTE@@@@FRAMEWORK:actix@@@@METHOD:$1@@@@PATH:$2@@@@HANDLER:$3@@"
+flags = ["global"]
+
+# Axum routes
+[[step]]
+type = "substitute"
+description = "Lex: Axum route"
+pattern = "\\.route\\(\"([^\"]+)\",\\s*(get|post|put|delete|patch)\\(([a-z_]+)\\)\\)"
+replacement = "@@ROUTE@@@@FRAMEWORK:axum@@@@PATH:$1@@@@METHOD:$2@@@@HANDLER:$3@@"
+flags = ["global"]
+
+# Rocket routes
+[[step]]
+type = "substitute"
+description = "Lex: Rocket route"
+pattern = "#\\[(get|post|put|delete|patch)\\(\"([^\"]+)\"(?:,\\s*data\\s*=\\s*\"<([^>]+)>\")?\\)\\]"
+replacement = "@@ROUTE@@@@FRAMEWORK:rocket@@@@METHOD:$1@@@@PATH:$2@@@@BODY_PARAM:$3@@"
+flags = ["global"]
+
+# --- TypeScript/JavaScript Frameworks ---
+
+# Express routes
+[[step]]
+type = "substitute"
+description = "Lex: Express route"
+pattern = "(?:app|router)\\.(get|post|put|delete|patch)\\(['\"]([^'\"]+)['\"],\\s*(?:async\\s+)?(?:function\\s*)?\\(?([^)]*?)\\)?"
+replacement = "@@ROUTE@@@@FRAMEWORK:express@@@@METHOD:$1@@@@PATH:$2@@@@PARAMS:$3@@"
+flags = ["global"]
+
+# NestJS decorators
+[[step]]
+type = "substitute"
+description = "Lex: NestJS route"
+pattern = "@(Get|Post|Put|Delete|Patch)\\(['\"]?([^'\"\\)]*)['\"]?\\)\\s*(?:async\\s+)?([a-zA-Z]+)\\("
+replacement = "@@ROUTE@@@@FRAMEWORK:nestjs@@@@METHOD:$1@@@@PATH:$2@@@@HANDLER:$3@@"
+flags = ["global"]
+
+# NestJS controller
+[[step]]
+type = "substitute"
+description = "Lex: NestJS controller"
+pattern = "@Controller\\(['\"]([^'\"]+)['\"]\\)"
+replacement = "@@CONTROLLER@@@@BASE_PATH:$1@@"
+flags = ["global"]
+
+# --- Python Frameworks ---
+
+# FastAPI routes
+[[step]]
+type = "substitute"
+description = "Lex: FastAPI route"
+pattern = "@(?:app|router)\\.(get|post|put|delete|patch)\\(['\"]([^'\"]+)['\"]"
+replacement = "@@ROUTE@@@@FRAMEWORK:fastapi@@@@METHOD:$1@@@@PATH:$2@@"
+flags = ["global"]
+
+# FastAPI with response model
+[[step]]
+type = "substitute"
+description = "Lex: FastAPI response"
+pattern = "response_model\\s*=\\s*([A-Z][a-zA-Z0-9]*)"
+replacement = "@@RESPONSE_MODEL:$1@@"
+flags = ["global"]
+
+# Flask routes
+[[step]]
+type = "substitute"
+description = "Lex: Flask route"
+pattern = "@(?:app|bp)\\.route\\(['\"]([^'\"]+)['\"](?:,\\s*methods\\s*=\\s*\\[([^\\]]+)\\])?"
+replacement = "@@ROUTE@@@@FRAMEWORK:flask@@@@PATH:$1@@@@METHODS:$2@@"
+flags = ["global"]
+
+# Django URLs
+[[step]]
+type = "substitute"
+description = "Lex: Django path"
+pattern = "path\\(['\"]([^'\"]+)['\"],\\s*([a-z_]+)(?:\\.as_view\\(\\))?"
+replacement = "@@ROUTE@@@@FRAMEWORK:django@@@@PATH:$1@@@@HANDLER:$2@@"
+flags = ["global"]
+
+# --- Go Frameworks ---
+
+# Gin routes
+[[step]]
+type = "substitute"
+description = "Lex: Gin route"
+pattern = "(?:r|router|g|group)\\.(GET|POST|PUT|DELETE|PATCH)\\(\"([^\"]+)\",\\s*([a-zA-Z]+)"
+replacement = "@@ROUTE@@@@FRAMEWORK:gin@@@@METHOD:$1@@@@PATH:$2@@@@HANDLER:$3@@"
+flags = ["global"]
+
+# Echo routes
+[[step]]
+type = "substitute"
+description = "Lex: Echo route"
+pattern = "e\\.(GET|POST|PUT|DELETE|PATCH)\\(\"([^\"]+)\",\\s*([a-zA-Z]+)"
+replacement = "@@ROUTE@@@@FRAMEWORK:echo@@@@METHOD:$1@@@@PATH:$2@@@@HANDLER:$3@@"
+flags = ["global"]
+
+# =============================================================================
+# PARAMETER EXTRACTION
+# Parse path parameters, query params, body schemas
+# =============================================================================
+
+# Path parameters: /users/{id} or /users/:id or /users/<id>
+[[step]]
+type = "substitute"
+description = "Parse: Path param braces"
+pattern = "@@PATH:([^@]*?)\\{([a-z_]+)\\}([^@]*)@@"
+replacement = "@@PATH:$1{$2}$3@@@@PATH_PARAM:$2@@"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Parse: Path param colon"
+pattern = "@@PATH:([^@]*?):([a-z_]+)([^@]*)@@"
+replacement = "@@PATH:$1{$2}$3@@@@PATH_PARAM:$2@@"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Parse: Path param angle"
+pattern = "@@PATH:([^@]*?)<([a-z_]+)>([^@]*)@@"
+replacement = "@@PATH:$1{$2}$3@@@@PATH_PARAM:$2@@"
+flags = ["global"]
+
+# Query parameters from function signatures
+[[step]]
+type = "substitute"
+description = "Parse: Query param"
+pattern = "Query\\(([a-z_]+)\\)|query:\\s*([a-z_]+)"
+replacement = "@@QUERY_PARAM:$1$2@@"
+flags = ["global"]
+
+# Body parameters
+[[step]]
+type = "substitute"
+description = "Parse: JSON body"
+pattern = "(?:Json|Body)\\s*[<(]\\s*([A-Z][a-zA-Z0-9]*)\\s*[>)]|body:\\s*([A-Z][a-zA-Z0-9]*)"
+replacement = "@@BODY_SCHEMA:$1$2@@"
+flags = ["global"]
+
+# =============================================================================
+# TYPE INFERENCE
+# Infer types for parameters where possible
+# =============================================================================
+
+# Common ID patterns
+[[step]]
+type = "substitute"
+description = "Infer: UUID type"
+pattern = "@@PATH_PARAM:(uuid|guid)@@"
+replacement = "@@PATH_PARAM:$1@@@@PARAM_TYPE:string@@@@PARAM_FORMAT:uuid@@"
+
+# ID type inference - two-phase (only if no type exists)
+[[step]]
+type = "substitute"
+description = "Infer: Mark ID params"
+pattern = "@@PATH_PARAM:([a-z_]*id)@@"
+replacement = "@@PATH_PARAM:$1@@@@NEEDS_TYPE_INT@@"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Infer: Skip typed IDs (after)"
+pattern = "@@NEEDS_TYPE_INT@@(.*)@@PARAM_TYPE:"
+replacement = "$1@@PARAM_TYPE:"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Infer: Skip typed IDs (before)"
+pattern = "@@PARAM_TYPE:([^@]+)@@(.*)@@NEEDS_TYPE_INT@@"
+replacement = "@@PARAM_TYPE:$1@@$2"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Infer: ID type"
+pattern = "@@NEEDS_TYPE_INT@@"
+replacement = "@@PARAM_TYPE:integer@@"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Infer: Slug type"
+pattern = "@@PATH_PARAM:(slug|name|username)@@"
+replacement = "@@PATH_PARAM:$1@@@@PARAM_TYPE:string@@"
+
+# =============================================================================
+# RESPONSE INFERENCE
+# Infer response types from handler context
+# =============================================================================
+
+# Status code inference
+[[step]]
+type = "substitute"
+description = "Infer: POST creates"
+pattern = "@@ROUTE@@(.*)@@METHOD:post@@"
+replacement = "@@ROUTE@@$1@@METHOD:post@@@@RESPONSE_CODE:201@@"
+
+[[step]]
+type = "substitute"
+description = "Infer: DELETE no content"
+pattern = "@@ROUTE@@(.*)@@METHOD:delete@@"
+replacement = "@@ROUTE@@$1@@METHOD:delete@@@@RESPONSE_CODE:204@@"
+
+# GET/Default response code - two-phase (only if no code exists)
+# Phase 1: Mark GET methods for response code
+[[step]]
+type = "substitute"
+description = "Infer: Mark GET for code"
+pattern = "@@METHOD:get@@"
+replacement = "@@METHOD:get@@@@NEEDS_CODE@@"
+flags = ["global"]
+
+# Phase 2: Remove marker if response code exists
+[[step]]
+type = "substitute"
+description = "Infer: Skip coded GET (after)"
+pattern = "@@NEEDS_CODE@@(.*)@@RESPONSE_CODE:"
+replacement = "$1@@RESPONSE_CODE:"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Infer: Skip coded GET (before)"
+pattern = "@@RESPONSE_CODE:([^@]+)@@(.*)@@NEEDS_CODE@@"
+replacement = "@@RESPONSE_CODE:$1@@$2"
+flags = ["global"]
+
+# Phase 3: Add 200 to unmarked GETs
+[[step]]
+type = "substitute"
+description = "Infer: GET success"
+pattern = "@@NEEDS_CODE@@"
+replacement = "@@RESPONSE_CODE:200@@"
+flags = ["global"]
+
+# Default response code for other methods - two-phase
+# Phase 1: Mark all methods for response code check
+[[step]]
+type = "substitute"
+description = "Infer: Mark methods for default code"
+pattern = "@@METHOD:([a-z]+)@@"
+replacement = "@@METHOD:$1@@@@NEEDS_DEFAULT_CODE@@"
+flags = ["global"]
+
+# Phase 2: Remove marker if response code exists
+[[step]]
+type = "substitute"
+description = "Infer: Skip coded methods (after)"
+pattern = "@@NEEDS_DEFAULT_CODE@@(.*)@@RESPONSE_CODE:"
+replacement = "$1@@RESPONSE_CODE:"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Infer: Skip coded methods (before)"
+pattern = "@@RESPONSE_CODE:([^@]+)@@(.*)@@NEEDS_DEFAULT_CODE@@"
+replacement = "@@RESPONSE_CODE:$1@@$2"
+flags = ["global"]
+
+# Phase 3: Add 200 to unmarked methods
+[[step]]
+type = "substitute"
+description = "Infer: Default success"
+pattern = "@@NEEDS_DEFAULT_CODE@@"
+replacement = "@@RESPONSE_CODE:200@@"
+flags = ["global"]
+
+# =============================================================================
+# INTERMEDIATE REPRESENTATION
+# Build structured representation before output
+# =============================================================================
+
+# Group route components
+[[step]]
+type = "substitute"
+description = "IR: Build endpoint"
+pattern = "@@ROUTE@@(.*)@@METHOD:([a-z]+)@@(.*)@@PATH:([^@]+)@@"
+replacement = "@@ENDPOINT@@\n  @@E_PATH:$4@@\n  @@E_METHOD:$2@@\n$1$3\n@@END_ENDPOINT@@"
+flags = ["global"]
+
+# Normalize handler references
+[[step]]
+type = "substitute"
+description = "IR: Normalize handler"
+pattern = "@@HANDLER:([^@]+)@@"
+replacement = "  @@E_OPERATION:$1@@"
+flags = ["global"]
+
+# Normalize parameters
+[[step]]
+type = "substitute"
+description = "IR: Normalize path param"
+pattern = "@@PATH_PARAM:([^@]+)@@@@PARAM_TYPE:([^@]+)@@(?:@@PARAM_FORMAT:([^@]+)@@)?"
+replacement = "  @@E_PARAM:path:$1:$2:$3@@"
+flags = ["global"]
+
+# Default path params without type to string - two-phase
+# Phase 1: Mark untyped path params
+[[step]]
+type = "substitute"
+description = "IR: Mark untyped params"
+pattern = "@@PATH_PARAM:([^@]+)@@"
+replacement = "@@PATH_PARAM:$1@@@@NEEDS_DEFAULT_TYPE@@"
+flags = ["global"]
+
+# Phase 2: Remove marker if type exists
+[[step]]
+type = "substitute"
+description = "IR: Skip typed params (after)"
+pattern = "@@NEEDS_DEFAULT_TYPE@@(.*)@@PARAM_TYPE:"
+replacement = "$1@@PARAM_TYPE:"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "IR: Skip typed params (before)"
+pattern = "@@PARAM_TYPE:([^@]+)@@(.*)@@NEEDS_DEFAULT_TYPE@@"
+replacement = "@@PARAM_TYPE:$1@@$2"
+flags = ["global"]
+
+# Phase 3: Normalize remaining to string type
+[[step]]
+type = "substitute"
+description = "IR: Normalize path param simple"
+pattern = "@@PATH_PARAM:([^@]+)@@@@NEEDS_DEFAULT_TYPE@@"
+replacement = "  @@E_PARAM:path:$1:string:@@"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "IR: Normalize query param"
+pattern = "@@QUERY_PARAM:([^@]+)@@"
+replacement = "  @@E_PARAM:query:$1:string:@@"
+flags = ["global"]
+
+# Normalize body
+[[step]]
+type = "substitute"
+description = "IR: Normalize body"
+pattern = "@@BODY_SCHEMA:([^@]+)@@"
+replacement = "  @@E_BODY:$1@@"
+flags = ["global"]
+
+# Normalize response
+[[step]]
+type = "substitute"
+description = "IR: Normalize response code"
+pattern = "@@RESPONSE_CODE:([^@]+)@@"
+replacement = "  @@E_RESPONSE:$1@@"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "IR: Normalize response model"
+pattern = "@@RESPONSE_MODEL:([^@]+)@@"
+replacement = "  @@E_RESPONSE_SCHEMA:$1@@"
+flags = ["global"]
+
+# =============================================================================
+# OPENAPI GENERATION
+# Transform IR into OpenAPI YAML specification
+# =============================================================================
+
+# Generate path entry
+[[step]]
+type = "substitute"
+description = "Gen: Path entry"
+pattern = "@@ENDPOINT@@\\s*@@E_PATH:([^@]+)@@\\s*@@E_METHOD:([^@]+)@@"
+replacement = "\n  $1:\n    $2:"
+flags = ["global"]
+
+# Generate operation ID
+[[step]]
+type = "substitute"
+description = "Gen: Operation ID"
+pattern = "@@E_OPERATION:([^@]+)@@"
+replacement = "\n      operationId: $1"
+flags = ["global"]
+
+# Generate path parameter
+[[step]]
+type = "substitute"
+description = "Gen: Path parameter"
+pattern = "@@E_PARAM:path:([^:]+):([^:]+):([^@]*)@@"
+replacement = "\n      parameters:\n        - name: $1\n          in: path\n          required: true\n          schema:\n            type: $2"
+flags = ["global"]
+
+# Generate query parameter
+[[step]]
+type = "substitute"
+description = "Gen: Query parameter"
+pattern = "@@E_PARAM:query:([^:]+):([^:]+):([^@]*)@@"
+replacement = "\n        - name: $1\n          in: query\n          schema:\n            type: $2"
+flags = ["global"]
+
+# Generate request body
+[[step]]
+type = "substitute"
+description = "Gen: Request body"
+pattern = "@@E_BODY:([^@]+)@@"
+replacement = "\n      requestBody:\n        required: true\n        content:\n          application/json:\n            schema:\n              $ref: '#/components/schemas/$1'"
+flags = ["global"]
+
+# Generate response
+[[step]]
+type = "substitute"
+description = "Gen: Response with schema"
+pattern = "@@E_RESPONSE:([^@]+)@@\\s*@@E_RESPONSE_SCHEMA:([^@]+)@@"
+replacement = "\n      responses:\n        '$1':\n          description: Success\n          content:\n            application/json:\n              schema:\n                $ref: '#/components/schemas/$2'"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Gen: Response simple"
+pattern = "@@E_RESPONSE:([^@]+)@@"
+replacement = "\n      responses:\n        '$1':\n          description: Success"
+flags = ["global"]
+
+# Generate tags from framework
+[[step]]
+type = "substitute"
+description = "Gen: Tags"
+pattern = "@@FRAMEWORK:([^@]+)@@"
+replacement = "\n      tags:\n        - $1"
+flags = ["global"]
+
+# Clean endpoint markers
+[[step]]
+type = "substitute"
+description = "Clean: Endpoint markers"
+pattern = "@@END_ENDPOINT@@"
+replacement = ""
+flags = ["global"]
+
+# Clean controller markers
+[[step]]
+type = "substitute"
+description = "Clean: Controller markers"
+pattern = "@@CONTROLLER@@@@BASE_PATH:[^@]+@@"
+replacement = ""
+flags = ["global"]
+
+# Clean remaining markers
+[[step]]
+type = "substitute"
+description = "Clean: Remaining markers"
+pattern = "@@[A-Z_]+:[^@]*@@"
+replacement = ""
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Clean: Empty markers"
+pattern = "@@[A-Z_]+@@"
+replacement = ""
+flags = ["global"]
+
+# Clean empty lines
+[[step]]
+type = "substitute"
+description = "Clean: Multiple newlines"
+pattern = "\\n{3,}"
+replacement = "\n\n"
+flags = ["global"]
+
+# =============================================================================
+# FINALIZE
+# =============================================================================
+
+[finalize]
+enabled = true
+
+[[finalize.counters]]
+name = "endpoints"
+pattern = "operationId:"
+description = "API endpoints discovered"
+
+[[finalize.counters]]
+name = "parameters"
+pattern = "parameters:"
+description = "Parameters extracted"
+
+[[finalize.counters]]
+name = "request_bodies"
+pattern = "requestBody:"
+description = "Request bodies found"
+
+[[finalize.counters]]
+name = "schemas"
+pattern = "\\$ref:"
+description = "Schema references"
+
+template = """openapi: '3.0.3'
+info:
+  title: Generated API Specification
+  description: Auto-generated from source code by rexpipe api-spec-generator
+  version: '1.0.0'
+
+servers:
+  - url: http://localhost:8080
+    description: Local development
+
+paths:
+{{output}}
+
+components:
+  schemas:
+    # Schema definitions would be extracted from model files
+    # Run with model extraction pipeline for complete spec
+    GenericResponse:
+      type: object
+
+# Generation Statistics:
+# - Endpoints discovered: {{counters.endpoints}}
+# - Parameters extracted: {{counters.parameters}}
+# - Request bodies found: {{counters.request_bodies}}
+# - Schema references: {{counters.schemas}}
+"""

@@ -1,0 +1,238 @@
+name = "legal-anonymize"
+version = "1.0.0"
+description = "Anonymize legal documents for case studies, training, or publication"
+# Usage: cat case-file.txt | rexpipe -c legal-anonymize.toml > anonymized.txt
+#
+# Perfect for: Law firms publishing case studies, legal education materials,
+# court document redaction, privacy-compliant legal analytics
+#
+# Converts real parties to generic placeholders while preserving document structure
+
+# =============================================================================
+# PHASE 1: Party Name Anonymization
+# =============================================================================
+
+# Plaintiff/Defendant designations
+[[step]]
+type = "substitute"
+description = "Anonymize plaintiff"
+pattern = "(?i)(plaintiff|petitioner|complainant),?\\s+([A-Z][a-z]+\\s+)+[A-Z][a-z]+"
+replacement = "$1, [PARTY A]"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Anonymize defendant"
+pattern = "(?i)(defendant|respondent|appellee),?\\s+([A-Z][a-z]+\\s+)+[A-Z][a-z]+"
+replacement = "$1, [PARTY B]"
+flags = ["global"]
+
+# Case captions: Smith v. Jones, In re Smith
+[[step]]
+type = "substitute"
+description = "Anonymize case caption"
+pattern = "([A-Z][a-z]+)\\s+v\\.?\\s+([A-Z][a-z]+)"
+replacement = "[PARTY A] v. [PARTY B]"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Anonymize In re cases"
+pattern = "(?i)In re:?\\s+([A-Z][a-z]+(?:\\s+[A-Z][a-z]+)*)"
+replacement = "In re: [SUBJECT PARTY]"
+flags = ["global"]
+
+# Attorney names
+[[step]]
+type = "substitute"
+description = "Anonymize attorneys"
+pattern = "(?i)(attorney|counsel|esq\\.?|lawyer),?\\s+([A-Z][a-z]+\\s+)+[A-Z][a-z]+"
+replacement = "$1, [COUNSEL]"
+flags = ["global"]
+
+# Judge names
+[[step]]
+type = "substitute"
+description = "Anonymize judges"
+pattern = "(?i)(judge|justice|magistrate|hon\\.?)\\s+([A-Z][a-z]+\\s+)+[A-Z][a-z]+"
+replacement = "$1 [COURT OFFICER]"
+flags = ["global"]
+
+# Witness names
+[[step]]
+type = "substitute"
+description = "Anonymize witnesses"
+pattern = "(?i)(witness|deponent|affiant)\\s+([A-Z][a-z]+\\s+)+[A-Z][a-z]+"
+replacement = "$1 [WITNESS]"
+flags = ["global"]
+
+# =============================================================================
+# PHASE 2: Location Anonymization
+# =============================================================================
+
+# Street addresses
+[[step]]
+type = "substitute"
+description = "Anonymize addresses"
+pattern = "\\d+\\s+[A-Z][a-z]+(?:\\s+[A-Z][a-z]+)*\\s+(?:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Drive|Dr|Lane|Ln|Way|Court|Ct)\\.?"
+replacement = "[ADDRESS REDACTED]"
+flags = ["global"]
+
+# City, State references
+[[step]]
+type = "substitute"
+description = "Anonymize city/state"
+pattern = "([A-Z][a-z]+(?:\\s+[A-Z][a-z]+)?),\\s*(Alabama|Alaska|Arizona|Arkansas|California|Colorado|Connecticut|Delaware|Florida|Georgia|Hawaii|Idaho|Illinois|Indiana|Iowa|Kansas|Kentucky|Louisiana|Maine|Maryland|Massachusetts|Michigan|Minnesota|Mississippi|Missouri|Montana|Nebraska|Nevada|New Hampshire|New Jersey|New Mexico|New York|North Carolina|North Dakota|Ohio|Oklahoma|Oregon|Pennsylvania|Rhode Island|South Carolina|South Dakota|Tennessee|Texas|Utah|Vermont|Virginia|Washington|West Virginia|Wisconsin|Wyoming|AL|AK|AZ|AR|CA|CO|CT|DE|FL|GA|HI|ID|IL|IN|IA|KS|KY|LA|ME|MD|MA|MI|MN|MS|MO|MT|NE|NV|NH|NJ|NM|NY|NC|ND|OH|OK|OR|PA|RI|SC|SD|TN|TX|UT|VT|VA|WA|WV|WI|WY)"
+replacement = "[CITY], [STATE]"
+flags = ["global"]
+
+# County references
+[[step]]
+type = "substitute"
+description = "Anonymize county"
+pattern = "([A-Z][a-z]+)\\s+County"
+replacement = "[COUNTY] County"
+flags = ["global"]
+
+# =============================================================================
+# PHASE 3: Case/Docket Number Anonymization
+# =============================================================================
+
+# Federal case numbers (1:23-cv-00456)
+[[step]]
+type = "substitute"
+description = "Anonymize federal case numbers"
+pattern = "\\d+:\\d{2}-[a-z]{2}-\\d+"
+replacement = "[CASE NO. REDACTED]"
+flags = ["global"]
+
+# State case numbers (various formats)
+[[step]]
+type = "substitute"
+description = "Anonymize state case numbers"
+pattern = "(?i)(case|docket|file)\\s*(no\\.?|number|#):?\\s*[A-Z0-9-]+"
+replacement = "$1 No.: [REDACTED]"
+flags = ["global"]
+
+# =============================================================================
+# PHASE 4: Financial Amount Anonymization
+# =============================================================================
+
+# Dollar amounts (preserve order of magnitude)
+[[step]]
+type = "substitute"
+description = "Anonymize dollar amounts"
+pattern = "\\$[\\d,]+\\.?\\d*\\s*(million|billion|thousand)?"
+replacement = "$[AMOUNT REDACTED]"
+flags = ["global"]
+
+# Written dollar amounts
+[[step]]
+type = "substitute"
+description = "Anonymize written amounts"
+pattern = "(?i)(one|two|three|four|five|six|seven|eight|nine|ten|twenty|thirty|forty|fifty|hundred|thousand|million|billion)\\s+(dollars|cents)"
+replacement = "[AMOUNT] dollars"
+flags = ["global"]
+
+# =============================================================================
+# PHASE 5: Date Anonymization
+# =============================================================================
+
+# Specific dates become generic references
+[[step]]
+type = "substitute"
+description = "Anonymize specific dates"
+pattern = "(January|February|March|April|May|June|July|August|September|October|November|December)\\s+\\d{1,2},?\\s+\\d{4}"
+replacement = "[DATE]"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Anonymize numeric dates"
+pattern = "\\b\\d{1,2}/\\d{1,2}/\\d{2,4}\\b"
+replacement = "[DATE]"
+flags = ["global"]
+
+# Preserve relative time references
+[[step]]
+type = "substitute"
+description = "Preserve relative timing"
+pattern = "(?i)(on or about)\\s+\\[DATE\\]"
+replacement = "on or about [DATE]"
+
+# =============================================================================
+# PHASE 6: Identifying Numbers
+# =============================================================================
+
+# Social Security Numbers
+[[step]]
+type = "substitute"
+description = "Redact SSN"
+pattern = "\\b\\d{3}-\\d{2}-\\d{4}\\b"
+replacement = "[SSN REDACTED]"
+flags = ["global"]
+
+# Phone numbers
+[[step]]
+type = "substitute"
+description = "Redact phone"
+pattern = "\\(?\\d{3}\\)?[-. ]?\\d{3}[-. ]?\\d{4}"
+replacement = "[PHONE REDACTED]"
+flags = ["global"]
+
+# Email addresses
+[[step]]
+type = "substitute"
+description = "Redact email"
+pattern = "[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}"
+replacement = "[EMAIL REDACTED]"
+flags = ["global"]
+
+# Account/policy numbers
+[[step]]
+type = "substitute"
+description = "Redact account numbers"
+pattern = "(?i)(account|policy|claim)\\s*(no\\.?|number|#):?\\s*[A-Z0-9-]+"
+replacement = "$1 No.: [REDACTED]"
+flags = ["global"]
+
+# =============================================================================
+# PHASE 7: Company/Organization Names
+# =============================================================================
+
+# Corporate entities with common suffixes
+[[step]]
+type = "substitute"
+description = "Anonymize corporations"
+pattern = "([A-Z][a-z]+(?:\\s+[A-Z][a-z]+)*)\\s+(Inc\\.|LLC|LLP|Corp\\.|Corporation|Company|Co\\.|Ltd\\.|Limited|LP|P\\.?A\\.?|P\\.?C\\.?)"
+replacement = "[COMPANY] $2"
+flags = ["global"]
+
+# Insurance companies
+[[step]]
+type = "substitute"
+description = "Anonymize insurance cos"
+pattern = "([A-Z][a-z]+(?:\\s+[A-Z][a-z]+)*)\\s+(Insurance|Ins\\.|Assurance|Mutual)"
+replacement = "[INSURANCE COMPANY]"
+flags = ["global"]
+
+# Banks
+[[step]]
+type = "substitute"
+description = "Anonymize banks"
+pattern = "([A-Z][a-z]+(?:\\s+[A-Z][a-z]+)*)\\s+(Bank|Credit Union|Savings|N\\.?A\\.?)"
+replacement = "[FINANCIAL INSTITUTION]"
+flags = ["global"]
+
+# =============================================================================
+# FINALIZE: Add redaction notice
+# =============================================================================
+
+[finalize]
+enabled = true
+template = """[NOTICE: This document has been anonymized. All identifying information
+including party names, addresses, case numbers, and financial details
+have been redacted to protect privacy. Bracketed terms indicate categories
+of redacted information.]
+
+{{output}}"""

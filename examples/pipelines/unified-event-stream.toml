@@ -1,0 +1,614 @@
+name = "unified-event-stream"
+version = "1.0.0"
+description = "Multi-source data fusion: Merge heterogeneous event sources into unified timeline"
+#
+# Usage: cat nginx.log app.log db.log audit.log | rexpipe -c unified-event-stream.toml
+#   Or:  rexpipe -c unified-event-stream.toml -R --include '*.log' /var/log/
+#
+# This pipeline FUSES MULTIPLE DATA SOURCES into a single, queryable event stream:
+#
+#   Stage 1: Detect Source     → Identify log format (nginx, syslog, json, etc.)
+#   Stage 2: Parse Structure   → Extract fields per source type
+#   Stage 3: Normalize Schema  → Map to unified event schema
+#   Stage 4: Enrich Context    → Add derived fields (geo, user agent, etc.)
+#   Stage 5: Correlate Events  → Link related events across sources
+#   Stage 6: Prioritize        → Assign severity/importance scores
+#   Stage 7: Format Output     → Emit as unified JSON events
+#
+# Output: NDJSON stream suitable for ingestion into Elasticsearch, Splunk, etc.
+
+# =============================================================================
+# STAGE 1: Detect Source Format
+# Identify the log format to enable proper parsing
+# =============================================================================
+
+# Nginx/Apache combined log format
+[[step]]
+type = "substitute"
+description = "Stage1: Detect nginx"
+pattern = "^(\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3})\\s+-\\s+\\S+\\s+\\[(\\d{2}/\\w{3}/\\d{4}:\\d{2}:\\d{2}:\\d{2})"
+replacement = "@@FMT:NGINX@@$0"
+
+# Syslog format (RFC 3164)
+[[step]]
+type = "substitute"
+description = "Stage1: Detect syslog"
+pattern = "^(\\w{3})\\s+(\\d{1,2})\\s+(\\d{2}:\\d{2}:\\d{2})\\s+(\\S+)\\s+(\\S+)"
+replacement = "@@FMT:SYSLOG@@$0"
+
+# JSON log format (structured logging)
+[[step]]
+type = "substitute"
+description = "Stage1: Detect JSON"
+pattern = "^\\{.*\"(timestamp|time|@timestamp|ts)\".*\"(message|msg|log)\".*\\}$"
+replacement = "@@FMT:JSON@@$0"
+
+# ISO8601 timestamp prefix (common app format)
+[[step]]
+type = "substitute"
+description = "Stage1: Detect ISO app log"
+pattern = "^(\\d{4}-\\d{2}-\\d{2}[T ]\\d{2}:\\d{2}:\\d{2}).*?(DEBUG|INFO|WARN|ERROR|FATAL)"
+replacement = "@@FMT:APP@@$0"
+
+# AWS CloudWatch format
+[[step]]
+type = "substitute"
+description = "Stage1: Detect CloudWatch"
+pattern = "^(\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z)\\s+(\\S+)\\s+(\\S+)"
+replacement = "@@FMT:CLOUDWATCH@@$0"
+
+# Kubernetes pod logs
+[[step]]
+type = "substitute"
+description = "Stage1: Detect K8s"
+pattern = "^(\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d+Z)\\s+(stdout|stderr)\\s+(\\w)\\s+"
+replacement = "@@FMT:K8S@@$0"
+
+# Unknown format - still process (two-phase: mark candidates, then convert unmarked)
+# Phase 1: Mark all lines as potential unknown
+[[step]]
+type = "substitute"
+description = "Stage1: Mark unknown candidates"
+pattern = "^([^@])"
+replacement = "@@UNKNOWN_CANDIDATE@@$1"
+
+# Phase 2: Remove candidate marker from lines that got @@FMT:
+[[step]]
+type = "substitute"
+description = "Stage1: Clear known format candidates"
+pattern = "@@FMT:([^@]+)@@@@UNKNOWN_CANDIDATE@@"
+replacement = "@@FMT:$1@@"
+flags = ["global"]
+
+# Phase 3: Convert remaining candidates to unknown
+[[step]]
+type = "substitute"
+description = "Stage1: Mark unknown"
+pattern = "@@UNKNOWN_CANDIDATE@@"
+replacement = "@@FMT:UNKNOWN@@"
+flags = ["global"]
+
+# =============================================================================
+# STAGE 2: Parse Structure Per Format
+# Extract key fields based on detected format
+# =============================================================================
+
+# Parse Nginx format
+# IP - - [timestamp] "METHOD /path HTTP/x.x" status bytes "referer" "user-agent"
+[[step]]
+type = "substitute"
+description = "Stage2: Parse nginx IP"
+pattern = "@@FMT:NGINX@@(\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3})"
+replacement = "@@FMT:NGINX@@@@IP:$1@@"
+
+[[step]]
+type = "substitute"
+description = "Stage2: Parse nginx timestamp"
+pattern = "@@FMT:NGINX@@(.*)\\[(\\d{2}/\\w{3}/\\d{4}):(\\d{2}:\\d{2}:\\d{2}) [+-]\\d{4}\\]"
+replacement = "@@FMT:NGINX@@$1@@TS:$2T$3@@"
+
+[[step]]
+type = "substitute"
+description = "Stage2: Parse nginx request"
+pattern = "@@FMT:NGINX@@(.*)\"(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS) ([^\\s]+) HTTP"
+replacement = "@@FMT:NGINX@@$1@@METHOD:$2@@@@PATH:$3@@"
+
+[[step]]
+type = "substitute"
+description = "Stage2: Parse nginx status"
+pattern = "@@FMT:NGINX@@(.*)HTTP/[0-9.]+\" (\\d{3}) (\\d+)"
+replacement = "@@FMT:NGINX@@$1@@STATUS:$2@@@@BYTES:$3@@"
+
+[[step]]
+type = "substitute"
+description = "Stage2: Parse nginx user-agent"
+pattern = "@@FMT:NGINX@@(.*)\"([^\"]+)\"\\s*$"
+replacement = "@@FMT:NGINX@@$1@@UA:$2@@"
+
+# Parse Syslog format
+[[step]]
+type = "substitute"
+description = "Stage2: Parse syslog"
+pattern = "@@FMT:SYSLOG@@(\\w{3})\\s+(\\d{1,2})\\s+(\\d{2}:\\d{2}:\\d{2})\\s+(\\S+)\\s+(\\S+)(?:\\[\\d+\\])?:\\s*(.*)$"
+replacement = "@@FMT:SYSLOG@@@@TS:2024-$1-$2T$3@@@@HOST:$4@@@@SERVICE:$5@@@@MSG:$6@@"
+
+# Parse JSON format
+[[step]]
+type = "substitute"
+description = "Stage2: Parse JSON timestamp"
+pattern = "@@FMT:JSON@@.*\"(?:timestamp|time|@timestamp|ts)\"\\s*:\\s*\"([^\"]+)\""
+replacement = "@@FMT:JSON@@@@TS:$1@@$0"
+
+[[step]]
+type = "substitute"
+description = "Stage2: Parse JSON level"
+pattern = "@@FMT:JSON@@.*\"(?:level|severity|log_level)\"\\s*:\\s*\"([^\"]+)\""
+replacement = "@@FMT:JSON@@@@LVL:$1@@$0"
+
+[[step]]
+type = "substitute"
+description = "Stage2: Parse JSON message"
+pattern = "@@FMT:JSON@@.*\"(?:message|msg|log)\"\\s*:\\s*\"([^\"]+)\""
+replacement = "@@FMT:JSON@@@@MSG:$1@@$0"
+
+# Parse App log format
+[[step]]
+type = "substitute"
+description = "Stage2: Parse app log"
+pattern = "@@FMT:APP@@(\\d{4}-\\d{2}-\\d{2}[T ]\\d{2}:\\d{2}:\\d{2})(?:\\.\\d+)?\\s*(DEBUG|INFO|WARN|ERROR|FATAL)\\s*(?:\\[([^\\]]+)\\])?\\s*(.*)$"
+replacement = "@@FMT:APP@@@@TS:$1@@@@LVL:$2@@@@CTX:$3@@@@MSG:$4@@"
+
+# Parse CloudWatch format
+[[step]]
+type = "substitute"
+description = "Stage2: Parse CloudWatch"
+pattern = "@@FMT:CLOUDWATCH@@(\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}).*?\\s+(\\S+)\\s+(\\S+)\\s+(.*)$"
+replacement = "@@FMT:CLOUDWATCH@@@@TS:$1@@@@REQ_ID:$2@@@@STREAM:$3@@@@MSG:$4@@"
+
+# Parse K8s pod logs
+[[step]]
+type = "substitute"
+description = "Stage2: Parse K8s"
+pattern = "@@FMT:K8S@@(\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}).*?\\s+(stdout|stderr)\\s+(\\w)\\s+(.*)$"
+replacement = "@@FMT:K8S@@@@TS:$1@@@@STREAM:$2@@@@FLAG:$3@@@@MSG:$4@@"
+
+# =============================================================================
+# STAGE 3: Normalize to Unified Schema
+# Map all formats to common event structure
+# =============================================================================
+
+# Normalize format marker to source type
+[[step]]
+type = "substitute"
+description = "Stage3: Normalize source nginx"
+pattern = "@@FMT:NGINX@@"
+replacement = "@@SRC:webserver@@@@TYPE:http_access@@"
+
+[[step]]
+type = "substitute"
+description = "Stage3: Normalize source syslog"
+pattern = "@@FMT:SYSLOG@@"
+replacement = "@@SRC:system@@@@TYPE:syslog@@"
+
+[[step]]
+type = "substitute"
+description = "Stage3: Normalize source JSON"
+pattern = "@@FMT:JSON@@"
+replacement = "@@SRC:application@@@@TYPE:structured@@"
+
+[[step]]
+type = "substitute"
+description = "Stage3: Normalize source app"
+pattern = "@@FMT:APP@@"
+replacement = "@@SRC:application@@@@TYPE:app_log@@"
+
+[[step]]
+type = "substitute"
+description = "Stage3: Normalize source cloudwatch"
+pattern = "@@FMT:CLOUDWATCH@@"
+replacement = "@@SRC:aws@@@@TYPE:lambda@@"
+
+[[step]]
+type = "substitute"
+description = "Stage3: Normalize source k8s"
+pattern = "@@FMT:K8S@@"
+replacement = "@@SRC:kubernetes@@@@TYPE:container@@"
+
+[[step]]
+type = "substitute"
+description = "Stage3: Normalize source unknown"
+pattern = "@@FMT:UNKNOWN@@"
+replacement = "@@SRC:unknown@@@@TYPE:raw@@@@MSG:"
+
+# Normalize log levels
+[[step]]
+type = "substitute"
+description = "Stage3: Normalize level DEBUG"
+pattern = "@@LVL:(?i)(debug|trace|verbose)@@"
+replacement = "@@LVL:debug@@"
+
+[[step]]
+type = "substitute"
+description = "Stage3: Normalize level INFO"
+pattern = "@@LVL:(?i)(info|notice)@@"
+replacement = "@@LVL:info@@"
+
+[[step]]
+type = "substitute"
+description = "Stage3: Normalize level WARN"
+pattern = "@@LVL:(?i)(warn|warning)@@"
+replacement = "@@LVL:warn@@"
+
+[[step]]
+type = "substitute"
+description = "Stage3: Normalize level ERROR"
+pattern = "@@LVL:(?i)(error|err|severe|critical|fatal|emergency)@@"
+replacement = "@@LVL:error@@"
+
+# =============================================================================
+# STAGE 4: Enrich Context
+# Add derived fields and context
+# =============================================================================
+
+# Detect errors from status codes
+[[step]]
+type = "substitute"
+description = "Stage4: Detect 5xx error"
+pattern = "@@STATUS:(5\\d{2})@@"
+replacement = "@@STATUS:$1@@@@LVL:error@@"
+
+[[step]]
+type = "substitute"
+description = "Stage4: Detect 4xx warning"
+pattern = "@@STATUS:(4\\d{2})@@"
+replacement = "@@STATUS:$1@@@@LVL:warn@@"
+
+# 2xx success (only if no level exists) - two-phase approach
+# Phase 1: Mark 2xx status lines
+[[step]]
+type = "substitute"
+description = "Stage4: Mark 2xx candidates"
+pattern = "@@STATUS:(2\\d{2})@@"
+replacement = "@@STATUS:$1@@@@NEEDS_LVL@@"
+
+# Phase 2: Remove marker if @@LVL: already exists
+[[step]]
+type = "substitute"
+description = "Stage4: Skip already-leveled 2xx"
+pattern = "@@NEEDS_LVL@@(.*)@@LVL:"
+replacement = "$1@@LVL:"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Stage4: Skip already-leveled 2xx (before)"
+pattern = "@@LVL:([^@]+)@@(.*)@@NEEDS_LVL@@"
+replacement = "@@LVL:$1@@$2"
+flags = ["global"]
+
+# Phase 3: Convert remaining to info level
+[[step]]
+type = "substitute"
+description = "Stage4: Detect 2xx success"
+pattern = "@@NEEDS_LVL@@"
+replacement = "@@LVL:info@@"
+flags = ["global"]
+
+# Extract request ID patterns for correlation
+[[step]]
+type = "substitute"
+description = "Stage4: Extract correlation ID"
+pattern = "(?:request[_-]?id|trace[_-]?id|x-request-id|correlation[_-]?id)[=: ]+([a-f0-9-]{8,36})"
+replacement = "@@CORR:$1@@$0"
+flags = ["global"]
+
+# Extract user identifiers
+[[step]]
+type = "substitute"
+description = "Stage4: Extract user"
+pattern = "(?:user[_-]?id|uid|account)[=: ]+([a-zA-Z0-9_-]+)"
+replacement = "@@USER:$1@@$0"
+flags = ["global"]
+
+# Flag exceptions
+[[step]]
+type = "substitute"
+description = "Stage4: Flag exceptions"
+pattern = "(?i)(exception|error|failure|failed|panic|crash)([^@]*)(at|in|:)"
+replacement = "@@EXCEPTION@@$1$2$3"
+flags = ["global"]
+
+# =============================================================================
+# STAGE 5: Correlate Events
+# Link related events for tracing
+# =============================================================================
+
+# Mark events with same correlation ID
+[[step]]
+type = "substitute"
+description = "Stage5: Mark correlated"
+pattern = "@@CORR:([^@]+)@@"
+replacement = "@@TRACE:$1@@"
+flags = ["global"]
+
+# Link error to preceding request by timestamp proximity
+# (Simplified - full correlation needs cross-line state)
+[[step]]
+type = "substitute"
+description = "Stage5: Mark error correlation"
+pattern = "@@LVL:error@@(.*)@@TRACE:"
+replacement = "@@LVL:error@@@@CORR_ERROR@@$1@@TRACE:"
+
+# =============================================================================
+# STAGE 6: Assign Priority
+# Score events for alerting/attention
+# =============================================================================
+
+# Errors are high priority
+[[step]]
+type = "substitute"
+description = "Stage6: Priority - error"
+pattern = "@@LVL:error@@"
+replacement = "@@LVL:error@@@@PRI:high@@"
+
+# Warnings are medium
+[[step]]
+type = "substitute"
+description = "Stage6: Priority - warn"
+pattern = "@@LVL:warn@@"
+replacement = "@@LVL:warn@@@@PRI:medium@@"
+
+# Info/debug are low (only if no priority exists) - two-phase approach
+# Phase 1: Mark info/debug for priority assignment
+[[step]]
+type = "substitute"
+description = "Stage6: Mark info/debug for priority"
+pattern = "@@LVL:(info|debug)@@"
+replacement = "@@LVL:$1@@@@NEEDS_PRI@@"
+
+# Phase 2: Remove marker if @@PRI: already exists
+[[step]]
+type = "substitute"
+description = "Stage6: Skip already-prioritized"
+pattern = "@@NEEDS_PRI@@(.*)@@PRI:"
+replacement = "$1@@PRI:"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Stage6: Skip already-prioritized (before)"
+pattern = "@@PRI:([^@]+)@@(.*)@@NEEDS_PRI@@"
+replacement = "@@PRI:$1@@$2"
+flags = ["global"]
+
+# Phase 3: Convert remaining to low priority
+[[step]]
+type = "substitute"
+description = "Stage6: Priority - info"
+pattern = "@@NEEDS_PRI@@"
+replacement = "@@PRI:low@@"
+flags = ["global"]
+
+# Exceptions bump priority
+[[step]]
+type = "substitute"
+description = "Stage6: Bump exception priority"
+pattern = "@@EXCEPTION@@(.*)@@PRI:(low|medium)@@"
+replacement = "@@EXCEPTION@@$1@@PRI:high@@"
+
+# =============================================================================
+# STAGE 7: Format as Unified JSON
+# Emit NDJSON for downstream ingestion
+# =============================================================================
+
+# Build JSON structure
+# Start with opening brace
+[[step]]
+type = "substitute"
+description = "Stage7: Start JSON"
+pattern = "^@@SRC:([^@]+)@@@@TYPE:([^@]+)@@"
+replacement = "{\"source\":\"$1\",\"type\":\"$2\","
+
+# Add timestamp
+[[step]]
+type = "substitute"
+description = "Stage7: Add timestamp"
+pattern = "@@TS:([^@]+)@@"
+replacement = "\"timestamp\":\"$1\","
+flags = ["global"]
+
+# Add level
+[[step]]
+type = "substitute"
+description = "Stage7: Add level"
+pattern = "@@LVL:([^@]+)@@"
+replacement = "\"level\":\"$1\","
+flags = ["global"]
+
+# Add priority
+[[step]]
+type = "substitute"
+description = "Stage7: Add priority"
+pattern = "@@PRI:([^@]+)@@"
+replacement = "\"priority\":\"$1\","
+flags = ["global"]
+
+# Add message
+[[step]]
+type = "substitute"
+description = "Stage7: Add message"
+pattern = "@@MSG:([^@]+)@@"
+replacement = "\"message\":\"$1\","
+flags = ["global"]
+
+# Add HTTP fields
+[[step]]
+type = "substitute"
+description = "Stage7: Add method"
+pattern = "@@METHOD:([^@]+)@@"
+replacement = "\"http_method\":\"$1\","
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Stage7: Add path"
+pattern = "@@PATH:([^@]+)@@"
+replacement = "\"http_path\":\"$1\","
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Stage7: Add status"
+pattern = "@@STATUS:([^@]+)@@"
+replacement = "\"http_status\":$1,"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Stage7: Add bytes"
+pattern = "@@BYTES:([^@]+)@@"
+replacement = "\"bytes\":$1,"
+flags = ["global"]
+
+# Add identifiers
+[[step]]
+type = "substitute"
+description = "Stage7: Add IP"
+pattern = "@@IP:([^@]+)@@"
+replacement = "\"client_ip\":\"$1\","
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Stage7: Add trace"
+pattern = "@@TRACE:([^@]+)@@"
+replacement = "\"trace_id\":\"$1\","
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Stage7: Add user"
+pattern = "@@USER:([^@]+)@@"
+replacement = "\"user_id\":\"$1\","
+flags = ["global"]
+
+# Add context fields
+[[step]]
+type = "substitute"
+description = "Stage7: Add host"
+pattern = "@@HOST:([^@]+)@@"
+replacement = "\"host\":\"$1\","
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Stage7: Add service"
+pattern = "@@SERVICE:([^@]+)@@"
+replacement = "\"service\":\"$1\","
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Stage7: Add user-agent"
+pattern = "@@UA:([^@]+)@@"
+replacement = "\"user_agent\":\"$1\","
+flags = ["global"]
+
+# Add flags
+[[step]]
+type = "substitute"
+description = "Stage7: Add exception flag"
+pattern = "@@EXCEPTION@@"
+replacement = "\"has_exception\":true,"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Stage7: Add corr_error flag"
+pattern = "@@CORR_ERROR@@"
+replacement = "\"correlated_error\":true,"
+flags = ["global"]
+
+# Clean remaining markers
+[[step]]
+type = "substitute"
+description = "Stage7: Clean markers"
+pattern = "@@[A-Z_]+:?[^@]*@@"
+replacement = ""
+flags = ["global"]
+
+# Clean trailing comma and close JSON
+[[step]]
+type = "substitute"
+description = "Stage7: Clean trailing comma"
+pattern = ",([^,{]*?)$"
+replacement = "$1}"
+
+# Ensure valid JSON (remove any double commas)
+[[step]]
+type = "substitute"
+description = "Stage7: Fix double commas"
+pattern = ",,"
+replacement = ","
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Stage7: Fix trailing commas"
+pattern = ",}"
+replacement = "}"
+flags = ["global"]
+
+# =============================================================================
+# FINALIZE: Stream Summary
+# =============================================================================
+
+[finalize]
+enabled = true
+
+[[finalize.counters]]
+name = "webserver"
+pattern = "\"source\":\"webserver\""
+description = "Web server events"
+
+[[finalize.counters]]
+name = "application"
+pattern = "\"source\":\"application\""
+description = "Application events"
+
+[[finalize.counters]]
+name = "system"
+pattern = "\"source\":\"system\""
+description = "System events"
+
+[[finalize.counters]]
+name = "kubernetes"
+pattern = "\"source\":\"kubernetes\""
+description = "Kubernetes events"
+
+[[finalize.counters]]
+name = "high_priority"
+pattern = "\"priority\":\"high\""
+description = "High priority events"
+
+[[finalize.counters]]
+name = "exceptions"
+pattern = "\"has_exception\":true"
+description = "Events with exceptions"
+
+template = """# Unified Event Stream Report
+
+## Source Distribution
+- Web Server Events: {{counters.webserver}}
+- Application Events: {{counters.application}}
+- System Events: {{counters.system}}
+- Kubernetes Events: {{counters.kubernetes}}
+
+## Priority Breakdown
+- High Priority: {{counters.high_priority}}
+- Events with Exceptions: {{counters.exceptions}}
+
+---
+## NDJSON Event Stream
+{{output}}
+"""

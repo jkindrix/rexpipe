@@ -1,0 +1,460 @@
+name = "python2-to-python3"
+version = "1.0.0"
+description = "Progressive Python 2 → Python 3 migration with compatibility layer generation"
+#
+# Usage: rexpipe -c python2-to-python3.toml -R --include '*.py' src/
+#
+# This is a PROGRESSIVE MULTI-STAGE TRANSFORMATION for migrating Python 2 codebases
+# to Python 3. Unlike simple find/replace, this pipeline:
+#
+#   Stage 1: Analyze & Mark       → Identify Python 2 patterns, mark for transformation
+#   Stage 2: Print Statements     → print "x" → print("x") with edge cases
+#   Stage 3: Unicode & Strings    → Handle u"", b"", basestring, unicode types
+#   Stage 4: Division             → Classic division → true division with markers
+#   Stage 5: Imports              → Modernize imports (urllib, configparser, etc.)
+#   Stage 6: Iterators            → .iteritems() → .items(), xrange → range
+#   Stage 7: Exception Syntax     → except E, e → except E as e
+#   Stage 8: Type Comparisons     → type(x) == type("") → isinstance()
+#   Stage 9: Future Imports       → Add __future__ imports for compatibility
+#   Stage 10: Verification        → Add migration markers for review
+#
+# The progressive approach ensures each stage's output is valid input for the next.
+
+# =============================================================================
+# STAGE 1: Analyze & Mark Python 2 Patterns
+# Identify patterns before transforming to enable rollback
+# =============================================================================
+
+# Mark files with Python 2 shebang
+[[step]]
+type = "substitute"
+description = "Stage1: Mark Python 2 shebang"
+pattern = "^#!.*python2"
+replacement = "#!MIGRATING: python2 → python3\n$0"
+
+# Identify print statements (not already functions)
+[[step]]
+type = "substitute"
+description = "Stage1: Mark print statements"
+pattern = "^(\\s*)(print)\\s+([^(])"
+replacement = "$1#PY2_PRINT# $2 $3"
+
+# Identify Python 2 style exceptions
+[[step]]
+type = "substitute"
+description = "Stage1: Mark exception syntax"
+pattern = "(except\\s+\\w+)\\s*,\\s*(\\w+)"
+replacement = "#PY2_EXCEPT# $1, $2"
+
+# =============================================================================
+# STAGE 2: Print Statements → Print Functions
+# Handle all edge cases of print statement conversion
+# =============================================================================
+
+# Basic print statement: print "hello"
+[[step]]
+type = "substitute"
+description = "Stage2: Basic print"
+pattern = "#PY2_PRINT# print\\s+\"([^\"]*)\""
+replacement = "print(\"$1\")"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Stage2: Basic print single quotes"
+pattern = "#PY2_PRINT# print\\s+'([^']*)'"
+replacement = "print('$1')"
+flags = ["global"]
+
+# Print with variable: print x
+[[step]]
+type = "substitute"
+description = "Stage2: Print variable"
+pattern = "#PY2_PRINT# print\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\s*$"
+replacement = "print($1)"
+
+# Print multiple items: print a, b, c
+[[step]]
+type = "substitute"
+description = "Stage2: Print multiple"
+pattern = "#PY2_PRINT# print\\s+(.+),\\s*(.+),\\s*(.+)\\s*$"
+replacement = "print($1, $2, $3)"
+
+[[step]]
+type = "substitute"
+description = "Stage2: Print two items"
+pattern = "#PY2_PRINT# print\\s+(.+),\\s*(.+)\\s*$"
+replacement = "print($1, $2)"
+
+# Print with trailing comma (no newline): print x,
+[[step]]
+type = "substitute"
+description = "Stage2: Print no newline"
+pattern = "#PY2_PRINT# print\\s+(.+),\\s*$"
+replacement = "print($1, end='')"
+
+# Print to stderr: print >> sys.stderr, x
+[[step]]
+type = "substitute"
+description = "Stage2: Print to stderr"
+pattern = "#PY2_PRINT# print\\s*>>\\s*sys\\.stderr,\\s*(.+)"
+replacement = "print($1, file=sys.stderr)"
+
+# Clean remaining markers
+[[step]]
+type = "substitute"
+description = "Stage2: Clean markers"
+pattern = "#PY2_PRINT# "
+replacement = ""
+flags = ["global"]
+
+# =============================================================================
+# STAGE 3: Unicode & String Types
+# Handle the Py2→Py3 string/bytes transition
+# =============================================================================
+
+# u"string" → "string" (in Py3, all strings are unicode)
+[[step]]
+type = "substitute"
+description = "Stage3: Unicode string literal"
+pattern = "\\bu([\"'])"
+replacement = "$1"
+flags = ["global"]
+
+# basestring → str
+[[step]]
+type = "substitute"
+description = "Stage3: basestring type"
+pattern = "\\bbasestring\\b"
+replacement = "str"
+flags = ["global"]
+
+# unicode type → str
+[[step]]
+type = "substitute"
+description = "Stage3: unicode type"
+pattern = "\\bunicode\\b"
+replacement = "str"
+flags = ["global"]
+
+# long type → int
+[[step]]
+type = "substitute"
+description = "Stage3: long type"
+pattern = "\\blong\\b"
+replacement = "int"
+flags = ["global"]
+
+# .encode('utf-8') after string literal (often unnecessary in Py3)
+[[step]]
+type = "substitute"
+description = "Stage3: Mark encode for review"
+pattern = "([\"'][^\"']*[\"'])\\.encode\\([\"']utf-8[\"']\\)"
+replacement = "$1  # REVIEW: .encode() may be unnecessary"
+
+# =============================================================================
+# STAGE 4: Division Behavior
+# Python 2 classic division → Python 3 true division
+# =============================================================================
+
+# Integer division that should stay integer: use //
+[[step]]
+type = "substitute"
+description = "Stage4: Mark integer division"
+pattern = "(\\b\\d+)\\s*/\\s*(\\d+\\b)"
+replacement = "$1 // $2  # REVIEW: Was integer division"
+
+# Division with variables - mark for review (single / only, not // or /=)
+[[step]]
+type = "substitute"
+description = "Stage4: Mark variable division"
+pattern = "([a-zA-Z_][a-zA-Z0-9_]*)\\s+/\\s+([a-zA-Z_][a-zA-Z0-9_]*)"
+replacement = "$1 / $2  # REVIEW: Check division semantics"
+
+# =============================================================================
+# STAGE 5: Modernize Imports
+# Update renamed/reorganized standard library modules
+# =============================================================================
+
+# ConfigParser → configparser
+[[step]]
+type = "substitute"
+description = "Stage5: ConfigParser"
+pattern = "\\bConfigParser\\b"
+replacement = "configparser"
+flags = ["global"]
+
+# Queue → queue
+[[step]]
+type = "substitute"
+description = "Stage5: Queue"
+pattern = "^(import|from)\\s+Queue\\b"
+replacement = "$1 queue"
+
+# cPickle → pickle
+[[step]]
+type = "substitute"
+description = "Stage5: cPickle"
+pattern = "\\bcPickle\\b"
+replacement = "pickle"
+flags = ["global"]
+
+# cStringIO → io.StringIO
+[[step]]
+type = "substitute"
+description = "Stage5: cStringIO"
+pattern = "from cStringIO import StringIO"
+replacement = "from io import StringIO"
+
+[[step]]
+type = "substitute"
+description = "Stage5: StringIO module"
+pattern = "^import StringIO$"
+replacement = "from io import StringIO"
+
+# urllib2 → urllib.request
+[[step]]
+type = "substitute"
+description = "Stage5: urllib2"
+pattern = "import urllib2"
+replacement = "import urllib.request as urllib2  # REVIEW: Update urllib2.X calls"
+
+[[step]]
+type = "substitute"
+description = "Stage5: urllib2 from"
+pattern = "from urllib2 import"
+replacement = "from urllib.request import"
+
+# urlparse → urllib.parse
+[[step]]
+type = "substitute"
+description = "Stage5: urlparse"
+pattern = "from urlparse import"
+replacement = "from urllib.parse import"
+
+# httplib → http.client
+[[step]]
+type = "substitute"
+description = "Stage5: httplib"
+pattern = "import httplib"
+replacement = "import http.client as httplib"
+
+# =============================================================================
+# STAGE 6: Iterator Methods
+# Dictionary iterators and xrange
+# =============================================================================
+
+# .iteritems() → .items()
+[[step]]
+type = "substitute"
+description = "Stage6: iteritems"
+pattern = "\\.iteritems\\(\\)"
+replacement = ".items()"
+flags = ["global"]
+
+# .iterkeys() → .keys()
+[[step]]
+type = "substitute"
+description = "Stage6: iterkeys"
+pattern = "\\.iterkeys\\(\\)"
+replacement = ".keys()"
+flags = ["global"]
+
+# .itervalues() → .values()
+[[step]]
+type = "substitute"
+description = "Stage6: itervalues"
+pattern = "\\.itervalues\\(\\)"
+replacement = ".values()"
+flags = ["global"]
+
+# xrange → range
+[[step]]
+type = "substitute"
+description = "Stage6: xrange"
+pattern = "\\bxrange\\b"
+replacement = "range"
+flags = ["global"]
+
+# dict.has_key(x) → x in dict
+[[step]]
+type = "substitute"
+description = "Stage6: has_key"
+pattern = "([a-zA-Z_][a-zA-Z0-9_]*)\\.has_key\\(([^)]+)\\)"
+replacement = "$2 in $1"
+flags = ["global"]
+
+# filter/map that return lists - wrap in list()
+[[step]]
+type = "substitute"
+description = "Stage6: Mark filter/map"
+pattern = "\\b(filter|map)\\(([^)]+)\\)"
+replacement = "list($1($2))  # REVIEW: list() wrapper may be unnecessary"
+flags = ["global"]
+
+# =============================================================================
+# STAGE 7: Exception Syntax
+# except Exception, e → except Exception as e
+# =============================================================================
+
+[[step]]
+type = "substitute"
+description = "Stage7: Exception syntax"
+pattern = "#PY2_EXCEPT# (except\\s+\\w+),\\s*(\\w+)"
+replacement = "$1 as $2"
+
+# Also handle: except (E1, E2), e
+[[step]]
+type = "substitute"
+description = "Stage7: Multiple exceptions"
+pattern = "(except\\s+\\([^)]+\\))\\s*,\\s*(\\w+)"
+replacement = "$1 as $2"
+
+# raise E, msg → raise E(msg)
+[[step]]
+type = "substitute"
+description = "Stage7: Raise syntax"
+pattern = "raise\\s+(\\w+)\\s*,\\s*([^,\\n]+)$"
+replacement = "raise $1($2)"
+
+# =============================================================================
+# STAGE 8: Type Comparisons
+# type(x) == type("") → isinstance(x, str)
+# =============================================================================
+
+[[step]]
+type = "substitute"
+description = "Stage8: Type string comparison"
+pattern = "type\\(([^)]+)\\)\\s*==\\s*type\\([\"'][\"']\\)"
+replacement = "isinstance($1, str)"
+
+[[step]]
+type = "substitute"
+description = "Stage8: Type int comparison"
+pattern = "type\\(([^)]+)\\)\\s*==\\s*type\\(0\\)"
+replacement = "isinstance($1, int)"
+
+[[step]]
+type = "substitute"
+description = "Stage8: Type list comparison"
+pattern = "type\\(([^)]+)\\)\\s*==\\s*type\\(\\[\\]\\)"
+replacement = "isinstance($1, list)"
+
+[[step]]
+type = "substitute"
+description = "Stage8: Type dict comparison"
+pattern = "type\\(([^)]+)\\)\\s*==\\s*type\\(\\{\\}\\)"
+replacement = "isinstance($1, dict)"
+
+# types.X → direct type
+[[step]]
+type = "substitute"
+description = "Stage8: types.StringType"
+pattern = "types\\.StringType"
+replacement = "str"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Stage8: types.IntType"
+pattern = "types\\.IntType"
+replacement = "int"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Stage8: types.ListType"
+pattern = "types\\.ListType"
+replacement = "list"
+flags = ["global"]
+
+# =============================================================================
+# STAGE 9: Add Future Imports (for Py2/3 compatibility during transition)
+# Prepend __future__ imports at file start
+# =============================================================================
+
+# If file has Python code starting with import/from/class/def, add future imports header
+# Note: Only matches lines starting with these keywords (not already having __future__)
+[[step]]
+type = "substitute"
+description = "Stage9: Add future imports to import statements"
+pattern = "^(import\\s+[a-z])"
+replacement = "# -*- coding: utf-8 -*-\nfrom __future__ import print_function, division, absolute_import\n\n$1"
+
+# Skip from __future__ lines - they already have it
+# Match 'from <lowercase_module>' but not 'from __future__'
+[[step]]
+type = "substitute"
+description = "Stage9: Add future imports to from statements"
+pattern = "^(from\\s+[a-z][a-z_0-9]*\\s+import)"
+replacement = "# -*- coding: utf-8 -*-\nfrom __future__ import print_function, division, absolute_import\n\n$1"
+
+[[step]]
+type = "substitute"
+description = "Stage9: Add future imports to class/def"
+pattern = "^((?:class|def)\\s+[A-Za-z_])"
+replacement = "# -*- coding: utf-8 -*-\nfrom __future__ import print_function, division, absolute_import\n\n$1"
+
+# =============================================================================
+# STAGE 10: Verification & Review Markers
+# Add markers for manual review
+# =============================================================================
+
+# Clean up migration header
+[[step]]
+type = "substitute"
+description = "Stage10: Update shebang"
+pattern = "^#!MIGRATING: python2 → python3\\n#!.*python2"
+replacement = "#!/usr/bin/env python3\n# MIGRATED: Python 2 → Python 3"
+
+# Count review items
+[[step]]
+type = "substitute"
+description = "Stage10: Number review items"
+pattern = "# REVIEW:"
+replacement = "# TODO(migration):"
+flags = ["global"]
+
+# =============================================================================
+# FINALIZE: Migration Report
+# =============================================================================
+
+[finalize]
+enabled = true
+
+[[finalize.counters]]
+name = "migration_todos"
+pattern = "TODO\\(migration\\)"
+description = "Items requiring manual review"
+
+[[finalize.counters]]
+name = "isinstance_calls"
+pattern = "isinstance\\("
+description = "Type checks modernized"
+
+[[finalize.counters]]
+name = "items_calls"
+pattern = "\\.items\\(\\)"
+description = "Iterator methods updated"
+
+[[finalize.counters]]
+name = "print_calls"
+pattern = "print\\("
+description = "Print statements converted"
+
+template = """# Python 2 → 3 Migration Report
+
+## Changes Applied
+- Print statements converted: {{counters.print_calls}}
+- Type checks modernized: {{counters.isinstance_calls}}
+- Iterator methods updated: {{counters.items_calls}}
+
+## Items Requiring Review
+- Manual review items: {{counters.migration_todos}}
+
+---
+**Files processed:** Run with -R to process directory
+**Next steps:** Search for TODO(migration) and verify each change
+
+{{output}}
+"""

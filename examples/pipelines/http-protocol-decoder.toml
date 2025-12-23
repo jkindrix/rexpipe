@@ -1,0 +1,437 @@
+name = "http-protocol-decoder"
+version = "1.0.0"
+description = "State machine implementation: parses raw HTTP traffic into structured representation"
+#
+# Usage: cat raw-http-capture.txt | rexpipe -c http-protocol-decoder.toml
+#
+# This pipeline implements an HTTP PROTOCOL STATE MACHINE using regex transformations.
+# It's not just transforming text—it's PARSING a protocol specification.
+#
+# The State Machine:
+#
+#   ┌─────────────────────────────────────────────────────────────────────────┐
+#   │                                                                         │
+#   │  ┌─────────┐    ┌─────────┐    ┌─────────┐    ┌─────────┐    ┌───────┐ │
+#   │  │ INITIAL │───▶│ REQUEST │───▶│ HEADERS │───▶│  BODY   │───▶│ DONE  │ │
+#   │  └─────────┘    └─────────┘    └─────────┘    └─────────┘    └───────┘ │
+#   │       │              │              │              │                    │
+#   │       │              ▼              ▼              ▼                    │
+#   │       │         ┌─────────┐    ┌─────────┐    ┌─────────┐              │
+#   │       └────────▶│RESPONSE │───▶│ HEADERS │───▶│  BODY   │──────────────┘
+#   │                 └─────────┘    └─────────┘    └─────────┘
+#   │
+#   └─────────────────────────────────────────────────────────────────────────┘
+#
+# Each stage transitions the state machine and extracts semantic information.
+# The pipeline UNDERSTANDS HTTP, not just matches patterns.
+
+# =============================================================================
+# STATE INITIALIZATION
+# Detect message type and enter appropriate initial state
+# =============================================================================
+
+# Detect HTTP Request line (method + path + version)
+[[step]]
+type = "substitute"
+description = "Init: Detect request start"
+pattern = "^(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS|TRACE|CONNECT)\\s+([^\\s]+)\\s+HTTP/([0-9.]+)\\s*$"
+replacement = "@@STATE:REQUEST@@@@METHOD:$1@@@@PATH:$2@@@@VERSION:$3@@"
+
+# Detect HTTP Response line (version + status + reason)
+[[step]]
+type = "substitute"
+description = "Init: Detect response start"
+pattern = "^HTTP/([0-9.]+)\\s+(\\d{3})\\s+(.*)$"
+replacement = "@@STATE:RESPONSE@@@@VERSION:$1@@@@STATUS:$2@@@@REASON:$3@@"
+
+# =============================================================================
+# STATE: HEADERS
+# Parse header lines until empty line (body separator)
+# =============================================================================
+
+# Transition to HEADERS state after request/response line
+[[step]]
+type = "substitute"
+description = "State: Enter headers after request"
+pattern = "@@STATE:REQUEST@@(.*)\\n([A-Za-z])"
+replacement = "@@STATE:HEADERS@@@@MSG_TYPE:REQUEST@@$1\n$2"
+
+[[step]]
+type = "substitute"
+description = "State: Enter headers after response"
+pattern = "@@STATE:RESPONSE@@(.*)\\n([A-Za-z])"
+replacement = "@@STATE:HEADERS@@@@MSG_TYPE:RESPONSE@@$1\n$2"
+
+# Parse individual headers
+[[step]]
+type = "substitute"
+description = "Headers: Parse Content-Type"
+pattern = "^[Cc]ontent-[Tt]ype:\\s*([^;\\r\\n]+)"
+replacement = "@@HDR:CONTENT_TYPE:$1@@"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Headers: Parse Content-Length"
+pattern = "^[Cc]ontent-[Ll]ength:\\s*(\\d+)"
+replacement = "@@HDR:CONTENT_LENGTH:$1@@@@EXPECT_BODY:$1@@"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Headers: Parse Host"
+pattern = "^[Hh]ost:\\s*([^\\r\\n]+)"
+replacement = "@@HDR:HOST:$1@@"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Headers: Parse Authorization"
+pattern = "^[Aa]uthorization:\\s*(\\w+)\\s+([^\\r\\n]+)"
+replacement = "@@HDR:AUTH:$1@@@@AUTH_CRED:$2@@@@SEC:AUTH_PRESENT@@"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Headers: Parse Cookie"
+pattern = "^[Cc]ookie:\\s*([^\\r\\n]+)"
+replacement = "@@HDR:COOKIE@@@@COOKIE_DATA:$1@@@@SEC:SESSION@@"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Headers: Parse Set-Cookie"
+pattern = "^[Ss]et-[Cc]ookie:\\s*([^=]+)=([^;]+)"
+replacement = "@@HDR:SET_COOKIE:$1@@@@COOKIE_VALUE:$2@@"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Headers: Parse User-Agent"
+pattern = "^[Uu]ser-[Aa]gent:\\s*([^\\r\\n]+)"
+replacement = "@@HDR:USER_AGENT:$1@@"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Headers: Parse X-Forwarded-For"
+pattern = "^[Xx]-[Ff]orwarded-[Ff]or:\\s*([^\\r\\n]+)"
+replacement = "@@HDR:X_FORWARDED:$1@@@@SEC:PROXY_CHAIN@@"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Headers: Parse Transfer-Encoding"
+pattern = "^[Tt]ransfer-[Ee]ncoding:\\s*(chunked)"
+replacement = "@@HDR:TRANSFER_ENC:$1@@@@BODY_MODE:CHUNKED@@"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Headers: Parse Connection"
+pattern = "^[Cc]onnection:\\s*(keep-alive|close)"
+replacement = "@@HDR:CONNECTION:$1@@"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Headers: Parse generic header"
+pattern = "^([A-Za-z][A-Za-z0-9-]*):\\s*([^\\r\\n]+)"
+replacement = "@@HDR:$1:$2@@"
+flags = ["global"]
+
+# =============================================================================
+# STATE: BODY DETECTION
+# Detect body separator and transition to BODY state
+# =============================================================================
+
+# Empty line signals end of headers (body follows if Content-Length > 0)
+[[step]]
+type = "substitute"
+description = "Body: Detect separator with body expected"
+pattern = "@@EXPECT_BODY:(\\d+)@@(.*)\\n\\s*\\n"
+replacement = "@@EXPECT_BODY:$1@@$2\n@@STATE:BODY@@@@BODY_START@@\n"
+
+# Detect body content types for special handling
+[[step]]
+type = "substitute"
+description = "Body: Detect JSON body"
+pattern = "@@STATE:BODY@@@@BODY_START@@\\n\\s*\\{"
+replacement = "@@STATE:BODY@@@@BODY_TYPE:JSON@@{"
+
+[[step]]
+type = "substitute"
+description = "Body: Detect XML body"
+pattern = "@@STATE:BODY@@@@BODY_START@@\\n\\s*<"
+replacement = "@@STATE:BODY@@@@BODY_TYPE:XML@@<"
+
+[[step]]
+type = "substitute"
+description = "Body: Detect form body"
+pattern = "@@STATE:BODY@@@@BODY_START@@\\n([a-zA-Z_]+=)"
+replacement = "@@STATE:BODY@@@@BODY_TYPE:FORM@@$1"
+
+# =============================================================================
+# SEMANTIC ANALYSIS
+# Extract meaning from parsed protocol elements
+# =============================================================================
+
+# Identify API calls
+[[step]]
+type = "substitute"
+description = "Semantic: Detect API path"
+pattern = "@@PATH:(/api/[^@]+)@@"
+replacement = "@@PATH:$1@@@@SEMANTIC:API_CALL@@"
+
+# Identify authentication endpoints
+[[step]]
+type = "substitute"
+description = "Semantic: Detect auth endpoint"
+pattern = "@@PATH:([^@]*(login|logout|auth|oauth|token|session)[^@]*)@@"
+replacement = "@@PATH:$1@@@@SEMANTIC:AUTH_ENDPOINT@@@@SEC:AUTH_FLOW@@"
+
+# Identify file uploads
+[[step]]
+type = "substitute"
+description = "Semantic: Detect upload"
+pattern = "@@HDR:CONTENT_TYPE:multipart/form-data"
+replacement = "@@HDR:CONTENT_TYPE:multipart/form-data@@@@SEMANTIC:FILE_UPLOAD@@"
+
+# Identify sensitive operations
+[[step]]
+type = "substitute"
+description = "Semantic: Detect mutation"
+pattern = "@@METHOD:(POST|PUT|DELETE|PATCH)@@"
+replacement = "@@METHOD:$1@@@@SEMANTIC:MUTATION@@"
+
+# Identify caching behavior
+[[step]]
+type = "substitute"
+description = "Semantic: Detect cacheable"
+pattern = "@@METHOD:GET@@(.*)@@STATUS:200@@"
+replacement = "@@METHOD:GET@@$1@@STATUS:200@@@@SEMANTIC:CACHEABLE@@"
+
+# =============================================================================
+# SECURITY ANALYSIS
+# Identify security-relevant patterns in the protocol
+# =============================================================================
+
+# Detect missing security headers - two-phase (check for http without redirect)
+# Phase 1: Mark responses with http:// in host
+[[step]]
+type = "substitute"
+description = "Security: Mark http host responses"
+pattern = "@@MSG_TYPE:RESPONSE@@(.*)@@HDR:HOST:http://"
+replacement = "@@MSG_TYPE:RESPONSE@@$1@@HDR:HOST:http://@@MAYBE_MISSING_HTTPS@@"
+flags = ["global"]
+
+# Phase 2: Remove mark from redirects (301 or 302)
+[[step]]
+type = "substitute"
+description = "Security: Skip 301 redirects"
+pattern = "@@STATUS:301@@(.*)@@MAYBE_MISSING_HTTPS@@"
+replacement = "@@STATUS:301@@$1"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Security: Skip 302 redirects"
+pattern = "@@STATUS:302@@(.*)@@MAYBE_MISSING_HTTPS@@"
+replacement = "@@STATUS:302@@$1"
+flags = ["global"]
+
+# Phase 3: Flag remaining as missing HTTPS redirect
+[[step]]
+type = "substitute"
+description = "Security: Check for missing HTTPS redirect"
+pattern = "@@MAYBE_MISSING_HTTPS@@"
+replacement = "@@SEC:MISSING_HTTPS_REDIRECT@@"
+flags = ["global"]
+
+# Detect sensitive data in URLs
+[[step]]
+type = "substitute"
+description = "Security: Detect sensitive URL params"
+pattern = "@@PATH:([^@]*(password|token|secret|key|api_key)=[^@]+)@@"
+replacement = "@@PATH:$1@@@@SEC:SENSITIVE_IN_URL@@@@SEVERITY:HIGH@@"
+
+# Detect verbose error responses
+[[step]]
+type = "substitute"
+description = "Security: Detect stack trace"
+pattern = "@@STATE:BODY@@.*(Exception|Traceback|at \\w+\\.java:|panic:)"
+replacement = "$0@@SEC:STACK_TRACE_LEAK@@@@SEVERITY:MEDIUM@@"
+
+# Detect version disclosure
+[[step]]
+type = "substitute"
+description = "Security: Detect server version"
+pattern = "@@HDR:Server:([^@]+)@@"
+replacement = "@@HDR:Server:$1@@@@SEC:SERVER_VERSION_DISCLOSED@@"
+
+# =============================================================================
+# OUTPUT FORMATTING
+# Transform internal state into human-readable structured output
+# =============================================================================
+
+# Format message type
+[[step]]
+type = "substitute"
+description = "Format: Message type"
+pattern = "@@MSG_TYPE:(REQUEST|RESPONSE)@@"
+replacement = "\n══════════════════════════════════════════\n  HTTP $1\n══════════════════════════════════════════\n"
+
+# Format request line
+[[step]]
+type = "substitute"
+description = "Format: Request line"
+pattern = "@@METHOD:([^@]+)@@@@PATH:([^@]+)@@@@VERSION:([^@]+)@@"
+replacement = "▸ Method: $1\n▸ Path: $2\n▸ HTTP Version: $3\n"
+
+# Format response line
+[[step]]
+type = "substitute"
+description = "Format: Response line"
+pattern = "@@STATUS:([^@]+)@@@@REASON:([^@]+)@@@@VERSION:([^@]+)@@"
+replacement = "▸ Status: $1 ($2)\n▸ HTTP Version: $3\n"
+
+# Format semantic indicators
+[[step]]
+type = "substitute"
+description = "Format: Semantics"
+pattern = "@@SEMANTIC:([^@]+)@@"
+replacement = "\n🏷️ $1"
+flags = ["global"]
+
+# Format security findings
+[[step]]
+type = "substitute"
+description = "Format: Security high"
+pattern = "@@SEC:([^@]+)@@@@SEVERITY:HIGH@@"
+replacement = "\n🚨 SECURITY: $1 [HIGH]"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Format: Security medium"
+pattern = "@@SEC:([^@]+)@@@@SEVERITY:MEDIUM@@"
+replacement = "\n⚠️ SECURITY: $1 [MEDIUM]"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Format: Security info"
+pattern = "@@SEC:([^@]+)@@"
+replacement = "\n🔐 $1"
+flags = ["global"]
+
+# Format headers section
+[[step]]
+type = "substitute"
+description = "Format: Headers section"
+pattern = "@@STATE:HEADERS@@"
+replacement = "\n── Headers ──────────────────────────────"
+
+[[step]]
+type = "substitute"
+description = "Format: Header entry"
+pattern = "@@HDR:([^:@]+):([^@]*)@@"
+replacement = "\n  $1: $2"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Format: Header flag"
+pattern = "@@HDR:([^@]+)@@"
+replacement = "\n  [$1]"
+flags = ["global"]
+
+# Format body section
+[[step]]
+type = "substitute"
+description = "Format: Body section"
+pattern = "@@STATE:BODY@@@@BODY_TYPE:([^@]+)@@"
+replacement = "\n── Body ($1) ───────────────────────────\n"
+
+[[step]]
+type = "substitute"
+description = "Format: Body section generic"
+pattern = "@@STATE:BODY@@"
+replacement = "\n── Body ─────────────────────────────────\n"
+
+# Clean remaining markers
+[[step]]
+type = "substitute"
+description = "Clean: Remove internal markers"
+pattern = "@@[A-Z_]+:[^@]*@@"
+replacement = ""
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Clean: Remove state markers"
+pattern = "@@[A-Z_]+@@"
+replacement = ""
+flags = ["global"]
+
+# =============================================================================
+# FINALIZE
+# =============================================================================
+
+[finalize]
+enabled = true
+
+[[finalize.counters]]
+name = "requests"
+pattern = "HTTP REQUEST"
+description = "HTTP requests analyzed"
+
+[[finalize.counters]]
+name = "responses"
+pattern = "HTTP RESPONSE"
+description = "HTTP responses analyzed"
+
+[[finalize.counters]]
+name = "critical"
+pattern = "SECURITY:.*\\[HIGH\\]"
+description = "Critical security issues"
+
+[[finalize.counters]]
+name = "warnings"
+pattern = "SECURITY:.*\\[MEDIUM\\]"
+description = "Security warnings"
+
+[[finalize.counters]]
+name = "auth"
+pattern = "AUTH"
+description = "Auth-related events"
+
+[[finalize.counters]]
+name = "api_calls"
+pattern = "API_CALL"
+description = "API calls detected"
+
+[[finalize.counters]]
+name = "mutations"
+pattern = "MUTATION"
+description = "Mutation operations"
+
+template = """# HTTP Protocol Analysis Report
+
+## Traffic Summary
+- Requests Analyzed: {{counters.requests}}
+- Responses Analyzed: {{counters.responses}}
+
+## Security Findings
+- Critical Issues: {{counters.critical}}
+- Warnings: {{counters.warnings}}
+- Auth-Related: {{counters.auth}}
+
+## Traffic Classification
+- API Calls: {{counters.api_calls}}
+- Mutations (POST/PUT/DELETE): {{counters.mutations}}
+
+---
+
+{{output}}
+"""

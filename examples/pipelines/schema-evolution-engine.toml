@@ -1,0 +1,492 @@
+name = "schema-evolution-engine"
+version = "1.0.0"
+description = "Analyzes schema changes between versions, generates migration scripts, validates compatibility"
+#
+# REQUIRES: PCRE mode (-P flag) for lookahead with backreference patterns
+#
+# Usage:
+#   # Compare two schema versions and generate migration
+#   cat schema_v1.sql schema_v2.sql | rexpipe -P -c schema-evolution-engine.toml
+#
+# This pipeline implements a SCHEMA EVOLUTION ENGINE that:
+#
+#   Phase 1: Parse Both Schemas      → Build internal representation of each version
+#   Phase 2: Detect Changes          → Compare versions, identify additions/removals/modifications
+#   Phase 3: Compatibility Analysis  → Determine if changes are breaking
+#   Phase 4: Generate Up Migration   → SQL to migrate v1 → v2
+#   Phase 5: Generate Down Migration → SQL to rollback v2 → v1
+#   Phase 6: Generate Validation     → Queries to verify migration success
+#   Phase 7: Risk Assessment         → Identify data loss risks, blocking operations
+#   Phase 8: Output Migration Bundle → Complete migration with up/down/verify scripts
+#
+# This is a COMPILER for schema transformations—it reads structure, reasons about it,
+# and generates executable code.
+
+# =============================================================================
+# PHASE 1: Schema Parsing
+# Build internal representation of database schemas
+# =============================================================================
+
+# Version markers (schemas separated by version comments)
+[[step]]
+type = "substitute"
+description = "Phase1: Mark schema v1"
+pattern = "-- VERSION: v1|-- SCHEMA VERSION 1|-- OLD SCHEMA"
+replacement = "@@VERSION:V1@@"
+
+[[step]]
+type = "substitute"
+description = "Phase1: Mark schema v2"
+pattern = "-- VERSION: v2|-- SCHEMA VERSION 2|-- NEW SCHEMA"
+replacement = "@@VERSION:V2@@"
+
+# Parse CREATE TABLE statements
+[[step]]
+type = "substitute"
+description = "Phase1: Parse CREATE TABLE"
+pattern = "(?i)CREATE\\s+TABLE\\s+(?:IF\\s+NOT\\s+EXISTS\\s+)?[`\"]?([a-z_][a-z0-9_]*)[`\"]?\\s*\\("
+replacement = "@@TABLE_START:$1@@("
+flags = ["global"]
+
+# Parse columns within CREATE TABLE
+[[step]]
+type = "substitute"
+description = "Phase1: Parse column definition"
+pattern = "([a-z_][a-z0-9_]*)\\s+(INT(?:EGER)?|BIGINT|SMALLINT|VARCHAR\\(\\d+\\)|CHAR\\(\\d+\\)|TEXT|BOOLEAN|BOOL|DATE|DATETIME|TIMESTAMP|DECIMAL\\([^)]+\\)|FLOAT|DOUBLE|UUID|JSON|JSONB)\\s*(NOT NULL)?\\s*(DEFAULT [^,)]+)?\\s*(PRIMARY KEY)?\\s*(UNIQUE)?\\s*(REFERENCES [^,)]+)?"
+replacement = "@@COL:$1@@@@TYPE:$2@@@@NOTNULL:$3@@@@DEFAULT:$4@@@@PK:$5@@@@UNIQUE:$6@@@@FK:$7@@"
+flags = ["global"]
+
+# Parse standalone constraints
+[[step]]
+type = "substitute"
+description = "Phase1: Parse PRIMARY KEY constraint"
+pattern = "(?i)PRIMARY\\s+KEY\\s*\\(([^)]+)\\)"
+replacement = "@@CONSTRAINT:PK@@@@COLS:$1@@"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Phase1: Parse FOREIGN KEY constraint"
+pattern = "(?i)FOREIGN\\s+KEY\\s*\\(([^)]+)\\)\\s*REFERENCES\\s+([a-z_]+)\\s*\\(([^)]+)\\)"
+replacement = "@@CONSTRAINT:FK@@@@COLS:$1@@@@REF_TABLE:$2@@@@REF_COLS:$3@@"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Phase1: Parse UNIQUE constraint"
+pattern = "(?i)UNIQUE\\s*\\(([^)]+)\\)"
+replacement = "@@CONSTRAINT:UNIQUE@@@@COLS:$1@@"
+flags = ["global"]
+
+# Parse indexes
+[[step]]
+type = "substitute"
+description = "Phase1: Parse CREATE INDEX"
+pattern = "(?i)CREATE\\s+(UNIQUE\\s+)?INDEX\\s+([a-z_][a-z0-9_]*)\\s+ON\\s+([a-z_][a-z0-9_]*)\\s*\\(([^)]+)\\)"
+replacement = "@@INDEX:$2@@@@UNIQUE:$1@@@@ON_TABLE:$3@@@@COLS:$4@@"
+flags = ["global"]
+
+# Mark end of table
+[[step]]
+type = "substitute"
+description = "Phase1: Mark table end"
+pattern = "\\)\\s*;\\s*(?=@@|CREATE|ALTER|--|$)"
+replacement = "@@TABLE_END@@;"
+flags = ["global"]
+
+# =============================================================================
+# PHASE 2: Version Assignment
+# Tag each element with its schema version
+# =============================================================================
+
+# Propagate V1 tag to following elements until V2
+[[step]]
+type = "substitute"
+description = "Phase2: Tag V1 tables"
+pattern = "@@VERSION:V1@@([^@]*?)@@TABLE_START:([^@]+)@@"
+replacement = "@@VERSION:V1@@$1@@V1_TABLE:$2@@"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Phase2: Tag V2 tables"
+pattern = "@@VERSION:V2@@([^@]*?)@@TABLE_START:([^@]+)@@"
+replacement = "@@VERSION:V2@@$1@@V2_TABLE:$2@@"
+flags = ["global"]
+
+# Tag columns with version
+[[step]]
+type = "substitute"
+description = "Phase2: Tag V1 columns"
+pattern = "@@V1_TABLE:([^@]+)@@([^@]*?)@@COL:([^@]+)@@"
+replacement = "@@V1_TABLE:$1@@$2@@V1_COL:$1.$3@@"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Phase2: Tag V2 columns"
+pattern = "@@V2_TABLE:([^@]+)@@([^@]*?)@@COL:([^@]+)@@"
+replacement = "@@V2_TABLE:$1@@$2@@V2_COL:$1.$3@@"
+flags = ["global"]
+
+# =============================================================================
+# PHASE 3: Change Detection
+# Compare V1 and V2 to identify modifications
+# =============================================================================
+
+# New tables (in V2 but not V1)
+[[step]]
+type = "substitute"
+description = "Phase3: Detect new table"
+pattern = "@@V2_TABLE:([^@]+)@@(?!.*@@V1_TABLE:\\1@@)"
+replacement = "@@V2_TABLE:$1@@@@CHANGE:ADD_TABLE:$1@@"
+
+# Dropped tables (in V1 but not V2)
+[[step]]
+type = "substitute"
+description = "Phase3: Detect dropped table"
+pattern = "@@V1_TABLE:([^@]+)@@(?!.*@@V2_TABLE:\\1@@)"
+replacement = "@@V1_TABLE:$1@@@@CHANGE:DROP_TABLE:$1@@@@RISK:DATA_LOSS@@"
+
+# New columns
+[[step]]
+type = "substitute"
+description = "Phase3: Detect new column"
+pattern = "@@V2_COL:([^.]+)\\.([^@]+)@@(?!.*@@V1_COL:\\1\\.\\2@@)"
+replacement = "@@V2_COL:$1.$2@@@@CHANGE:ADD_COLUMN:$1.$2@@"
+
+# Dropped columns
+[[step]]
+type = "substitute"
+description = "Phase3: Detect dropped column"
+pattern = "@@V1_COL:([^.]+)\\.([^@]+)@@(?!.*@@V2_COL:\\1\\.\\2@@)"
+replacement = "@@V1_COL:$1.$2@@@@CHANGE:DROP_COLUMN:$1.$2@@@@RISK:DATA_LOSS@@"
+
+# =============================================================================
+# PHASE 4: Type Change Detection
+# Identify column type modifications
+# =============================================================================
+
+# Detect type widening (safe) vs narrowing (risky)
+[[step]]
+type = "substitute"
+description = "Phase4: Detect VARCHAR widening"
+pattern = "@@V1_COL:([^@]+)@@@@TYPE:VARCHAR\\((\\d+)\\)@@(.*)@@V2_COL:\\1@@@@TYPE:VARCHAR\\((\\d+)\\)@@"
+replacement = "@@V1_COL:$1@@@@TYPE:VARCHAR($2)@@$3@@V2_COL:$1@@@@TYPE:VARCHAR($4)@@@@CHANGE:ALTER_TYPE:$1@@@@TYPE_CHANGE:VARCHAR($2)→VARCHAR($4)@@"
+
+[[step]]
+type = "substitute"
+description = "Phase4: Detect INT to BIGINT"
+pattern = "@@TYPE:INT(?:EGER)?@@(.*)@@CHANGE:ALTER_TYPE:([^@]+)@@(.*)@@TYPE:BIGINT@@"
+replacement = "@@TYPE:INT@@$1@@CHANGE:ALTER_TYPE:$2@@$3@@TYPE:BIGINT@@@@SAFE:TYPE_WIDENING@@"
+
+[[step]]
+type = "substitute"
+description = "Phase4: Detect BIGINT to INT (risky)"
+pattern = "@@TYPE:BIGINT@@(.*)@@CHANGE:ALTER_TYPE:([^@]+)@@(.*)@@TYPE:INT(?:EGER)?@@"
+replacement = "@@TYPE:BIGINT@@$1@@CHANGE:ALTER_TYPE:$2@@$3@@TYPE:INT@@@@RISK:TYPE_NARROWING@@"
+
+# =============================================================================
+# PHASE 5: Compatibility Analysis
+# Determine if changes are breaking
+# =============================================================================
+
+# Breaking changes
+[[step]]
+type = "substitute"
+description = "Phase5: Mark breaking - drop table"
+pattern = "@@CHANGE:DROP_TABLE:([^@]+)@@"
+replacement = "@@CHANGE:DROP_TABLE:$1@@@@BREAKING:YES@@@@SEVERITY:CRITICAL@@"
+
+[[step]]
+type = "substitute"
+description = "Phase5: Mark breaking - drop column"
+pattern = "@@CHANGE:DROP_COLUMN:([^@]+)@@"
+replacement = "@@CHANGE:DROP_COLUMN:$1@@@@BREAKING:YES@@@@SEVERITY:HIGH@@"
+
+[[step]]
+type = "substitute"
+description = "Phase5: Mark breaking - type narrowing"
+pattern = "@@RISK:TYPE_NARROWING@@"
+replacement = "@@RISK:TYPE_NARROWING@@@@BREAKING:YES@@@@SEVERITY:MEDIUM@@"
+
+# Non-breaking changes
+[[step]]
+type = "substitute"
+description = "Phase5: Mark safe - add table"
+pattern = "@@CHANGE:ADD_TABLE:([^@]+)@@(?!.*@@BREAKING:)"
+replacement = "@@CHANGE:ADD_TABLE:$1@@@@BREAKING:NO@@"
+
+[[step]]
+type = "substitute"
+description = "Phase5: Mark safe - add column nullable"
+pattern = "@@CHANGE:ADD_COLUMN:([^@]+)@@(.*)@@NOTNULL:@@"
+replacement = "@@CHANGE:ADD_COLUMN:$1@@$2@@NOTNULL:@@@@BREAKING:NO@@"
+
+[[step]]
+type = "substitute"
+description = "Phase5: Mark risky - add column not null"
+pattern = "@@CHANGE:ADD_COLUMN:([^@]+)@@(.*)@@NOTNULL:NOT NULL@@(?!.*@@DEFAULT:)"
+replacement = "@@CHANGE:ADD_COLUMN:$1@@$2@@NOTNULL:NOT NULL@@@@BREAKING:YES@@@@REASON:NOT_NULL_WITHOUT_DEFAULT@@"
+
+# =============================================================================
+# PHASE 6: Generate UP Migration
+# Create SQL to migrate from V1 to V2
+# =============================================================================
+
+# Generate CREATE TABLE for new tables
+[[step]]
+type = "substitute"
+description = "Phase6: Generate CREATE TABLE"
+pattern = "@@CHANGE:ADD_TABLE:([^@]+)@@(.*)@@V2_TABLE:\\1@@"
+replacement = "@@MIGRATION_UP@@\n-- Add new table: $1\nCREATE TABLE IF NOT EXISTS $1 (\n  -- columns from V2 schema\n);@@END_MIGRATION@@$2@@V2_TABLE:$1@@"
+
+# Generate DROP TABLE for removed tables (with backup)
+[[step]]
+type = "substitute"
+description = "Phase6: Generate DROP TABLE"
+pattern = "@@CHANGE:DROP_TABLE:([^@]+)@@"
+replacement = "@@MIGRATION_UP@@\n-- Drop table: $1 (BREAKING CHANGE - data will be lost!)\n-- Backup command: CREATE TABLE $1_backup AS SELECT * FROM $1;\nDROP TABLE IF EXISTS $1;@@END_MIGRATION@@"
+
+# Generate ALTER TABLE ADD COLUMN
+[[step]]
+type = "substitute"
+description = "Phase6: Generate ADD COLUMN"
+pattern = "@@CHANGE:ADD_COLUMN:([^.]+)\\.([^@]+)@@(.*)@@TYPE:([^@]+)@@"
+replacement = "@@MIGRATION_UP@@\n-- Add column: $2 to table $1\nALTER TABLE $1 ADD COLUMN $2 $4;@@END_MIGRATION@@$3@@TYPE:$4@@"
+
+# Generate ALTER TABLE DROP COLUMN
+[[step]]
+type = "substitute"
+description = "Phase6: Generate DROP COLUMN"
+pattern = "@@CHANGE:DROP_COLUMN:([^.]+)\\.([^@]+)@@"
+replacement = "@@MIGRATION_UP@@\n-- Drop column: $2 from table $1 (BREAKING - data loss!)\n-- Backup: ALTER TABLE $1 RENAME COLUMN $2 TO $2_deprecated;\nALTER TABLE $1 DROP COLUMN $2;@@END_MIGRATION@@"
+
+# =============================================================================
+# PHASE 7: Generate DOWN Migration (Rollback)
+# Create SQL to rollback from V2 to V1
+# =============================================================================
+
+# Reverse CREATE TABLE → DROP TABLE
+[[step]]
+type = "substitute"
+description = "Phase7: Generate rollback DROP"
+pattern = "@@CHANGE:ADD_TABLE:([^@]+)@@"
+replacement = "@@CHANGE:ADD_TABLE:$1@@@@MIGRATION_DOWN@@\n-- Rollback: Remove table $1\nDROP TABLE IF EXISTS $1;@@END_MIGRATION@@"
+
+# Reverse DROP TABLE → CREATE TABLE (from backup)
+[[step]]
+type = "substitute"
+description = "Phase7: Generate rollback CREATE"
+pattern = "@@CHANGE:DROP_TABLE:([^@]+)@@"
+replacement = "@@CHANGE:DROP_TABLE:$1@@@@MIGRATION_DOWN@@\n-- Rollback: Restore table $1 from backup\n-- CREATE TABLE $1 AS SELECT * FROM $1_backup;\n-- DROP TABLE $1_backup;@@END_MIGRATION@@"
+
+# Reverse ADD COLUMN → DROP COLUMN
+[[step]]
+type = "substitute"
+description = "Phase7: Generate rollback DROP COLUMN"
+pattern = "@@CHANGE:ADD_COLUMN:([^.]+)\\.([^@]+)@@"
+replacement = "@@CHANGE:ADD_COLUMN:$1.$2@@@@MIGRATION_DOWN@@\n-- Rollback: Remove column $2 from $1\nALTER TABLE $1 DROP COLUMN IF EXISTS $2;@@END_MIGRATION@@"
+
+# =============================================================================
+# PHASE 8: Generate Validation Queries
+# Create queries to verify migration success
+# =============================================================================
+
+[[step]]
+type = "substitute"
+description = "Phase8: Validate new table"
+pattern = "@@CHANGE:ADD_TABLE:([^@]+)@@"
+replacement = "@@CHANGE:ADD_TABLE:$1@@@@VALIDATION@@\n-- Verify table $1 exists\nSELECT 1 FROM information_schema.tables WHERE table_name = '$1';@@END_VALIDATION@@"
+
+[[step]]
+type = "substitute"
+description = "Phase8: Validate new column"
+pattern = "@@CHANGE:ADD_COLUMN:([^.]+)\\.([^@]+)@@"
+replacement = "@@CHANGE:ADD_COLUMN:$1.$2@@@@VALIDATION@@\n-- Verify column $2 exists in $1\nSELECT 1 FROM information_schema.columns WHERE table_name = '$1' AND column_name = '$2';@@END_VALIDATION@@"
+
+# =============================================================================
+# OUTPUT FORMATTING
+# =============================================================================
+
+# Format migration sections
+[[step]]
+type = "substitute"
+description = "Format: UP migration header"
+pattern = "@@MIGRATION_UP@@"
+replacement = "\n/* UP MIGRATION */"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Format: DOWN migration header"
+pattern = "@@MIGRATION_DOWN@@"
+replacement = "\n/* DOWN MIGRATION */"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Format: Validation header"
+pattern = "@@VALIDATION@@"
+replacement = "\n/* VALIDATION */"
+flags = ["global"]
+
+# Format risk indicators
+[[step]]
+type = "substitute"
+description = "Format: Critical risk"
+pattern = "@@SEVERITY:CRITICAL@@"
+replacement = "\n-- ⛔ CRITICAL: This change may cause data loss or application failures"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Format: High risk"
+pattern = "@@SEVERITY:HIGH@@"
+replacement = "\n-- 🔴 HIGH RISK: Review carefully before applying"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Format: Medium risk"
+pattern = "@@SEVERITY:MEDIUM@@"
+replacement = "\n-- 🟡 MEDIUM RISK: May affect existing queries or data"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Format: Breaking indicator"
+pattern = "@@BREAKING:YES@@"
+replacement = " ⚠️ BREAKING"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Format: Safe indicator"
+pattern = "@@BREAKING:NO@@"
+replacement = " ✅ SAFE"
+flags = ["global"]
+
+# Clean markers
+[[step]]
+type = "substitute"
+description = "Clean: End markers"
+pattern = "@@END_MIGRATION@@|@@END_VALIDATION@@"
+replacement = ""
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Clean: Version markers"
+pattern = "@@VERSION:V[12]@@"
+replacement = ""
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Clean: Table markers"
+pattern = "@@V[12]_TABLE:[^@]+@@|@@V[12]_COL:[^@]+@@"
+replacement = ""
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Clean: Internal markers"
+pattern = "@@[A-Z_]+:[^@]*@@"
+replacement = ""
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Clean: Empty markers"
+pattern = "@@[A-Z_]+@@"
+replacement = ""
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Clean: Extra whitespace"
+pattern = "\\n{3,}"
+replacement = "\n\n"
+flags = ["global"]
+
+# =============================================================================
+# FINALIZE
+# =============================================================================
+
+[finalize]
+enabled = true
+
+[[finalize.counters]]
+name = "up_migrations"
+pattern = "UP MIGRATION"
+description = "Up migration statements"
+
+[[finalize.counters]]
+name = "down_migrations"
+pattern = "DOWN MIGRATION"
+description = "Down migration statements"
+
+[[finalize.counters]]
+name = "validations"
+pattern = "VALIDATION"
+description = "Validation queries"
+
+[[finalize.counters]]
+name = "breaking"
+pattern = "BREAKING"
+description = "Breaking changes"
+
+[[finalize.counters]]
+name = "safe"
+pattern = "SAFE"
+description = "Safe changes"
+
+[[finalize.counters]]
+name = "critical"
+pattern = "CRITICAL"
+description = "Critical risks"
+
+[[finalize.counters]]
+name = "high_risk"
+pattern = "HIGH RISK"
+description = "High risk changes"
+
+template = """-- ============================================================================
+-- SCHEMA EVOLUTION MIGRATION
+-- Generated by rexpipe schema-evolution-engine
+-- ============================================================================
+
+-- CHANGE SUMMARY:
+-- ---------------
+-- Breaking Changes: {{counters.breaking}}
+-- Safe Changes: {{counters.safe}}
+-- Critical Risks: {{counters.critical}}
+-- High Risks: {{counters.high_risk}}
+--
+-- Migration Statements: {{counters.up_migrations}}
+-- Rollback Statements: {{counters.down_migrations}}
+-- Validation Queries: {{counters.validations}}
+
+-- ============================================================================
+-- MIGRATION SCRIPT
+-- ============================================================================
+
+BEGIN TRANSACTION;
+
+{{output}}
+
+-- Uncomment to commit:
+-- COMMIT;
+
+-- Or rollback:
+-- ROLLBACK;
+
+-- ============================================================================
+-- POST-MIGRATION VERIFICATION
+-- Run these queries to verify the migration was successful
+-- ============================================================================
+
+-- (Validation queries embedded above)
+
+"""

@@ -1,0 +1,565 @@
+name = "dsl-compiler"
+version = "1.0.0"
+description = "A complete compiler front-end: lexer → parser → semantic analysis → code generation"
+#
+# THIS IS A COMPILER IMPLEMENTED IN REGEX.
+#
+# Input: A simple DSL for defining data transformations
+# Output: Executable shell script
+#
+# Example input:
+#   define processor UserCleaner
+#     input: users.csv
+#     output: clean_users.csv
+#
+#     step: remove_empty where email = ""
+#     step: normalize field email to lowercase
+#     step: validate field email matches /^[^@]+@[^@]+$/
+#     step: dedupe by email
+#   end
+#
+# Output: A shell script that performs these operations using standard tools
+#
+# COMPILER PHASES:
+#   Phase 1: Lexical Analysis    - Tokenize input into typed tokens
+#   Phase 2: Parsing             - Build AST structure via markers
+#   Phase 3: Semantic Analysis   - Type checking, validation, symbol resolution
+#   Phase 4: IR Generation       - Convert to intermediate representation
+#   Phase 5: Optimization        - Simplify and optimize operations
+#   Phase 6: Code Generation     - Emit executable shell script
+#   Phase 7: Finalization        - Clean output, add header/footer
+
+# =============================================================================
+# PHASE 1: LEXICAL ANALYSIS
+# Tokenize the input DSL into typed tokens
+# =============================================================================
+
+# Keywords
+[[step]]
+type = "substitute"
+description = "Lex: DEFINE keyword"
+pattern = "\\bdefine\\b"
+replacement = "@@TOK:DEFINE@@"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Lex: END keyword"
+pattern = "\\bend\\b"
+replacement = "@@TOK:END@@"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Lex: PROCESSOR keyword"
+pattern = "\\bprocessor\\b"
+replacement = "@@TOK:PROCESSOR@@"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Lex: INPUT keyword"
+pattern = "\\binput:\\s*"
+replacement = "@@TOK:INPUT@@"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Lex: OUTPUT keyword"
+pattern = "\\boutput:\\s*"
+replacement = "@@TOK:OUTPUT@@"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Lex: STEP keyword"
+pattern = "\\bstep:\\s*"
+replacement = "@@TOK:STEP@@"
+flags = ["global"]
+
+# Operations
+[[step]]
+type = "substitute"
+description = "Lex: REMOVE_EMPTY operation"
+pattern = "\\bremove_empty\\b"
+replacement = "@@OP:REMOVE_EMPTY@@"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Lex: NORMALIZE operation"
+pattern = "\\bnormalize\\b"
+replacement = "@@OP:NORMALIZE@@"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Lex: VALIDATE operation"
+pattern = "\\bvalidate\\b"
+replacement = "@@OP:VALIDATE@@"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Lex: DEDUPE operation"
+pattern = "\\bdedupe\\b"
+replacement = "@@OP:DEDUPE@@"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Lex: FILTER operation"
+pattern = "\\bfilter\\b"
+replacement = "@@OP:FILTER@@"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Lex: TRANSFORM operation"
+pattern = "\\btransform\\b"
+replacement = "@@OP:TRANSFORM@@"
+flags = ["global"]
+
+# Modifiers
+[[step]]
+type = "substitute"
+description = "Lex: WHERE modifier"
+pattern = "\\bwhere\\b"
+replacement = "@@MOD:WHERE@@"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Lex: FIELD modifier"
+pattern = "\\bfield\\b"
+replacement = "@@MOD:FIELD@@"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Lex: TO modifier"
+pattern = "\\bto\\b"
+replacement = "@@MOD:TO@@"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Lex: BY modifier"
+pattern = "\\bby\\b"
+replacement = "@@MOD:BY@@"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Lex: MATCHES modifier"
+pattern = "\\bmatches\\b"
+replacement = "@@MOD:MATCHES@@"
+flags = ["global"]
+
+# Literals
+[[step]]
+type = "substitute"
+description = "Lex: String literal"
+pattern = "\"([^\"]*)\""
+replacement = "@@STR:$1@@"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Lex: Regex literal"
+pattern = "/([^/]+)/"
+replacement = "@@REGEX:$1@@"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Lex: Identifier"
+pattern = "([a-zA-Z_][a-zA-Z0-9_]*\\.(?:csv|json|txt))"
+replacement = "@@FILE:$1@@"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Lex: Field name"
+pattern = "@@MOD:FIELD@@\\s*([a-zA-Z_][a-zA-Z0-9_]*)"
+replacement = "@@MOD:FIELD@@@@FIELD:$1@@"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Lex: By field"
+pattern = "@@MOD:BY@@\\s*([a-zA-Z_][a-zA-Z0-9_]*)"
+replacement = "@@MOD:BY@@@@FIELD:$1@@"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Lex: Where field"
+pattern = "@@MOD:WHERE@@\\s*([a-zA-Z_][a-zA-Z0-9_]*)"
+replacement = "@@MOD:WHERE@@@@FIELD:$1@@"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Lex: Processor name"
+pattern = "@@TOK:PROCESSOR@@\\s*([A-Z][a-zA-Z0-9_]*)"
+replacement = "@@TOK:PROCESSOR@@@@NAME:$1@@"
+flags = ["global"]
+
+# Operators
+[[step]]
+type = "substitute"
+description = "Lex: Equals operator"
+pattern = "\\s*=\\s*"
+replacement = "@@EQ@@"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Lex: Lowercase transform"
+pattern = "\\blowercase\\b"
+replacement = "@@TRANSFORM:LOWER@@"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Lex: Uppercase transform"
+pattern = "\\buppercase\\b"
+replacement = "@@TRANSFORM:UPPER@@"
+flags = ["global"]
+
+# =============================================================================
+# PHASE 2: PARSING
+# Build AST structure from tokens
+# =============================================================================
+
+# Parse processor definition
+[[step]]
+type = "substitute"
+description = "Parse: Processor definition start"
+pattern = "@@TOK:DEFINE@@\\s*@@TOK:PROCESSOR@@@@NAME:([^@]+)@@"
+replacement = "@@AST:PROC_DEF:$1@@"
+flags = ["global"]
+
+# Parse input/output declarations
+[[step]]
+type = "substitute"
+description = "Parse: Input declaration"
+pattern = "@@TOK:INPUT@@@@FILE:([^@]+)@@"
+replacement = "@@AST:INPUT:$1@@"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Parse: Output declaration"
+pattern = "@@TOK:OUTPUT@@@@FILE:([^@]+)@@"
+replacement = "@@AST:OUTPUT:$1@@"
+flags = ["global"]
+
+# Parse step statements
+[[step]]
+type = "substitute"
+description = "Parse: Remove empty step"
+pattern = "@@TOK:STEP@@@@OP:REMOVE_EMPTY@@@@MOD:WHERE@@@@FIELD:([^@]+)@@@@EQ@@@@STR:([^@]*)@@"
+replacement = "@@AST:STEP:REMOVE_EMPTY:$1:$2@@"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Parse: Normalize step"
+pattern = "@@TOK:STEP@@@@OP:NORMALIZE@@@@MOD:FIELD@@@@FIELD:([^@]+)@@@@MOD:TO@@@@TRANSFORM:([^@]+)@@"
+replacement = "@@AST:STEP:NORMALIZE:$1:$2@@"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Parse: Validate step"
+pattern = "@@TOK:STEP@@@@OP:VALIDATE@@@@MOD:FIELD@@@@FIELD:([^@]+)@@@@MOD:MATCHES@@@@REGEX:([^@]+)@@"
+replacement = "@@AST:STEP:VALIDATE:$1:$2@@"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Parse: Dedupe step"
+pattern = "@@TOK:STEP@@@@OP:DEDUPE@@@@MOD:BY@@@@FIELD:([^@]+)@@"
+replacement = "@@AST:STEP:DEDUPE:$1@@"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Parse: End of processor"
+pattern = "@@TOK:END@@"
+replacement = "@@AST:END@@"
+flags = ["global"]
+
+# =============================================================================
+# PHASE 3: SEMANTIC ANALYSIS
+# Type checking, validation, symbol table building
+# =============================================================================
+
+# Mark processor scope
+[[step]]
+type = "substitute"
+description = "Semantic: Mark processor scope"
+pattern = "@@AST:PROC_DEF:([^@]+)@@"
+replacement = "@@SCOPE:$1@@@@AST:PROC_DEF:$1@@"
+flags = ["global"]
+
+# Validate input exists before output
+[[step]]
+type = "substitute"
+description = "Semantic: Validate input before output"
+pattern = "@@AST:INPUT:([^@]+)@@(.*)@@AST:OUTPUT:"
+replacement = "@@AST:INPUT:$1@@@@SEM:INPUT_VALID@@$2@@AST:OUTPUT:"
+flags = ["global"]
+
+# Mark steps with sequence numbers for ordering
+[[step]]
+type = "substitute"
+description = "Semantic: Number step 1"
+pattern = "@@SEM:INPUT_VALID@@(.*)@@AST:STEP:"
+replacement = "@@SEM:INPUT_VALID@@$1@@SEQ:1@@@@AST:STEP:"
+
+[[step]]
+type = "substitute"
+description = "Semantic: Number step 2"
+pattern = "@@SEQ:1@@(.+?)@@AST:STEP:([^@]+):([^@]+)"
+replacement = "@@SEQ:1@@$1@@SEQ:2@@@@AST:STEP:$2:$3"
+
+[[step]]
+type = "substitute"
+description = "Semantic: Number step 3"
+pattern = "@@SEQ:2@@(.+?)@@AST:STEP:([^@]+):([^@]+)"
+replacement = "@@SEQ:2@@$1@@SEQ:3@@@@AST:STEP:$2:$3"
+
+[[step]]
+type = "substitute"
+description = "Semantic: Number step 4"
+pattern = "@@SEQ:3@@(.+?)@@AST:STEP:([^@]+):([^@]+)"
+replacement = "@@SEQ:3@@$1@@SEQ:4@@@@AST:STEP:$2:$3"
+
+# =============================================================================
+# PHASE 4: IR GENERATION
+# Convert AST to intermediate representation
+# =============================================================================
+
+# Convert AST nodes to IR operations
+[[step]]
+type = "substitute"
+description = "IR: Processor header"
+pattern = "@@SCOPE:([^@]+)@@@@AST:PROC_DEF:([^@]+)@@"
+replacement = "@@IR:HEADER:$1@@"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "IR: Input file"
+pattern = "@@AST:INPUT:([^@]+)@@"
+replacement = "@@IR:READ:$1@@"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "IR: Output file"
+pattern = "@@AST:OUTPUT:([^@]+)@@"
+replacement = "@@IR:WRITE:$1@@"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "IR: Remove empty operation"
+pattern = "@@AST:STEP:REMOVE_EMPTY:([^:]+):([^@]*)@@"
+replacement = "@@IR:FILTER:NOT_EMPTY:$1@@"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "IR: Normalize to lowercase"
+pattern = "@@AST:STEP:NORMALIZE:([^:]+):LOWER@@"
+replacement = "@@IR:TRANSFORM:LOWER:$1@@"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "IR: Normalize to uppercase"
+pattern = "@@AST:STEP:NORMALIZE:([^:]+):UPPER@@"
+replacement = "@@IR:TRANSFORM:UPPER:$1@@"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "IR: Validate with regex"
+pattern = "@@AST:STEP:VALIDATE:([^:]+):([^@]+)@@"
+replacement = "@@IR:VALIDATE:REGEX:$1:$2@@"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "IR: Dedupe operation"
+pattern = "@@AST:STEP:DEDUPE:([^@]+)@@"
+replacement = "@@IR:DEDUPE:$1@@"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "IR: End marker"
+pattern = "@@AST:END@@"
+replacement = "@@IR:END@@"
+flags = ["global"]
+
+# =============================================================================
+# PHASE 5: OPTIMIZATION
+# Combine and simplify operations
+# =============================================================================
+
+# Combine sequential filters into single awk
+[[step]]
+type = "substitute"
+description = "Optimize: Combine filters"
+pattern = "@@IR:FILTER:([^@]+)@@\\s*@@IR:FILTER:([^@]+)@@"
+replacement = "@@IR:FILTER_CHAIN:$1:$2@@"
+flags = ["global"]
+
+# Remove redundant sequence markers
+[[step]]
+type = "substitute"
+description = "Optimize: Clean sequence markers"
+pattern = "@@SEQ:\\d+@@"
+replacement = ""
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Optimize: Clean semantic markers"
+pattern = "@@SEM:[^@]+@@"
+replacement = ""
+flags = ["global"]
+
+# =============================================================================
+# PHASE 6: CODE GENERATION
+# Emit executable shell script
+# =============================================================================
+
+# Generate header
+[[step]]
+type = "substitute"
+description = "CodeGen: Script header"
+pattern = "@@IR:HEADER:([^@]+)@@"
+replacement = "#!/bin/bash\n# Generated processor: $1\n# Auto-generated by rexpipe dsl-compiler\nset -euo pipefail\n"
+flags = ["global"]
+
+# Generate input reading
+[[step]]
+type = "substitute"
+description = "CodeGen: Read input"
+pattern = "@@IR:READ:([^@]+)@@"
+replacement = "\nINPUT_FILE=\"$1\"\nif [[ ! -f \"$INPUT_FILE\" ]]; then\n  echo \"Error: Input file not found: $INPUT_FILE\" >&2\n  exit 1\nfi\n\n# Read CSV header\nHEADER=$(head -1 \"$INPUT_FILE\")\necho \"$HEADER\"\n\n# Process data\ntail -n +2 \"$INPUT_FILE\" | \\"
+flags = ["global"]
+
+# Generate filter for non-empty
+[[step]]
+type = "substitute"
+description = "CodeGen: Filter not empty"
+pattern = "@@IR:FILTER:NOT_EMPTY:([^@]+)@@"
+replacement = "\n  awk -F',' 'NR==1{for(i=1;i<=NF;i++){if($i==\"$1\")col=i}} NR>1{if($col!=\"\")print}' | \\"
+flags = ["global"]
+
+# Generate lowercase transform
+[[step]]
+type = "substitute"
+description = "CodeGen: Transform lowercase"
+pattern = "@@IR:TRANSFORM:LOWER:([^@]+)@@"
+replacement = "\n  awk -F',' -v OFS=',' 'NR==1{for(i=1;i<=NF;i++){if($i==\"$1\")col=i};print} NR>1{$col=tolower($col);print}' | \\"
+flags = ["global"]
+
+# Generate validation
+[[step]]
+type = "substitute"
+description = "CodeGen: Validate regex"
+pattern = "@@IR:VALIDATE:REGEX:([^:]+):([^@]+)@@"
+replacement = "\n  awk -F',' 'NR==1{for(i=1;i<=NF;i++){if($i==\"$1\")col=i};print} NR>1{if($col ~ /$2/)print}' | \\"
+flags = ["global"]
+
+# Generate dedupe
+[[step]]
+type = "substitute"
+description = "CodeGen: Dedupe"
+pattern = "@@IR:DEDUPE:([^@]+)@@"
+replacement = "\n  awk -F',' 'NR==1{for(i=1;i<=NF;i++){if($i==\"$1\")col=i};print} NR>1{if(!seen[$col]++){print}}' | \\"
+flags = ["global"]
+
+# Generate output writing
+[[step]]
+type = "substitute"
+description = "CodeGen: Write output"
+pattern = "@@IR:WRITE:([^@]+)@@"
+replacement = "\n  cat > \"$1\"\n\necho \"Processing complete. Output written to: $1\""
+flags = ["global"]
+
+# Generate end
+[[step]]
+type = "substitute"
+description = "CodeGen: Script footer"
+pattern = "@@IR:END@@"
+replacement = ""
+flags = ["global"]
+
+# =============================================================================
+# PHASE 7: FINALIZATION
+# Clean up any remaining markers, format output
+# =============================================================================
+
+# Remove any leftover markers
+[[step]]
+type = "substitute"
+description = "Final: Clean markers"
+pattern = "@@[A-Z_]+:[^@]*@@"
+replacement = ""
+flags = ["global"]
+
+# Remove empty lines at start
+[[step]]
+type = "substitute"
+description = "Final: Clean leading blanks"
+pattern = "^\\n+"
+replacement = ""
+
+# Fix trailing backslash before cat
+[[step]]
+type = "substitute"
+description = "Final: Fix trailing pipe"
+pattern = "\\| \\\\\\n\\n  cat"
+replacement = "| \\\n  cat"
+flags = ["global"]
+
+# Collapse excessive blank lines
+[[step]]
+type = "substitute"
+description = "Final: Collapse blanks"
+pattern = "\\n{3,}"
+replacement = "\n\n"
+flags = ["global"]
+
+# =============================================================================
+# FINALIZE: Compilation Report
+# =============================================================================
+
+[finalize]
+enabled = true
+
+[[finalize.counters]]
+name = "ir_ops"
+pattern = "awk"
+description = "Generated awk operations"
+
+[[finalize.counters]]
+name = "pipes"
+pattern = "\\|"
+description = "Pipeline stages"
+
+template = """# DSL Compiler Output
+# awk operations: {{counters.ir_ops}}
+# pipeline stages: {{counters.pipes}}
+
+{{output}}
+"""

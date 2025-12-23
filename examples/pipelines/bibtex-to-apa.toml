@@ -1,0 +1,256 @@
+name = "bibtex-to-apa"
+version = "1.0.0"
+description = "Convert BibTeX bibliography entries to APA 7th edition format"
+# Usage: cat references.bib | rexpipe -c bibtex-to-apa.toml > references-apa.txt
+#
+# Perfect for: Academic writing, thesis preparation, journal submissions
+# Handles: @article, @book, @inproceedings, @misc entries
+#
+# Note: Complex BibTeX requires proper parsing; this handles common patterns
+
+# =============================================================================
+# PHASE 1: Extract Entry Type and Key
+# =============================================================================
+
+# Mark article entries
+[[step]]
+type = "substitute"
+description = "Mark article entries"
+pattern = "@article\\{([^,]+),"
+replacement = "[ARTICLE:$1]\n"
+
+# Mark book entries
+[[step]]
+type = "substitute"
+description = "Mark book entries"
+pattern = "@book\\{([^,]+),"
+replacement = "[BOOK:$1]\n"
+
+# Mark inproceedings entries
+[[step]]
+type = "substitute"
+description = "Mark conference entries"
+pattern = "@inproceedings\\{([^,]+),"
+replacement = "[CONFERENCE:$1]\n"
+
+# Mark misc entries
+[[step]]
+type = "substitute"
+description = "Mark misc entries"
+pattern = "@misc\\{([^,]+),"
+replacement = "[MISC:$1]\n"
+
+# =============================================================================
+# PHASE 2: Extract and Format Fields
+# =============================================================================
+
+# Author field - BibTeX uses "and" between authors
+[[step]]
+type = "substitute"
+description = "Extract author"
+pattern = "author\\s*=\\s*\\{([^}]+)\\}"
+replacement = "AUTHORS:$1"
+flags = ["global"]
+
+# Title field
+[[step]]
+type = "substitute"
+description = "Extract title"
+pattern = "title\\s*=\\s*\\{([^}]+)\\}"
+replacement = "TITLE:$1"
+flags = ["global"]
+
+# Year field
+[[step]]
+type = "substitute"
+description = "Extract year"
+pattern = "year\\s*=\\s*\\{?(\\d{4})\\}?"
+replacement = "YEAR:$1"
+flags = ["global"]
+
+# Journal field
+[[step]]
+type = "substitute"
+description = "Extract journal"
+pattern = "journal\\s*=\\s*\\{([^}]+)\\}"
+replacement = "JOURNAL:$1"
+flags = ["global"]
+
+# Volume field
+[[step]]
+type = "substitute"
+description = "Extract volume"
+pattern = "volume\\s*=\\s*\\{?(\\d+)\\}?"
+replacement = "VOLUME:$1"
+flags = ["global"]
+
+# Number/Issue field
+[[step]]
+type = "substitute"
+description = "Extract issue"
+pattern = "number\\s*=\\s*\\{?(\\d+)\\}?"
+replacement = "ISSUE:$1"
+flags = ["global"]
+
+# Pages field
+[[step]]
+type = "substitute"
+description = "Extract pages"
+pattern = "pages\\s*=\\s*\\{?([0-9-]+)\\}?"
+replacement = "PAGES:$1"
+flags = ["global"]
+
+# Publisher field
+[[step]]
+type = "substitute"
+description = "Extract publisher"
+pattern = "publisher\\s*=\\s*\\{([^}]+)\\}"
+replacement = "PUBLISHER:$1"
+flags = ["global"]
+
+# DOI field
+[[step]]
+type = "substitute"
+description = "Extract DOI"
+pattern = "doi\\s*=\\s*\\{([^}]+)\\}"
+replacement = "DOI:https://doi.org/$1"
+flags = ["global"]
+
+# URL field
+[[step]]
+type = "substitute"
+description = "Extract URL"
+pattern = "url\\s*=\\s*\\{([^}]+)\\}"
+replacement = "URL:$1"
+flags = ["global"]
+
+# Booktitle (for conference papers)
+[[step]]
+type = "substitute"
+description = "Extract booktitle"
+pattern = "booktitle\\s*=\\s*\\{([^}]+)\\}"
+replacement = "BOOKTITLE:$1"
+flags = ["global"]
+
+# =============================================================================
+# PHASE 3: Format Author Names for APA
+# =============================================================================
+
+# Convert "First Last" to "Last, F."
+# BibTeX: John Smith and Jane Doe
+# APA: Smith, J., & Doe, J.
+[[step]]
+type = "substitute"
+description = "Format author names"
+pattern = "AUTHORS:([A-Z][a-z]+)\\s+([A-Z][a-z]+)"
+replacement = "AUTHORS:$2, $1."
+flags = ["global"]
+
+# Convert "and" to "&" for APA
+[[step]]
+type = "substitute"
+description = "Author and to ampersand"
+pattern = "(AUTHORS:[^\\n]+)\\s+and\\s+"
+replacement = "$1, & "
+flags = ["global"]
+
+# =============================================================================
+# PHASE 4: Remove BibTeX Formatting Artifacts
+# =============================================================================
+
+# Remove remaining braces
+[[step]]
+type = "substitute"
+description = "Remove braces"
+pattern = "[{}]"
+replacement = ""
+flags = ["global"]
+
+# Remove trailing commas from lines
+[[step]]
+type = "substitute"
+description = "Remove trailing commas"
+pattern = ",\\s*$"
+replacement = ""
+flags = ["global"]
+
+# Clean up multiple spaces
+[[step]]
+type = "substitute"
+description = "Clean spaces"
+pattern = "  +"
+replacement = " "
+flags = ["global"]
+
+# =============================================================================
+# PHASE 5: Filter to Keep Only Formatted Fields
+# =============================================================================
+
+# Keep only lines with our extracted fields
+[[step]]
+type = "filter"
+description = "Keep formatted fields"
+pattern = "^(\\[|AUTHORS:|TITLE:|YEAR:|JOURNAL:|VOLUME:|ISSUE:|PAGES:|PUBLISHER:|DOI:|URL:|BOOKTITLE:)"
+action = "keep_line"
+
+# =============================================================================
+# PHASE 6: Assemble APA Format
+# This is simplified - full implementation would use block processing
+# =============================================================================
+
+# Format: Author(s). (Year). Title. Journal, Volume(Issue), Pages. DOI
+
+# Remove field labels for final output (keeping structure markers)
+[[step]]
+type = "substitute"
+description = "Format authors line"
+pattern = "^AUTHORS:(.+)$"
+replacement = "$1"
+
+[[step]]
+type = "substitute"
+description = "Format year line"
+pattern = "^YEAR:(.+)$"
+replacement = "($1)."
+
+[[step]]
+type = "substitute"
+description = "Format title line"
+pattern = "^TITLE:(.+)$"
+replacement = "$1."
+
+[[step]]
+type = "substitute"
+description = "Format journal line"
+pattern = "^JOURNAL:(.+)$"
+replacement = "*$1*,"
+
+[[step]]
+type = "substitute"
+description = "Format volume"
+pattern = "^VOLUME:(.+)$"
+replacement = "*$1*"
+
+[[step]]
+type = "substitute"
+description = "Format issue"
+pattern = "^ISSUE:(.+)$"
+replacement = "($1),"
+
+[[step]]
+type = "substitute"
+description = "Format pages"
+pattern = "^PAGES:(.+)$"
+replacement = "$1."
+
+[[step]]
+type = "substitute"
+description = "Format DOI"
+pattern = "^DOI:(.+)$"
+replacement = "$1"
+
+[[step]]
+type = "substitute"
+description = "Format URL"
+pattern = "^URL:(.+)$"
+replacement = "Retrieved from $1"

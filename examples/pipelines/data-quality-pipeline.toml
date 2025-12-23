@@ -1,0 +1,482 @@
+name = "data-quality-pipeline"
+version = "1.0.0"
+description = "Progressive data quality pipeline: Profile → Validate → Cleanse → Standardize → Enrich → Verify"
+#
+# Usage: cat raw-data.csv | rexpipe -c data-quality-pipeline.toml > clean-data.csv
+#
+# This pipeline implements a COMPLETE DATA QUALITY FRAMEWORK with 7 progressive stages:
+#
+#   Stage 1: Profile       → Analyze data patterns, identify field types
+#   Stage 2: Validate      → Check constraints, flag anomalies
+#   Stage 3: Cleanse       → Fix common data quality issues
+#   Stage 4: Standardize   → Normalize formats to consistent standards
+#   Stage 5: Deduplicate   → Mark potential duplicates for review
+#   Stage 6: Enrich        → Add derived fields and quality scores
+#   Stage 7: Verify        → Final quality gates before output
+#
+# Each stage annotates the data, enabling full lineage tracking.
+# Process: Raw → [Profile] → [Validate] → [Cleanse] → [Standardize] → [Enrich] → Clean
+
+# =============================================================================
+# STAGE 1: Profile Data Patterns
+# Identify field types and data patterns for downstream processing
+# =============================================================================
+
+# Identify email fields
+[[step]]
+type = "substitute"
+description = "Stage1: Profile emails"
+pattern = "([^,]*[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}[^,]*)"
+replacement = "@@FIELD:EMAIL@@$1"
+flags = ["global"]
+
+# Identify phone number fields
+[[step]]
+type = "substitute"
+description = "Stage1: Profile phones"
+pattern = "([^,]*(?:\\+?1[-. ]?)?\\(?[0-9]{3}\\)?[-. ]?[0-9]{3}[-. ]?[0-9]{4}[^,]*)"
+replacement = "@@FIELD:PHONE@@$1"
+flags = ["global"]
+
+# Identify date fields (various formats)
+[[step]]
+type = "substitute"
+description = "Stage1: Profile dates MM/DD/YYYY"
+pattern = ",([^,]*\\b\\d{1,2}/\\d{1,2}/\\d{2,4}\\b[^,]*),"
+replacement = ",@@FIELD:DATE@@$1,"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Stage1: Profile dates YYYY-MM-DD"
+pattern = ",([^,]*\\b\\d{4}-\\d{2}-\\d{2}\\b[^,]*),"
+replacement = ",@@FIELD:DATE@@$1,"
+flags = ["global"]
+
+# Identify currency/money fields
+[[step]]
+type = "substitute"
+description = "Stage1: Profile currency"
+pattern = ",([^,]*\\$[\\d,]+\\.?\\d*[^,]*),"
+replacement = ",@@FIELD:CURRENCY@@$1,"
+flags = ["global"]
+
+# Identify numeric fields
+[[step]]
+type = "substitute"
+description = "Stage1: Profile numbers"
+pattern = ",([^,@]*\\b\\d+\\.?\\d*\\b[^,@]*),"
+replacement = ",@@FIELD:NUMERIC@@$1,"
+flags = ["global"]
+
+# Identify ZIP code fields
+[[step]]
+type = "substitute"
+description = "Stage1: Profile ZIP codes"
+pattern = ",([^,]*\\b\\d{5}(?:-\\d{4})?\\b[^,]*),"
+replacement = ",@@FIELD:ZIP@@$1,"
+flags = ["global"]
+
+# Identify SSN fields (for flagging)
+[[step]]
+type = "substitute"
+description = "Stage1: Profile SSN"
+pattern = ",([^,]*\\b\\d{3}-\\d{2}-\\d{4}\\b[^,]*),"
+replacement = ",@@FIELD:SSN@@@@PII@@$1,"
+flags = ["global"]
+
+# =============================================================================
+# STAGE 2: Validate Data Constraints
+# Flag records that violate data quality rules
+# =============================================================================
+
+# Validate email format
+[[step]]
+type = "substitute"
+description = "Stage2: Validate email format"
+pattern = "@@FIELD:EMAIL@@([^@,]*[^a-zA-Z0-9._%+-@][^,]*)"
+replacement = "@@FIELD:EMAIL@@@@INVALID:EMAIL_FORMAT@@$1"
+
+# Validate phone has correct digit count
+[[step]]
+type = "substitute"
+description = "Stage2: Validate phone digits"
+pattern = "@@FIELD:PHONE@@([^,]*(?:[0-9][^0-9]*){0,9}[^,]*)"
+replacement = "@@FIELD:PHONE@@@@INVALID:PHONE_FORMAT@@$1"
+
+# Flag future dates
+[[step]]
+type = "substitute"
+description = "Stage2: Flag future dates"
+pattern = "@@FIELD:DATE@@([^,]*202[5-9][^,]*)"
+replacement = "@@FIELD:DATE@@@@ANOMALY:FUTURE_DATE@@$1"
+
+# Flag negative currency values
+[[step]]
+type = "substitute"
+description = "Stage2: Flag negative currency"
+pattern = "@@FIELD:CURRENCY@@([^,]*-\\$[^,]*)"
+replacement = "@@FIELD:CURRENCY@@@@ANOMALY:NEGATIVE_VALUE@@$1"
+
+# Flag empty required fields (consecutive commas)
+[[step]]
+type = "substitute"
+description = "Stage2: Flag empty fields"
+pattern = ",,"
+replacement = ",@@EMPTY@@,"
+flags = ["global"]
+
+# Flag unusually long fields (possible data corruption)
+[[step]]
+type = "substitute"
+description = "Stage2: Flag long fields"
+pattern = ",([^,]{200,}),"
+replacement = ",@@ANOMALY:LONG_VALUE@@$1,"
+
+# =============================================================================
+# STAGE 3: Cleanse Common Data Issues
+# Fix known data quality problems
+# =============================================================================
+
+# Remove extra whitespace
+[[step]]
+type = "substitute"
+description = "Stage3: Trim whitespace"
+pattern = ",\\s+([^,])"
+replacement = ",$1"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Stage3: Trim trailing whitespace"
+pattern = "([^,])\\s+,"
+replacement = "$1,"
+flags = ["global"]
+
+# Normalize NULL representations
+[[step]]
+type = "substitute"
+description = "Stage3: Normalize NULL"
+pattern = ",(?i)(null|none|n/a|na|nil|-),"
+replacement = ",,"
+flags = ["global"]
+
+# Fix common typos in boolean fields
+[[step]]
+type = "substitute"
+description = "Stage3: Fix boolean yes"
+pattern = ",(?i)(yse|eys|ys),"
+replacement = ",yes,"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Stage3: Fix boolean no"
+pattern = ",(?i)(no|nope|n),"
+replacement = ",no,"
+flags = ["global"]
+
+# Remove non-printable characters
+[[step]]
+type = "substitute"
+description = "Stage3: Remove control chars"
+pattern = "[\\x00-\\x1f\\x7f]"
+replacement = ""
+flags = ["global"]
+
+# Fix double quotes inside quoted fields
+[[step]]
+type = "substitute"
+description = "Stage3: Escape internal quotes"
+pattern = "\"([^\"]*)\"([^\",])\"([^\"]*)\""
+replacement = "\"$1'$2'$3\""
+flags = ["global"]
+
+# =============================================================================
+# STAGE 4: Standardize Formats
+# Normalize all fields to consistent formats
+# =============================================================================
+
+# Standardize phone format to (XXX) XXX-XXXX
+[[step]]
+type = "substitute"
+description = "Stage4: Standardize phone"
+pattern = "@@FIELD:PHONE@@[^,]*?(\\d{3})[^\\d]*(\\d{3})[^\\d]*(\\d{4})"
+replacement = "@@FIELD:PHONE@@($1) $2-$3"
+flags = ["global"]
+
+# Standardize date format to YYYY-MM-DD
+[[step]]
+type = "substitute"
+description = "Stage4: Standardize date MM/DD/YYYY"
+pattern = "@@FIELD:DATE@@[^,]*(\\d{1,2})/(\\d{1,2})/(\\d{4})"
+replacement = "@@FIELD:DATE@@$3-$1-$2"
+flags = ["global"]
+
+# Standardize currency (remove commas, ensure 2 decimals)
+[[step]]
+type = "substitute"
+description = "Stage4: Standardize currency"
+pattern = "@@FIELD:CURRENCY@@\\$([\\d,]+)\\.?(\\d{0,2})"
+replacement = "@@FIELD:CURRENCY@@$1.$2"
+flags = ["global"]
+
+# Standardize email to lowercase
+[[step]]
+type = "substitute"
+description = "Stage4: Note email case"
+pattern = "@@FIELD:EMAIL@@([^,]*[A-Z][^,]*)"
+replacement = "@@FIELD:EMAIL@@@@CASE:UPPER@@$1"
+
+# Standardize state abbreviations
+[[step]]
+type = "substitute"
+description = "Stage4: Standardize states"
+pattern = ",(?i)(california|calif),"
+replacement = ",CA,"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Stage4: Standardize NY"
+pattern = ",(?i)(new york|newyork),"
+replacement = ",NY,"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Stage4: Standardize TX"
+pattern = ",(?i)(texas),"
+replacement = ",TX,"
+flags = ["global"]
+
+# =============================================================================
+# STAGE 5: Identify Potential Duplicates
+# Mark records that may be duplicates based on key fields
+# =============================================================================
+
+# This stage marks patterns that often indicate duplicates
+# Full deduplication requires cross-record analysis (use cross-file feature)
+
+# Mark records with same email appearing multiple times
+# (This is a simplified marker - full dedup needs stateful processing)
+[[step]]
+type = "substitute"
+description = "Stage5: Mark for dedup review"
+pattern = "(@@FIELD:EMAIL@@[^@]+@[^,]+)(.*)\\1"
+replacement = "$1@@POSSIBLE_DUP@@$2$1"
+flags = ["global"]
+
+# =============================================================================
+# STAGE 6: Enrich with Quality Scores
+# Add derived fields and quality metrics
+# =============================================================================
+
+# Calculate record quality score based on issues found
+# Start with 100, subtract for each issue
+[[step]]
+type = "substitute"
+description = "Stage6: Start quality score"
+pattern = "^([^\\n]+)$"
+replacement = "@@QUALITY:100@@$1"
+
+# Deduct for invalid fields
+[[step]]
+type = "substitute"
+description = "Stage6: Deduct for invalid"
+pattern = "@@QUALITY:(\\d+)@@(.*)@@INVALID:"
+replacement = "@@QUALITY:$1-20@@$2@@INVALID:"
+flags = ["global"]
+
+# Deduct for anomalies
+[[step]]
+type = "substitute"
+description = "Stage6: Deduct for anomaly"
+pattern = "@@QUALITY:(\\d+)@@(.*)@@ANOMALY:"
+replacement = "@@QUALITY:$1-10@@$2@@ANOMALY:"
+flags = ["global"]
+
+# Deduct for empty fields
+[[step]]
+type = "substitute"
+description = "Stage6: Deduct for empty"
+pattern = "@@QUALITY:(\\d+)@@(.*)@@EMPTY@@"
+replacement = "@@QUALITY:$1-5@@$2@@EMPTY@@"
+flags = ["global"]
+
+# Deduct for PII (sensitivity flag)
+[[step]]
+type = "substitute"
+description = "Stage6: Flag PII"
+pattern = "@@QUALITY:(\\d+)@@(.*)@@PII@@"
+replacement = "@@QUALITY:$1@@@@SENSITIVE@@$2@@PII@@"
+flags = ["global"]
+
+# =============================================================================
+# STAGE 7: Final Verification & Output Formatting
+# Apply quality gates and format for output
+# =============================================================================
+
+# Quality gate: Flag low quality records
+[[step]]
+type = "substitute"
+description = "Stage7: Flag low quality"
+pattern = "@@QUALITY:(\\d{1,2}|[0-5]\\d)@@"
+replacement = "@@QUALITY_FAILED@@"
+
+# Quality gate: Mark passing records
+[[step]]
+type = "substitute"
+description = "Stage7: Mark quality passed"
+pattern = "@@QUALITY:[6-9]\\d@@|@@QUALITY:100@@"
+replacement = "@@QUALITY_PASSED@@"
+
+# Clean up internal field markers for output
+[[step]]
+type = "substitute"
+description = "Stage7: Clean field markers"
+pattern = "@@FIELD:[A-Z]+@@"
+replacement = ""
+flags = ["global"]
+
+# Convert quality markers to output format
+[[step]]
+type = "substitute"
+description = "Stage7: Format quality passed"
+pattern = "@@QUALITY_PASSED@@"
+replacement = "[OK],"
+
+[[step]]
+type = "substitute"
+description = "Stage7: Format quality failed"
+pattern = "@@QUALITY_FAILED@@"
+replacement = "[REVIEW],"
+
+# Format issue markers for output
+[[step]]
+type = "substitute"
+description = "Stage7: Format invalid"
+pattern = "@@INVALID:([^@]+)@@"
+replacement = "[INVALID:$1]"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Stage7: Format anomaly"
+pattern = "@@ANOMALY:([^@]+)@@"
+replacement = "[ANOMALY:$1]"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Stage7: Format empty"
+pattern = "@@EMPTY@@"
+replacement = "[EMPTY]"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Stage7: Format sensitive"
+pattern = "@@SENSITIVE@@"
+replacement = "[SENSITIVE]"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Stage7: Format PII"
+pattern = "@@PII@@"
+replacement = "[PII]"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Stage7: Format case issue"
+pattern = "@@CASE:UPPER@@"
+replacement = "[CASE]"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Stage7: Format possible dup"
+pattern = "@@POSSIBLE_DUP@@"
+replacement = "[DUP?]"
+flags = ["global"]
+
+# Clean any remaining internal markers
+[[step]]
+type = "substitute"
+description = "Stage7: Clean remaining markers"
+pattern = "@@[A-Z_:0-9-]+@@"
+replacement = ""
+flags = ["global"]
+
+# =============================================================================
+# FINALIZE: Quality Report
+# =============================================================================
+
+[finalize]
+enabled = true
+dedup_output = false
+
+[[finalize.counters]]
+name = "passed"
+pattern = "\\[OK\\]"
+description = "Records that passed quality checks"
+
+[[finalize.counters]]
+name = "review"
+pattern = "\\[REVIEW\\]"
+description = "Records requiring review"
+
+[[finalize.counters]]
+name = "invalid"
+pattern = "\\[INVALID"
+description = "Records with invalid format"
+
+[[finalize.counters]]
+name = "anomaly"
+pattern = "\\[ANOMALY"
+description = "Records with anomalies"
+
+[[finalize.counters]]
+name = "empty"
+pattern = "\\[EMPTY\\]"
+description = "Records with empty fields"
+
+[[finalize.counters]]
+name = "sensitive"
+pattern = "\\[SENSITIVE\\]"
+description = "Sensitive records"
+
+[[finalize.counters]]
+name = "pii"
+pattern = "\\[PII\\]"
+description = "Records containing PII"
+
+[[finalize.counters]]
+name = "duplicates"
+pattern = "\\[DUP\\?\\]"
+description = "Possible duplicates"
+
+template = """# Data Quality Report
+
+## Summary Statistics
+- Records Processed: {{lines_processed}}
+- Quality Passed: {{counters.passed}}
+- Requires Review: {{counters.review}}
+
+## Issues Found
+- Invalid Format: {{counters.invalid}}
+- Anomalies: {{counters.anomaly}}
+- Empty Fields: {{counters.empty}}
+- Possible Duplicates: {{counters.duplicates}}
+
+## Sensitivity Flags
+- Contains PII: {{counters.pii}}
+- Sensitive Records: {{counters.sensitive}}
+
+---
+## Processed Data
+quality_status,original_data
+{{output}}
+"""

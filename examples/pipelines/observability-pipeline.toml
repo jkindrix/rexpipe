@@ -1,0 +1,471 @@
+name = "observability-pipeline"
+version = "1.0.0"
+description = "Full observability pipeline: raw logs → structured events → metrics → anomalies → alerts"
+#
+# Usage: cat *.log | rexpipe -c observability-pipeline.toml > observability-report.md
+#
+# This is a MULTI-STAGE PROGRESSIVE TRANSFORMATION that takes raw, chaotic logs
+# and transforms them through 8 stages into actionable observability data:
+#
+#   Stage 1: Parse & Normalize     → Consistent timestamp/level format
+#   Stage 2: Extract Structure     → Pull out request IDs, user IDs, durations
+#   Stage 3: Classify Events       → Categorize by type (request, error, metric, trace)
+#   Stage 4: Calculate Metrics     → Response times, error rates, throughput
+#   Stage 5: Detect Anomalies      → Flag outliers, error spikes, slow requests
+#   Stage 6: Correlate Traces      → Link related events by request ID
+#   Stage 7: Generate Alerts       → Convert anomalies to actionable alerts
+#   Stage 8: Format Report         → Output as structured Markdown report
+#
+# The power is in the PROGRESSIVE TRANSFORMATION - each stage builds on the last.
+
+# =============================================================================
+# STAGE 1: Parse & Normalize Raw Logs
+# Convert chaotic multi-format logs into consistent internal representation
+# =============================================================================
+
+# Normalize various timestamp formats to ISO8601
+[[step]]
+type = "substitute"
+description = "Stage1: Normalize Apache timestamps"
+pattern = "\\[(\\d{2})/(\\w{3})/(\\d{4}):(\\d{2}:\\d{2}:\\d{2}) [+-]\\d{4}\\]"
+replacement = "@@TS:$3-$2-$1T$4@@"
+
+[[step]]
+type = "substitute"
+description = "Stage1: Normalize syslog timestamps"
+pattern = "^(\\w{3})\\s+(\\d{1,2}) (\\d{2}:\\d{2}:\\d{2})"
+replacement = "@@TS:2024-$1-$2T$3@@"
+
+[[step]]
+type = "substitute"
+description = "Stage1: Normalize ISO timestamps"
+pattern = "(\\d{4}-\\d{2}-\\d{2})[T ](\\d{2}:\\d{2}:\\d{2})\\.?\\d*Z?"
+replacement = "@@TS:$1T$2@@"
+
+[[step]]
+type = "substitute"
+description = "Stage1: Normalize JSON timestamps"
+pattern = "\"(?:timestamp|time|@timestamp|ts)\":\\s*\"([^\"]+)\""
+replacement = "@@TS:$1@@"
+
+# Normalize log levels
+[[step]]
+type = "substitute"
+description = "Stage1: Normalize to ERROR"
+pattern = "(?i)\\b(ERROR|ERR|SEVERE|CRITICAL|FATAL|EMERGENCY)\\b"
+replacement = "@@LVL:ERROR@@"
+
+[[step]]
+type = "substitute"
+description = "Stage1: Normalize to WARN"
+pattern = "(?i)\\b(WARN|WARNING)\\b"
+replacement = "@@LVL:WARN@@"
+
+[[step]]
+type = "substitute"
+description = "Stage1: Normalize to INFO"
+pattern = "(?i)\\b(INFO|NOTICE)\\b"
+replacement = "@@LVL:INFO@@"
+
+[[step]]
+type = "substitute"
+description = "Stage1: Normalize to DEBUG"
+pattern = "(?i)\\b(DEBUG|TRACE|VERBOSE)\\b"
+replacement = "@@LVL:DEBUG@@"
+
+# =============================================================================
+# STAGE 2: Extract Structured Fields
+# Pull out key observability dimensions from log messages
+# =============================================================================
+
+# Extract request/trace IDs
+[[step]]
+type = "substitute"
+description = "Stage2: Extract request ID"
+pattern = "(?i)(?:request[_-]?id|trace[_-]?id|correlation[_-]?id|x-request-id)[=: ]+([a-f0-9-]{8,36})"
+replacement = "@@REQ:$1@@ $0"
+flags = ["global"]
+
+# Extract user/session identifiers
+[[step]]
+type = "substitute"
+description = "Stage2: Extract user ID"
+pattern = "(?i)(?:user[_-]?id|uid|account[_-]?id)[=: ]+([a-zA-Z0-9_-]+)"
+replacement = "@@USR:$1@@ $0"
+flags = ["global"]
+
+# Extract response times/durations
+[[step]]
+type = "substitute"
+description = "Stage2: Extract duration (ms)"
+pattern = "(?i)(?:duration|elapsed|response[_-]?time|latency|took)[=: ]+([0-9.]+)\\s*(?:ms|milliseconds?)"
+replacement = "@@DUR:$1ms@@ $0"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Stage2: Extract duration (s)"
+pattern = "(?i)(?:duration|elapsed|response[_-]?time|latency|took)[=: ]+([0-9.]+)\\s*(?:s|seconds?)"
+replacement = "@@DUR:$1s@@ $0"
+flags = ["global"]
+
+# Extract HTTP status codes
+[[step]]
+type = "substitute"
+description = "Stage2: Extract HTTP status"
+pattern = "(?:HTTP[/ ][0-9.]+[\"']?\\s+|status[=: ]+)(\\d{3})\\b"
+replacement = "@@HTTP:$1@@ $0"
+flags = ["global"]
+
+# Extract byte sizes
+[[step]]
+type = "substitute"
+description = "Stage2: Extract bytes"
+pattern = "(?i)(?:bytes?|size|content[_-]?length)[=: ]+([0-9]+)"
+replacement = "@@BYTES:$1@@ $0"
+flags = ["global"]
+
+# Extract endpoints/paths
+[[step]]
+type = "substitute"
+description = "Stage2: Extract API path"
+pattern = "\"(?:GET|POST|PUT|DELETE|PATCH) (/[^\\s\"?]+)"
+replacement = "@@PATH:$1@@ $0"
+flags = ["global"]
+
+# =============================================================================
+# STAGE 3: Classify Event Types
+# Categorize each log line by its semantic meaning
+# =============================================================================
+
+# HTTP requests
+[[step]]
+type = "substitute"
+description = "Stage3: Classify HTTP request"
+pattern = "^(.*)@@HTTP:(\\d{3})@@(.*)@@PATH:([^@]+)@@(.*)$"
+replacement = "@@TYPE:HTTP_REQUEST@@ $1@@HTTP:$2@@$3@@PATH:$4@@$5"
+
+# Database operations
+[[step]]
+type = "substitute"
+description = "Stage3: Classify DB operation"
+pattern = "(?i)(SELECT|INSERT|UPDATE|DELETE|QUERY|EXECUTE).*(?:FROM|INTO|TABLE|@@DUR:)"
+replacement = "@@TYPE:DB_QUERY@@ $0"
+
+# Authentication events
+[[step]]
+type = "substitute"
+description = "Stage3: Classify auth event"
+pattern = "(?i)(login|logout|auth|authenticated|unauthorized|forbidden|access denied)"
+replacement = "@@TYPE:AUTH_EVENT@@ $0"
+
+# Error events (if not already classified) - Two-phase approach
+# Phase 1: Mark all ERROR lines with temporary marker
+[[step]]
+type = "substitute"
+description = "Stage3: Mark error candidates"
+pattern = "@@LVL:ERROR@@"
+replacement = "@@NEEDS_TYPE@@@@LVL:ERROR@@"
+flags = ["global"]
+
+# Phase 2: Remove temp marker from lines already having @@TYPE:
+[[step]]
+type = "substitute"
+description = "Stage3: Skip already typed errors"
+pattern = "@@TYPE:([^@]+)@@(.*)@@NEEDS_TYPE@@"
+replacement = "@@TYPE:$1@@$2"
+flags = ["global"]
+
+# Phase 3: Convert remaining temp markers to error type
+[[step]]
+type = "substitute"
+description = "Stage3: Classify remaining errors"
+pattern = "@@NEEDS_TYPE@@"
+replacement = "@@TYPE:ERROR_EVENT@@"
+flags = ["global"]
+
+# Exceptions and stack traces
+[[step]]
+type = "substitute"
+description = "Stage3: Classify exception"
+pattern = "(?i)(exception|error|failure|failed|threw|thrown|panic|crash)"
+replacement = "@@TYPE:EXCEPTION@@ $0"
+
+# =============================================================================
+# STAGE 4: Calculate Metrics
+# Derive quantitative metrics from extracted fields
+# =============================================================================
+
+# Mark slow requests (>1000ms or >1s)
+[[step]]
+type = "substitute"
+description = "Stage4: Flag slow request (>1s)"
+pattern = "@@DUR:([0-9]+)s@@"
+replacement = "@@DUR:$1s@@ @@METRIC:SLOW_REQUEST@@"
+
+[[step]]
+type = "substitute"
+description = "Stage4: Flag slow request (>1000ms)"
+pattern = "@@DUR:(\\d{4,})ms@@"
+replacement = "@@DUR:$1ms@@ @@METRIC:SLOW_REQUEST@@"
+
+# Categorize HTTP response codes
+[[step]]
+type = "substitute"
+description = "Stage4: Mark 5xx as server error"
+pattern = "@@HTTP:(5\\d{2})@@"
+replacement = "@@HTTP:$1@@ @@METRIC:SERVER_ERROR@@"
+
+[[step]]
+type = "substitute"
+description = "Stage4: Mark 4xx as client error"
+pattern = "@@HTTP:(4\\d{2})@@"
+replacement = "@@HTTP:$1@@ @@METRIC:CLIENT_ERROR@@"
+
+[[step]]
+type = "substitute"
+description = "Stage4: Mark 2xx as success"
+pattern = "@@HTTP:(2\\d{2})@@"
+replacement = "@@HTTP:$1@@ @@METRIC:SUCCESS@@"
+
+# Mark large responses
+[[step]]
+type = "substitute"
+description = "Stage4: Flag large response (>1MB)"
+pattern = "@@BYTES:([0-9]{7,})@@"
+replacement = "@@BYTES:$1@@ @@METRIC:LARGE_RESPONSE@@"
+
+# =============================================================================
+# STAGE 5: Detect Anomalies
+# Identify patterns that indicate problems
+# =============================================================================
+
+# Multiple errors for same request
+[[step]]
+type = "substitute"
+description = "Stage5: Flag repeated errors"
+pattern = "(@@REQ:[^@]+@@.*@@LVL:ERROR@@.*){2,}"
+replacement = "$0 @@ANOMALY:CASCADING_FAILURE@@"
+
+# Authentication failures
+[[step]]
+type = "substitute"
+description = "Stage5: Flag auth failures"
+pattern = "@@TYPE:AUTH_EVENT@@.*(?i)(failed|denied|unauthorized|invalid)"
+replacement = "$0 @@ANOMALY:AUTH_FAILURE@@"
+
+# Combined slow + error
+[[step]]
+type = "substitute"
+description = "Stage5: Flag slow errors"
+pattern = "@@METRIC:SLOW_REQUEST@@.*@@METRIC:SERVER_ERROR@@|@@METRIC:SERVER_ERROR@@.*@@METRIC:SLOW_REQUEST@@"
+replacement = "$0 @@ANOMALY:DEGRADED_SERVICE@@"
+
+# =============================================================================
+# STAGE 6: Correlate by Request ID
+# Add correlation markers for tracing
+# =============================================================================
+
+[[step]]
+type = "substitute"
+description = "Stage6: Mark correlated events"
+pattern = "@@REQ:([^@]+)@@"
+replacement = "@@TRACE[$1]@@"
+flags = ["global"]
+
+# =============================================================================
+# STAGE 7: Generate Alerts
+# Convert anomalies and metrics into actionable alert format
+# =============================================================================
+
+[[step]]
+type = "substitute"
+description = "Stage7: Generate critical alert"
+pattern = "@@ANOMALY:CASCADING_FAILURE@@"
+replacement = "\n🚨 **CRITICAL ALERT**: Cascading failure detected"
+
+[[step]]
+type = "substitute"
+description = "Stage7: Generate security alert"
+pattern = "@@ANOMALY:AUTH_FAILURE@@"
+replacement = "\n🔐 **SECURITY ALERT**: Authentication failure"
+
+[[step]]
+type = "substitute"
+description = "Stage7: Generate performance alert"
+pattern = "@@ANOMALY:DEGRADED_SERVICE@@"
+replacement = "\n⚠️ **PERFORMANCE ALERT**: Service degradation detected"
+
+[[step]]
+type = "substitute"
+description = "Stage7: Generate error alert"
+pattern = "@@METRIC:SERVER_ERROR@@"
+replacement = "[SERVER_ERROR]"
+
+[[step]]
+type = "substitute"
+description = "Stage7: Generate slow alert"
+pattern = "@@METRIC:SLOW_REQUEST@@"
+replacement = "[SLOW]"
+
+# =============================================================================
+# STAGE 8: Format Final Report
+# Clean up internal markers and format for human consumption
+# =============================================================================
+
+# Convert internal markers to readable format
+[[step]]
+type = "substitute"
+description = "Stage8: Format timestamp"
+pattern = "@@TS:([^@]+)@@"
+replacement = "`$1`"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Stage8: Format level"
+pattern = "@@LVL:([^@]+)@@"
+replacement = "**$1**"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Stage8: Format trace"
+pattern = "@@TRACE\\[([^\\]]+)\\]@@"
+replacement = "trace:$1"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Stage8: Format path"
+pattern = "@@PATH:([^@]+)@@"
+replacement = "`$1`"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Stage8: Format HTTP"
+pattern = "@@HTTP:([^@]+)@@"
+replacement = "HTTP:$1"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Stage8: Format duration"
+pattern = "@@DUR:([^@]+)@@"
+replacement = "⏱️$1"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Stage8: Format type"
+pattern = "@@TYPE:([^@]+)@@"
+replacement = "[$1]"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Stage8: Format user"
+pattern = "@@USR:([^@]+)@@"
+replacement = "user:$1"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Stage8: Format bytes"
+pattern = "@@BYTES:([^@]+)@@"
+replacement = "$1B"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Stage8: Format success"
+pattern = "@@METRIC:SUCCESS@@"
+replacement = "✅"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Stage8: Format client error"
+pattern = "@@METRIC:CLIENT_ERROR@@"
+replacement = "⚠️"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Stage8: Format large response"
+pattern = "@@METRIC:LARGE_RESPONSE@@"
+replacement = "📦"
+flags = ["global"]
+
+# Remove any remaining internal markers
+[[step]]
+type = "substitute"
+description = "Stage8: Clean remaining markers"
+pattern = "@@[A-Z_]+:[^@]*@@"
+replacement = ""
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Stage8: Clean empty markers"
+pattern = "@@[A-Z_]+@@"
+replacement = ""
+flags = ["global"]
+
+# Clean up extra whitespace
+[[step]]
+type = "substitute"
+description = "Stage8: Clean whitespace"
+pattern = "  +"
+replacement = " "
+flags = ["global"]
+
+# =============================================================================
+# FINALIZE: Generate Summary Report
+# =============================================================================
+
+[finalize]
+enabled = true
+
+[[finalize.counters]]
+name = "server_errors"
+pattern = "\\[SERVER_ERROR\\]"
+description = "Server errors detected"
+
+[[finalize.counters]]
+name = "slow_requests"
+pattern = "\\[SLOW\\]"
+description = "Slow requests detected"
+
+[[finalize.counters]]
+name = "critical_alerts"
+pattern = "CRITICAL ALERT"
+description = "Critical alerts generated"
+
+[[finalize.counters]]
+name = "security_alerts"
+pattern = "SECURITY ALERT"
+description = "Security alerts generated"
+
+[[finalize.counters]]
+name = "performance_alerts"
+pattern = "PERFORMANCE ALERT"
+description = "Performance alerts generated"
+
+template = """# Observability Report
+
+## Summary
+- Lines Processed: {{lines_processed}}
+- Total Matches: {{total_matches}}
+
+## Alerts Generated
+- Critical Alerts: {{counters.critical_alerts}}
+- Security Alerts: {{counters.security_alerts}}
+- Performance Alerts: {{counters.performance_alerts}}
+- Server Errors: {{counters.server_errors}}
+- Slow Requests: {{counters.slow_requests}}
+
+## Event Log
+{{output}}
+"""

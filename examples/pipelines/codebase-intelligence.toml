@@ -1,0 +1,667 @@
+name = "codebase-intelligence"
+version = "1.0.0"
+description = "Multi-pass codebase analyzer: extracts architecture, builds dependency graph, identifies patterns, generates intelligence report"
+#
+# Usage: rexpipe -c codebase-intelligence.toml -R --include '*.{rs,ts,py,go,java}' src/
+#
+# This pipeline implements a CODEBASE INTELLIGENCE SYSTEM that doesn't just transform
+# text—it UNDERSTANDS structure and builds a knowledge representation:
+#
+#   Pass 1: Language Detection    → Identify file type, set parsing context
+#   Pass 2: Structure Extraction  → Functions, classes, modules, imports
+#   Pass 3: Dependency Mapping    → Who calls whom, who imports whom
+#   Pass 4: Pattern Recognition   → Design patterns, anti-patterns, code smells
+#   Pass 5: Complexity Analysis   → Cyclomatic complexity indicators
+#   Pass 6: Documentation Mining  → Extract TODO, FIXME, HACK, API docs
+#   Pass 7: Security Scanning     → Potential vulnerabilities, unsafe patterns
+#   Pass 8: Architecture Inference → Layer detection, boundary identification
+#   Pass 9: Knowledge Synthesis   → Build unified model from all passes
+#   Pass 10: Intelligence Report  → Actionable insights, not just data
+#
+# The key insight: each pass BUILDS KNOWLEDGE that subsequent passes USE.
+# This isn't transformation—it's ANALYSIS with emergent understanding.
+
+# =============================================================================
+# PASS 1: Language Detection & Context Setting
+# Determine file type to set parsing expectations for subsequent passes
+# =============================================================================
+
+# Rust detection
+[[step]]
+type = "substitute"
+description = "Pass1: Detect Rust"
+pattern = "^(use |mod |fn |impl |struct |enum |trait |pub |#\\[)"
+replacement = "@@LANG:RUST@@$0"
+
+# TypeScript/JavaScript detection
+[[step]]
+type = "substitute"
+description = "Pass1: Detect TypeScript"
+pattern = "^(import |export |const |let |var |function |class |interface |type )"
+replacement = "@@LANG:TS@@$0"
+
+# Python detection
+[[step]]
+type = "substitute"
+description = "Pass1: Detect Python"
+pattern = "^(import |from |def |class |async def |@)"
+replacement = "@@LANG:PY@@$0"
+
+# Go detection
+[[step]]
+type = "substitute"
+description = "Pass1: Detect Go"
+pattern = "^(package |import |func |type |struct |interface )"
+replacement = "@@LANG:GO@@$0"
+
+# Java detection
+[[step]]
+type = "substitute"
+description = "Pass1: Detect Java"
+pattern = "^(package |import |public |private |protected |class |interface |@)"
+replacement = "@@LANG:JAVA@@$0"
+
+# =============================================================================
+# PASS 2: Structure Extraction
+# Identify architectural elements: functions, classes, modules
+# =============================================================================
+
+# Function definitions (multi-language)
+[[step]]
+type = "substitute"
+description = "Pass2: Extract function (Rust)"
+pattern = "@@LANG:RUST@@.*(pub\\s+)?(async\\s+)?fn\\s+([a-z_][a-z0-9_]*)\\s*(<[^>]+>)?\\s*\\("
+replacement = "$0\n@@STRUCT:FN:$3@@@@VIS:${1:private}@@"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Pass2: Extract function (TS)"
+pattern = "@@LANG:TS@@.*(export\\s+)?(async\\s+)?function\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\s*\\("
+replacement = "$0\n@@STRUCT:FN:$3@@@@VIS:${1:private}@@"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Pass2: Extract function (Python)"
+pattern = "@@LANG:PY@@.*(async\\s+)?def\\s+([a-z_][a-z0-9_]*)\\s*\\("
+replacement = "$0\n@@STRUCT:FN:$2@@"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Pass2: Extract function (Go)"
+pattern = "@@LANG:GO@@.*func\\s+(\\([^)]+\\)\\s+)?([A-Za-z_][A-Za-z0-9_]*)\\s*\\("
+replacement = "$0\n@@STRUCT:FN:$2@@@@VIS:${1:public}@@"
+flags = ["global"]
+
+# Class/Struct definitions
+[[step]]
+type = "substitute"
+description = "Pass2: Extract struct (Rust)"
+pattern = "@@LANG:RUST@@.*(pub\\s+)?struct\\s+([A-Z][a-zA-Z0-9]*)\\s*[<{]"
+replacement = "$0\n@@STRUCT:TYPE:$2@@@@KIND:struct@@"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Pass2: Extract class (TS)"
+pattern = "@@LANG:TS@@.*(export\\s+)?class\\s+([A-Z][a-zA-Z0-9]*)\\s*(extends|implements|\\{)"
+replacement = "$0\n@@STRUCT:TYPE:$2@@@@KIND:class@@"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Pass2: Extract class (Python)"
+pattern = "@@LANG:PY@@.*class\\s+([A-Z][a-zA-Z0-9]*)\\s*[:(]"
+replacement = "$0\n@@STRUCT:TYPE:$1@@@@KIND:class@@"
+flags = ["global"]
+
+# Trait/Interface definitions
+[[step]]
+type = "substitute"
+description = "Pass2: Extract trait (Rust)"
+pattern = "@@LANG:RUST@@.*(pub\\s+)?trait\\s+([A-Z][a-zA-Z0-9]*)\\s*[<{:]"
+replacement = "$0\n@@STRUCT:IFACE:$2@@@@KIND:trait@@"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Pass2: Extract interface (TS)"
+pattern = "@@LANG:TS@@.*(export\\s+)?interface\\s+([A-Z][a-zA-Z0-9]*)\\s*[<{]"
+replacement = "$0\n@@STRUCT:IFACE:$2@@@@KIND:interface@@"
+flags = ["global"]
+
+# =============================================================================
+# PASS 3: Dependency Mapping
+# Track imports, uses, calls to build dependency graph
+# =============================================================================
+
+# Import tracking
+[[step]]
+type = "substitute"
+description = "Pass3: Track Rust imports"
+pattern = "use\\s+([a-z_][a-z0-9_]*(?:::[a-z_][a-z0-9_]*)*)(?:::\\{([^}]+)\\}|::([A-Za-z_][A-Za-z0-9_]*))?"
+replacement = "$0\n@@DEP:IMPORT:$1@@@@ITEMS:$2$3@@"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Pass3: Track TS imports"
+pattern = "import\\s+(?:\\{([^}]+)\\}|([A-Za-z_][A-Za-z0-9_]*))\\s+from\\s+['\"]([^'\"]+)['\"]"
+replacement = "$0\n@@DEP:IMPORT:$3@@@@ITEMS:$1$2@@"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Pass3: Track Python imports"
+pattern = "from\\s+([a-z_][a-z0-9_.]*)?\\s+import\\s+([^#\\n]+)"
+replacement = "$0\n@@DEP:IMPORT:$1@@@@ITEMS:$2@@"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Pass3: Track Python direct imports"
+pattern = "^import\\s+([a-z_][a-z0-9_.,\\s]*)"
+replacement = "$0\n@@DEP:IMPORT:$1@@"
+flags = ["global"]
+
+# Method calls (potential cross-module dependencies)
+[[step]]
+type = "substitute"
+description = "Pass3: Track method calls"
+pattern = "([A-Z][a-zA-Z0-9]*)::([a-z_][a-z0-9_]*)\\s*\\("
+replacement = "$0@@CALL:$1.$2@@"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Pass3: Track instance calls"
+pattern = "\\.([a-z_][a-z0-9_]*)\\s*\\("
+replacement = "$0@@CALL:.$1@@"
+flags = ["global"]
+
+# =============================================================================
+# PASS 4: Pattern Recognition
+# Identify design patterns, anti-patterns, and code smells
+# =============================================================================
+
+# Singleton pattern indicators
+[[step]]
+type = "substitute"
+description = "Pass4: Detect singleton"
+pattern = "(?i)(instance|singleton|get_instance|shared|default)\\s*[:(]"
+replacement = "$0\n@@PATTERN:SINGLETON@@"
+flags = ["global"]
+
+# Factory pattern indicators
+[[step]]
+type = "substitute"
+description = "Pass4: Detect factory"
+pattern = "(?i)(factory|create|build|make|new_)[a-z_]*\\s*\\("
+replacement = "$0\n@@PATTERN:FACTORY@@"
+flags = ["global"]
+
+# Observer/Event pattern
+[[step]]
+type = "substitute"
+description = "Pass4: Detect observer"
+pattern = "(?i)(subscribe|unsubscribe|notify|emit|on_|add_listener|remove_listener|event)"
+replacement = "$0\n@@PATTERN:OBSERVER@@"
+flags = ["global"]
+
+# Anti-patterns and code smells
+[[step]]
+type = "substitute"
+description = "Pass4: Detect god function (many params)"
+pattern = "fn\\s+[a-z_]+\\s*\\([^)]{200,}\\)"
+replacement = "$0\n@@SMELL:GOD_FUNCTION@@"
+
+[[step]]
+type = "substitute"
+description = "Pass4: Detect magic numbers"
+pattern = "[=<>]\\s*(\\d{3,}|0x[a-fA-F0-9]{4,})\\s*[;,)]"
+replacement = "$0\n@@SMELL:MAGIC_NUMBER@@"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Pass4: Detect deep nesting"
+pattern = "^(\\s{16,}|\\t{4,})[a-z]"
+replacement = "$0@@SMELL:DEEP_NESTING@@"
+flags = ["global"]
+
+# =============================================================================
+# PASS 5: Complexity Indicators
+# Identify complexity hotspots without full cyclomatic calculation
+# =============================================================================
+
+# Conditional complexity
+[[step]]
+type = "substitute"
+description = "Pass5: Track conditionals"
+pattern = "\\b(if|else if|elif|match|switch|case|\\?)\\b"
+replacement = "$0@@COMPLEXITY:BRANCH@@"
+flags = ["global"]
+
+# Loop complexity
+[[step]]
+type = "substitute"
+description = "Pass5: Track loops"
+pattern = "\\b(for|while|loop)\\b"
+replacement = "$0@@COMPLEXITY:LOOP@@"
+flags = ["global"]
+
+# Error handling complexity
+[[step]]
+type = "substitute"
+description = "Pass5: Track error handling"
+pattern = "(\\?|unwrap|expect|try|catch|except|raise|throw|panic)"
+replacement = "$0@@COMPLEXITY:ERROR@@"
+flags = ["global"]
+
+# =============================================================================
+# PASS 6: Documentation Mining
+# Extract actionable items, API docs, and developer intent
+# =============================================================================
+
+# TODO/FIXME/HACK extraction
+[[step]]
+type = "substitute"
+description = "Pass6: Extract TODO"
+pattern = "(?i)(//|#|/\\*)\\s*(TODO|FIXME|HACK|XXX|BUG|OPTIMIZE)\\s*:?\\s*([^\\n*]+)"
+replacement = "$0\n@@DOC:$2@@@@MSG:$3@@"
+flags = ["global"]
+
+# Doc comments (Rust, TS, Python)
+[[step]]
+type = "substitute"
+description = "Pass6: Extract Rust doc"
+pattern = "///\\s*(.+)"
+replacement = "$0\n@@DOC:API@@@@MSG:$1@@"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Pass6: Extract JSDoc"
+pattern = "/\\*\\*\\s*\\n?\\s*\\*?\\s*(@[a-z]+)?\\s*([^*]+)"
+replacement = "$0\n@@DOC:API@@@@MSG:$2@@"
+
+[[step]]
+type = "substitute"
+description = "Pass6: Extract Python docstring"
+pattern = "\"\"\"([^\"]+)\"\"\""
+replacement = "$0\n@@DOC:API@@@@MSG:$1@@"
+
+# Deprecation notices
+[[step]]
+type = "substitute"
+description = "Pass6: Extract deprecation"
+pattern = "(?i)(deprecated|@deprecated|#\\[deprecated)"
+replacement = "$0\n@@DOC:DEPRECATED@@"
+flags = ["global"]
+
+# =============================================================================
+# PASS 7: Security Scanning
+# Identify potential security issues and unsafe patterns
+# =============================================================================
+
+# Unsafe code blocks
+[[step]]
+type = "substitute"
+description = "Pass7: Detect unsafe Rust"
+pattern = "unsafe\\s*\\{"
+replacement = "$0\n@@SEC:UNSAFE_BLOCK@@"
+flags = ["global"]
+
+# Potential injection vectors
+[[step]]
+type = "substitute"
+description = "Pass7: Detect SQL building"
+pattern = "(?i)(execute|query|raw_sql)\\s*\\([^)]*\\+|format!.*(?:SELECT|INSERT|UPDATE|DELETE)"
+replacement = "$0\n@@SEC:SQL_INJECTION_RISK@@"
+flags = ["global"]
+
+# Hardcoded secrets patterns
+[[step]]
+type = "substitute"
+description = "Pass7: Detect hardcoded secrets"
+pattern = "(?i)(password|secret|api_key|token)\\s*=\\s*[\"'][^\"']{8,}[\"']"
+replacement = "$0\n@@SEC:HARDCODED_SECRET@@"
+flags = ["global"]
+
+# Crypto concerns
+[[step]]
+type = "substitute"
+description = "Pass7: Detect weak crypto"
+pattern = "(?i)(md5|sha1|des|rc4)\\s*[:(]"
+replacement = "$0\n@@SEC:WEAK_CRYPTO@@"
+flags = ["global"]
+
+# Panic in library code
+[[step]]
+type = "substitute"
+description = "Pass7: Detect panic in lib"
+pattern = "(panic!|unwrap\\(\\)|expect\\([\"'][^\"']*[\"']\\))"
+replacement = "$0\n@@SEC:PANIC_RISK@@"
+flags = ["global"]
+
+# =============================================================================
+# PASS 8: Architecture Inference
+# Detect layers, boundaries, and architectural patterns
+# =============================================================================
+
+# Layer detection by naming conventions
+[[step]]
+type = "substitute"
+description = "Pass8: Detect controller layer"
+pattern = "(?i)(controller|handler|endpoint|route|api)"
+replacement = "$0\n@@ARCH:LAYER:PRESENTATION@@"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Pass8: Detect service layer"
+pattern = "(?i)(service|usecase|interactor|manager)\\b"
+replacement = "$0\n@@ARCH:LAYER:BUSINESS@@"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Pass8: Detect repository layer"
+pattern = "(?i)(repository|repo|store|dao|persistence|database)"
+replacement = "$0\n@@ARCH:LAYER:DATA@@"
+flags = ["global"]
+
+# Module boundary detection
+[[step]]
+type = "substitute"
+description = "Pass8: Detect module boundary"
+pattern = "^(pub )?mod\\s+([a-z_]+)\\s*;"
+replacement = "$0\n@@ARCH:MODULE:$2@@"
+flags = ["global"]
+
+# External interface detection
+[[step]]
+type = "substitute"
+description = "Pass8: Detect external API"
+pattern = "(?i)(http|grpc|graphql|rest|websocket|mqtt)"
+replacement = "$0\n@@ARCH:EXTERNAL:$1@@"
+flags = ["global"]
+
+# =============================================================================
+# PASS 9: Knowledge Synthesis
+# Consolidate all markers into structured intelligence
+# =============================================================================
+
+# Count and categorize structures
+[[step]]
+type = "substitute"
+description = "Pass9: Summarize functions"
+pattern = "@@STRUCT:FN:([^@]+)@@"
+replacement = "[FN:$1]"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Pass9: Summarize types"
+pattern = "@@STRUCT:TYPE:([^@]+)@@"
+replacement = "[TYPE:$1]"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Pass9: Summarize interfaces"
+pattern = "@@STRUCT:IFACE:([^@]+)@@"
+replacement = "[IFACE:$1]"
+flags = ["global"]
+
+# Format dependencies
+[[step]]
+type = "substitute"
+description = "Pass9: Format imports"
+pattern = "@@DEP:IMPORT:([^@]+)@@@@ITEMS:([^@]*)@@"
+replacement = "[IMPORT:$1→$2]"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Pass9: Format calls"
+pattern = "@@CALL:([^@]+)@@"
+replacement = "[→$1]"
+flags = ["global"]
+
+# Format patterns and smells
+[[step]]
+type = "substitute"
+description = "Pass9: Format patterns"
+pattern = "@@PATTERN:([^@]+)@@"
+replacement = "⚙️$1"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Pass9: Format smells"
+pattern = "@@SMELL:([^@]+)@@"
+replacement = "👃$1"
+flags = ["global"]
+
+# Format complexity
+[[step]]
+type = "substitute"
+description = "Pass9: Format complexity"
+pattern = "@@COMPLEXITY:([^@]+)@@"
+replacement = "📊$1"
+flags = ["global"]
+
+# Format documentation
+[[step]]
+type = "substitute"
+description = "Pass9: Format TODO items"
+pattern = "@@DOC:(TODO|FIXME|HACK|XXX|BUG|OPTIMIZE)@@@@MSG:([^@]+)@@"
+replacement = "📝$1: $2"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Pass9: Format API docs"
+pattern = "@@DOC:API@@@@MSG:([^@]+)@@"
+replacement = "📖 $1"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Pass9: Format deprecated"
+pattern = "@@DOC:DEPRECATED@@"
+replacement = "⚠️DEPRECATED"
+flags = ["global"]
+
+# Format security findings
+[[step]]
+type = "substitute"
+description = "Pass9: Format security"
+pattern = "@@SEC:([^@]+)@@"
+replacement = "🔒$1"
+flags = ["global"]
+
+# Format architecture
+[[step]]
+type = "substitute"
+description = "Pass9: Format layers"
+pattern = "@@ARCH:LAYER:([^@]+)@@"
+replacement = "[LAYER:$1]"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Pass9: Format modules"
+pattern = "@@ARCH:MODULE:([^@]+)@@"
+replacement = "[MODULE:$1]"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Pass9: Format external"
+pattern = "@@ARCH:EXTERNAL:([^@]+)@@"
+replacement = "[EXT:$1]"
+flags = ["global"]
+
+# =============================================================================
+# PASS 10: Intelligence Report Generation
+# Clean remaining markers and format final output
+# =============================================================================
+
+# Clean language markers (already used for context)
+[[step]]
+type = "substitute"
+description = "Pass10: Clean lang markers"
+pattern = "@@LANG:[A-Z]+@@"
+replacement = ""
+flags = ["global"]
+
+# Clean visibility markers
+[[step]]
+type = "substitute"
+description = "Pass10: Clean visibility"
+pattern = "@@VIS:[^@]*@@"
+replacement = ""
+flags = ["global"]
+
+# Clean kind markers
+[[step]]
+type = "substitute"
+description = "Pass10: Clean kind"
+pattern = "@@KIND:[^@]+@@"
+replacement = ""
+flags = ["global"]
+
+# Clean any remaining markers
+[[step]]
+type = "substitute"
+description = "Pass10: Clean remaining"
+pattern = "@@[A-Z_]+:[^@]*@@"
+replacement = ""
+flags = ["global"]
+
+# Clean empty annotation lines
+[[step]]
+type = "substitute"
+description = "Pass10: Clean empty lines"
+pattern = "^\\s*$\\n"
+replacement = ""
+flags = ["global"]
+
+# =============================================================================
+# FINALIZE: Intelligence Dashboard
+# =============================================================================
+
+[finalize]
+enabled = true
+dedup_output = true
+
+[[finalize.counters]]
+name = "functions"
+pattern = "\\[FN:"
+description = "Function definitions"
+
+[[finalize.counters]]
+name = "types"
+pattern = "\\[TYPE:"
+description = "Type/Class definitions"
+
+[[finalize.counters]]
+name = "interfaces"
+pattern = "\\[IFACE:"
+description = "Interface/Trait definitions"
+
+[[finalize.counters]]
+name = "imports"
+pattern = "\\[IMPORT:"
+description = "Import statements"
+
+[[finalize.counters]]
+name = "layers"
+pattern = "\\[LAYER:"
+description = "Architectural layers"
+
+[[finalize.counters]]
+name = "modules"
+pattern = "\\[MODULE:"
+description = "Module definitions"
+
+[[finalize.counters]]
+name = "smells"
+pattern = "nose"
+description = "Code smells"
+
+[[finalize.counters]]
+name = "security"
+pattern = "lock"
+description = "Security findings"
+
+[[finalize.counters]]
+name = "todos"
+pattern = "memo.*TODO"
+description = "TODO comments"
+
+[[finalize.counters]]
+name = "fixmes"
+pattern = "memo.*FIXME"
+description = "FIXME comments"
+
+[[finalize.counters]]
+name = "patterns"
+pattern = "gear"
+description = "Design patterns"
+
+[[finalize.counters]]
+name = "deprecated"
+pattern = "warning.*DEPRECATED"
+description = "Deprecated code"
+
+template = """# Codebase Intelligence Report
+
+## Architecture Overview
+
+| Metric | Count |
+|--------|-------|
+| Functions | {{counters.functions}} |
+| Types/Classes | {{counters.types}} |
+| Interfaces/Traits | {{counters.interfaces}} |
+| Imports/Dependencies | {{counters.imports}} |
+| Modules | {{counters.modules}} |
+| Architectural Layers | {{counters.layers}} |
+
+## Health Indicators
+
+### Design Patterns Detected: {{counters.patterns}}
+Well-structured code uses recognized patterns appropriately.
+
+### Code Smells Found: {{counters.smells}}
+Areas that may benefit from refactoring.
+
+### Security Findings: {{counters.security}}
+Potential security concerns requiring review.
+
+### Technical Debt
+- TODOs: {{counters.todos}}
+- FIXMEs: {{counters.fixmes}}
+- Deprecated Code: {{counters.deprecated}}
+
+---
+
+## Detailed Findings
+
+{{output}}
+
+---
+
+## Recommended Actions
+
+1. **Security Review**: Address all security findings before deployment
+2. **Refactoring**: Consider addressing code smells in next sprint
+3. **Documentation**: Update API docs for public interfaces
+4. **Technical Debt**: Schedule TODO/FIXME resolution
+
+*Generated by rexpipe codebase-intelligence pipeline*
+"""

@@ -1,0 +1,126 @@
+name = "cobol-to-csv"
+version = "1.0.0"
+description = "Convert legacy COBOL/mainframe fixed-width records to CSV"
+# Usage: cat CUSTOMER.DAT | rexpipe -c cobol-to-csv.toml > customers.csv
+#
+# Perfect for: Mainframe modernization, legacy data migration, ETL pipelines
+#
+# This example handles a typical customer record layout:
+# Cols 1-10:   Customer ID (numeric, zero-padded)
+# Cols 11-40:  Customer Name (30 chars, space-padded)
+# Cols 41-70:  Address Line 1 (30 chars)
+# Cols 71-100: Address Line 2 (30 chars)
+# Cols 101-120: City (20 chars)
+# Cols 121-122: State (2 chars)
+# Cols 123-127: ZIP (5 chars)
+# Cols 128-137: Phone (10 digits, no formatting)
+# Cols 138-145: Account Open Date (YYYYMMDD)
+# Cols 146-156: Balance (11 chars, implied 2 decimal places, signed)
+#
+# Customize the pattern below to match your COBOL copybook layout
+
+# =============================================================================
+# PHASE 1: Parse Fixed-Width Fields
+# =============================================================================
+
+# Extract fixed-width fields into labeled format
+# Adjust positions and lengths to match your record layout
+[[step]]
+type = "substitute"
+description = "Parse fixed-width record"
+pattern = "^(.{10})(.{30})(.{30})(.{30})(.{20})(.{2})(.{5})(.{10})(.{8})(.{11})$"
+replacement = "ID:$1|NAME:$2|ADDR1:$3|ADDR2:$4|CITY:$5|ST:$6|ZIP:$7|PHONE:$8|OPENED:$9|BAL:$10"
+
+# =============================================================================
+# PHASE 2: Clean Padding and Formatting
+# =============================================================================
+
+# Remove trailing spaces from each field
+[[step]]
+type = "substitute"
+description = "Trim trailing spaces"
+pattern = "\\s+\\|"
+replacement = "|"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Trim trailing spaces at end"
+pattern = "\\s+$"
+replacement = ""
+
+# Remove leading zeros from numeric ID (preserve at least 1 digit)
+[[step]]
+type = "substitute"
+description = "Remove leading zeros from ID"
+pattern = "ID:0*([1-9]\\d*|0)\\|"
+replacement = "ID:$1|"
+
+# Format phone number (1234567890 -> 123-456-7890)
+[[step]]
+type = "substitute"
+description = "Format phone"
+pattern = "PHONE:(\\d{3})(\\d{3})(\\d{4})\\|"
+replacement = "PHONE:$1-$2-$3|"
+
+# Format date (YYYYMMDD -> YYYY-MM-DD)
+[[step]]
+type = "substitute"
+description = "Format date"
+pattern = "OPENED:(\\d{4})(\\d{2})(\\d{2})\\|"
+replacement = "OPENED:$1-$2-$3|"
+
+# Format balance (implied decimal, handle signed)
+# COBOL often stores 00000123456 for $1234.56 (implied 2 decimals)
+# Negative might be 0000012345{ where { represents -0
+[[step]]
+type = "substitute"
+description = "Format balance - extract dollars and cents"
+pattern = "BAL:(\\d{9})(\\d{2})$"
+replacement = "BAL:$1.$2"
+
+# Remove leading zeros from balance
+[[step]]
+type = "substitute"
+description = "Remove leading zeros from balance"
+pattern = "BAL:0*([1-9]\\d*\\.\\d{2})"
+replacement = "BAL:$1"
+
+[[step]]
+type = "substitute"
+description = "Handle zero balance"
+pattern = "BAL:0*(\\.\\d{2})"
+replacement = "BAL:0$1"
+
+# =============================================================================
+# PHASE 3: Convert to CSV Format
+# =============================================================================
+
+# Remove field labels and convert to comma-separated
+[[step]]
+type = "substitute"
+description = "Remove field labels"
+pattern = "ID:|NAME:|ADDR1:|ADDR2:|CITY:|ST:|ZIP:|PHONE:|OPENED:|BAL:"
+replacement = ""
+flags = ["global"]
+
+# Convert pipe delimiters to commas
+[[step]]
+type = "substitute"
+description = "Pipes to commas"
+pattern = "\\|"
+replacement = ","
+flags = ["global"]
+
+# Escape any commas that might be in the data (wrap in quotes)
+# Note: This simple version assumes no commas in original data
+# For production, use a more robust CSV escaping approach
+
+# =============================================================================
+# FINALIZE: Add CSV Header
+# =============================================================================
+
+[finalize]
+enabled = true
+template = """customer_id,name,address1,address2,city,state,zip,phone,account_opened,balance
+{{output}}"""

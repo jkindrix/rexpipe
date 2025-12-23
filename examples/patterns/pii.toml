@@ -1,0 +1,228 @@
+# PII/PHI Pattern Library
+# Patterns for detecting Personally Identifiable Information and Protected Health Information
+#
+# Supports compliance with:
+# - GDPR (General Data Protection Regulation) - EU
+# - HIPAA (Health Insurance Portability and Accountability Act) - US
+# - PCI DSS (Payment Card Industry Data Security Standard)
+# - CCPA (California Consumer Privacy Act)
+#
+# Usage in pipelines:
+#   patterns_include = ["patterns/pii.toml"]
+#   pattern = '${identity.ssn}'
+
+name = "PII/PHI Patterns"
+description = "Personal and health information detection for compliance"
+version = "1.0.0"
+
+# Include common patterns for base functionality
+patterns_include = ["common.toml"]
+
+# =============================================================================
+# IDENTITY DOCUMENTS
+# Government-issued identification numbers
+# =============================================================================
+
+[patterns.identity]
+# US Social Security Number
+ssn = '\b\d{3}-\d{2}-\d{4}\b'
+ssn_no_dash = '\b\d{9}\b'
+
+# US Individual Taxpayer Identification Number (ITIN)
+itin = '\b9\d{2}-[7-9]\d-\d{4}\b'
+
+# US Employer Identification Number (EIN)
+ein = '\b\d{2}-\d{7}\b'
+
+# US Driver's License (varies by state, generic pattern)
+drivers_license = '\b[A-Z]{0,2}\d{5,9}\b'
+
+# Passport numbers (generic, varies by country)
+passport = '\b[A-Z]{1,2}\d{6,9}\b'
+
+# UK National Insurance Number
+uk_nin = '\b[A-CEGHJ-PR-TW-Z]{2}\d{6}[A-D]\b'
+
+# Canadian Social Insurance Number
+ca_sin = '\b\d{3}-\d{3}-\d{3}\b'
+
+# Australian Tax File Number
+au_tfn = '\b\d{8,9}\b'
+
+# German Personalausweis (ID card)
+de_id = '\b[A-Z0-9]{9}\b'
+
+# =============================================================================
+# FINANCIAL DATA
+# Payment cards, bank accounts
+# =============================================================================
+
+[patterns.financial]
+# Credit card numbers (major brands)
+credit_card = '\b(?:4[0-9]{12}(?:[0-9]{3})?|5[1-5][0-9]{14}|3[47][0-9]{13}|6(?:011|5[0-9]{2})[0-9]{12})\b'
+credit_card_formatted = '\b(?:\d{4}[-\s]?){3}\d{4}\b'
+
+# CVV/CVC codes
+cvv = '\b\d{3,4}\b'
+
+# US Bank routing number
+routing_number = '\b[0-9]{9}\b'
+
+# IBAN (International Bank Account Number)
+iban = '\b[A-Z]{2}\d{2}[A-Z0-9]{4}\d{7}(?:[A-Z0-9]?){0,16}\b'
+
+# SWIFT/BIC code
+swift = '\b[A-Z]{6}[A-Z0-9]{2}(?:[A-Z0-9]{3})?\b'
+
+# =============================================================================
+# CONTACT INFORMATION
+# Phone numbers, email, addresses
+# =============================================================================
+
+[patterns.contact]
+# Email (comprehensive)
+email = '[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'
+
+# US phone numbers
+phone_us = '(?:\+?1[-.\s]?)?\(?[0-9]{3}\)?[-.\s]?[0-9]{3}[-.\s]?[0-9]{4}'
+
+# International phone
+phone_intl = '\+[0-9]{1,3}[-.\s]?[0-9]{1,14}'
+
+# US ZIP code
+zip_us = '\b\d{5}(?:-\d{4})?\b'
+
+# UK postcode
+postcode_uk = '\b[A-Z]{1,2}\d{1,2}[A-Z]?\s*\d[A-Z]{2}\b'
+
+# Canadian postal code
+postal_ca = '\b[A-Z]\d[A-Z]\s*\d[A-Z]\d\b'
+
+# Street address (simple US pattern)
+street_address = '\b\d+\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\s+(?:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Drive|Dr|Lane|Ln|Court|Ct|Way|Place|Pl)\b'
+
+# =============================================================================
+# PERSONAL IDENTIFIERS
+# Names, dates of birth, demographics
+# =============================================================================
+
+[patterns.personal]
+# Name in structured data (key-value format)
+name_field = "(?i)(?:first[_-]?name|last[_-]?name|full[_-]?name|name)[\"'=:\\s]+[\"']?[A-Z][a-z]+(?:\\s+[A-Z][a-z]+)*[\"']?"
+
+# Date of birth patterns
+dob_iso = '\b(?:19|20)\d{2}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])\b'
+dob_us = '\b(?:0[1-9]|1[0-2])/(?:0[1-9]|[12]\d|3[01])/(?:19|20)\d{2}\b'
+dob_field = "(?i)(?:date[_-]?of[_-]?birth|dob|birth[_-]?date)[\"'=:\\s]+[\"']?[0-9/-]+[\"']?"
+
+# Age
+age_field = "(?i)age[\"'=:\\s]+[\"']?\\d{1,3}[\"']?"
+
+# Gender/Sex
+gender_field = "(?i)(?:gender|sex)[\"'=:\\s]+[\"']?(?:male|female|m|f|other|non-binary)[\"']?"
+
+# =============================================================================
+# HEALTH INFORMATION (HIPAA PHI)
+# Protected health information under HIPAA Safe Harbor
+# =============================================================================
+
+[patterns.health]
+# Medical Record Number (generic pattern)
+mrn = '\b(?:MRN|Medical Record)[-:\s]*[A-Z0-9]{6,12}\b'
+
+# Health plan beneficiary number
+health_plan_id = '\b[A-Z]{3}\d{9}\b'
+
+# Diagnosis codes (ICD-10)
+icd10 = '\b[A-Z]\d{2}(?:\.\d{1,4})?\b'
+
+# Procedure codes (CPT)
+cpt_code = '\b\d{5}[A-Z]?\b'
+
+# Drug/medication names (common pattern in structured data)
+medication_field = "(?i)(?:medication|drug|prescription|rx)[\"'=:\\s]+[\"']?[A-Za-z]+[\"']?"
+
+# Diagnosis field
+diagnosis_field = "(?i)(?:diagnosis|condition|disease)[\"'=:\\s]+[\"']?[^\"',]+[\"']?"
+
+# Lab values (generic pattern)
+lab_value = "(?i)(?:glucose|cholesterol|hemoglobin|a1c|creatinine|bun)[\"'=:\\s]+[\"']?[0-9.]+[\"']?"
+
+# Blood type
+blood_type = '\b(?:A|B|AB|O)[+-]\b'
+
+# =============================================================================
+# BIOMETRIC DATA
+# Physical identifiers
+# =============================================================================
+
+[patterns.biometric]
+# Fingerprint identifiers
+fingerprint_id = "(?i)(?:fingerprint|biometric)[_-]?(?:id|hash)[\"'=:\\s]+[\"']?[A-Za-z0-9]{20,}[\"']?"
+
+# Face ID / facial recognition
+face_id = "(?i)(?:face[_-]?id|facial[_-]?recognition)[\"'=:\\s]+[\"']?[A-Za-z0-9]{20,}[\"']?"
+
+# Retina/iris scan
+retina_id = "(?i)(?:retina|iris)[_-]?(?:id|scan)[\"'=:\\s]+[\"']?[A-Za-z0-9]{20,}[\"']?"
+
+# Voice print
+voice_id = "(?i)voice[_-]?(?:id|print)[\"'=:\\s]+[\"']?[A-Za-z0-9]{20,}[\"']?"
+
+# =============================================================================
+# DIGITAL IDENTIFIERS
+# Online/digital identity markers
+# =============================================================================
+
+[patterns.digital]
+# IP addresses (can be PII under GDPR)
+ipv4 = '\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b'
+ipv6 = '(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}'
+
+# Device identifiers
+device_id = "(?i)(?:device[_-]?id|udid|imei)[\"'=:\\s]+[\"']?[A-Za-z0-9-]{15,}[\"']?"
+
+# Cookie/tracking IDs
+cookie_id = "(?i)(?:cookie[_-]?id|tracking[_-]?id|session[_-]?id)[\"'=:\\s]+[\"']?[a-f0-9-]{20,}[\"']?"
+
+# Advertising IDs
+ad_id = "(?i)(?:idfa|gaid|advertising[_-]?id)[\"'=:\\s]+[\"']?[a-f0-9-]{32,}[\"']?"
+
+# MAC addresses
+mac_address = '(?:[0-9a-fA-F]{2}[:-]){5}[0-9a-fA-F]{2}'
+
+# =============================================================================
+# LOCATION DATA
+# Geographic information
+# =============================================================================
+
+[patterns.location]
+# GPS coordinates
+gps_coords = '(?i)(?:lat(?:itude)?|lng|lon(?:gitude)?)[\"\'=:\\s]+[\"\'"]?-?\\d+\\.\\d+[\"\'"]?'
+
+# Latitude/Longitude pair
+lat_long = '-?\d{1,3}\.\d{4,},\s*-?\d{1,3}\.\d{4,}'
+
+# Geohash
+geohash = '\b[0-9bcdefghjkmnpqrstuvwxyz]{5,12}\b'
+
+# =============================================================================
+# SENSITIVE CATEGORIES (GDPR Article 9)
+# Special categories of personal data requiring explicit consent
+# =============================================================================
+
+[patterns.sensitive]
+# Racial/ethnic origin
+ethnicity_field = "(?i)(?:race|ethnicity|ethnic[_-]?origin)[\"'=:\\s]+[\"']?[A-Za-z\\s]+[\"']?"
+
+# Political opinions
+political_field = "(?i)(?:political[_-]?(?:party|affiliation|opinion))[\"'=:\\s]+[\"']?[A-Za-z\\s]+[\"']?"
+
+# Religious beliefs
+religion_field = "(?i)(?:religion|religious[_-]?belief|faith)[\"'=:\\s]+[\"']?[A-Za-z\\s]+[\"']?"
+
+# Trade union membership
+union_field = "(?i)(?:trade[_-]?union|union[_-]?member)[\"'=:\\s]+[\"']?[A-Za-z\\s]+[\"']?"
+
+# Sexual orientation
+orientation_field = "(?i)(?:sexual[_-]?orientation|sexuality)[\"'=:\\s]+[\"']?[A-Za-z\\s]+[\"']?"

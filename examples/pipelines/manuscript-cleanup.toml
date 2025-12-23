@@ -1,0 +1,255 @@
+name = "manuscript-cleanup"
+version = "1.0.0"
+description = "Professional manuscript cleanup for publishing - typography, formatting, consistency"
+# Usage: cat manuscript.txt | rexpipe -c manuscript-cleanup.toml > clean-manuscript.txt
+#
+# Perfect for: Book editors, academic publishing, technical documentation
+# Handles: Smart quotes, proper dashes, ellipses, spacing, common typos
+#
+# Based on Chicago Manual of Style conventions
+
+# =============================================================================
+# PHASE 1: Smart Typography
+# =============================================================================
+
+# Convert straight quotes to curly quotes
+# Opening double quote (after space, start of line, or open paren)
+[[step]]
+type = "substitute"
+description = "Opening double quotes"
+pattern = "(^|\\s|\\()\"(\\S)"
+replacement = "$1\u201C$2"
+flags = ["global"]
+
+# Closing double quote (before punctuation, space, or end)
+[[step]]
+type = "substitute"
+description = "Closing double quotes"
+pattern = "(\\S)\"(\\s|$|[.,;:!?)])"
+replacement = "$1\u201D$2"
+flags = ["global"]
+
+# Opening single quote/apostrophe at word start
+[[step]]
+type = "substitute"
+description = "Opening single quotes"
+pattern = "(^|\\s)'(\\w)"
+replacement = "$1\u2018$2"
+flags = ["global"]
+
+# Closing single quote/apostrophe (contractions)
+[[step]]
+type = "substitute"
+description = "Apostrophes"
+pattern = "(\\w)'(\\w)"
+replacement = "$1\u2019$2"
+flags = ["global"]
+
+# Possessive apostrophe at end of word
+[[step]]
+type = "substitute"
+description = "Possessive apostrophe"
+pattern = "(\\w)'"
+replacement = "$1\u2019"
+flags = ["global"]
+
+# =============================================================================
+# PHASE 2: Proper Dashes and Hyphens
+# =============================================================================
+
+# Em dash (—) for breaks in thought: word--word or word -- word
+[[step]]
+type = "substitute"
+description = "Em dashes"
+pattern = "\\s*--\\s*"
+replacement = "\u2014"
+flags = ["global"]
+
+# En dash (–) for ranges: pages 10-20, years 1990-2000
+[[step]]
+type = "substitute"
+description = "En dashes for ranges"
+pattern = "(\\d)-(\\d)"
+replacement = "$1\u2013$2"
+flags = ["global"]
+
+# En dash for connected names: Mason–Dixon
+[[step]]
+type = "substitute"
+description = "En dashes for names"
+pattern = "([A-Z][a-z]+)-([A-Z][a-z]+)"
+replacement = "$1\u2013$2"
+flags = ["global"]
+
+# =============================================================================
+# PHASE 3: Proper Ellipses and Spacing
+# =============================================================================
+
+# Convert three dots to proper ellipsis character
+[[step]]
+type = "substitute"
+description = "Proper ellipsis"
+pattern = "\\.{3}"
+replacement = "\u2026"
+flags = ["global"]
+
+# Four dots (period + ellipsis) for sentence ending
+[[step]]
+type = "substitute"
+description = "Sentence-ending ellipsis"
+pattern = "\\.\\s*\u2026"
+replacement = ".\u2009\u2026"
+
+# Space after ellipsis when followed by lowercase (continuing sentence)
+[[step]]
+type = "substitute"
+description = "Space after ellipsis"
+pattern = "\u2026([a-z])"
+replacement = "\u2026 $1"
+flags = ["global"]
+
+# =============================================================================
+# PHASE 4: Spacing and Line Cleanup
+# =============================================================================
+
+# Remove multiple spaces (preserve paragraph breaks)
+[[step]]
+type = "substitute"
+description = "Collapse multiple spaces"
+pattern = "  +"
+replacement = " "
+flags = ["global"]
+
+# Remove space before punctuation
+[[step]]
+type = "substitute"
+description = "Remove space before punctuation"
+pattern = "\\s+([.,;:!?])"
+replacement = "$1"
+flags = ["global"]
+
+# Ensure space after punctuation (except in abbreviations like U.S.)
+[[step]]
+type = "substitute"
+description = "Space after punctuation"
+pattern = "([.,;:!?])([A-Za-z])"
+replacement = "$1 $2"
+flags = ["global"]
+
+# Fix common abbreviation spacing
+[[step]]
+type = "substitute"
+description = "Fix U. S. to U.S."
+pattern = "U\\. S\\."
+replacement = "U.S."
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Fix e. g. to e.g."
+pattern = "(?i)e\\. g\\."
+replacement = "e.g."
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Fix i. e. to i.e."
+pattern = "(?i)i\\. e\\."
+replacement = "i.e."
+flags = ["global"]
+
+# =============================================================================
+# PHASE 5: Common Typos and Style Issues
+# =============================================================================
+
+# Double words - individual patterns (backrefs not supported in default regex)
+[[step]]
+type = "substitute"
+description = "Remove duplicate 'the'"
+pattern = "\\bthe\\s+the\\b"
+replacement = "the"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Remove duplicate 'a'"
+pattern = "\\ba\\s+a\\b"
+replacement = "a"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Remove duplicate 'and'"
+pattern = "\\band\\s+and\\b"
+replacement = "and"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Remove duplicate 'is'"
+pattern = "\\bis\\s+is\\b"
+replacement = "is"
+flags = ["global"]
+
+# Commonly confused words - add warning markers
+[[step]]
+type = "substitute"
+description = "Flag affect/effect"
+pattern = "(?i)\\b(effect)\\b(\\s+(?:my|your|his|her|their|our))"
+replacement = "[CHECK:$1]$2"
+flags = ["global"]
+
+# Oxford comma check (controversial - marks for review)
+# [[step]]
+# type = "substitute"
+# description = "Flag missing Oxford comma"
+# pattern = "(\\w+),\\s+(\\w+)\\s+and\\s+(\\w+)"
+# replacement = "[COMMA?:$1, $2 and $3]"
+
+# =============================================================================
+# PHASE 6: Number Formatting
+# =============================================================================
+
+# Spell out numbers 1-9 at start of sentence
+[[step]]
+type = "substitute"
+description = "Spell out 1 at sentence start"
+pattern = "([.!?]\\s+)1(\\s+)"
+replacement = "$1One$2"
+
+[[step]]
+type = "substitute"
+description = "Spell out 2 at sentence start"
+pattern = "([.!?]\\s+)2(\\s+)"
+replacement = "$1Two$2"
+
+# Add commas to large numbers
+[[step]]
+type = "substitute"
+description = "Add thousands separator"
+pattern = "\\b(\\d)(\\d{3})\\b"
+replacement = "$1,$2"
+
+[[step]]
+type = "substitute"
+description = "Add millions separator"
+pattern = "\\b(\\d),(\\d{3}),(\\d{3})\\b"
+replacement = "$1,$2,$3"
+
+# =============================================================================
+# PHASE 7: Chapter/Section Markers
+# =============================================================================
+
+# Ensure chapter headings are properly formatted
+[[step]]
+type = "substitute"
+description = "Format chapter headings"
+pattern = "^(?i)chapter\\s+(\\d+)"
+replacement = "CHAPTER $1"
+
+# Format section markers
+[[step]]
+type = "substitute"
+description = "Format section breaks"
+pattern = "^\\s*\\*\\s*\\*\\s*\\*\\s*$"
+replacement = "* * *"

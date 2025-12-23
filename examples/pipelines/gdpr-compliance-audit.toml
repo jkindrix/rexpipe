@@ -1,0 +1,583 @@
+name = "gdpr-compliance-audit"
+version = "1.0.0"
+description = "GDPR compliance audit pipeline with full data lineage and remediation tracking"
+#
+# Usage: rexpipe -c gdpr-compliance-audit.toml -R --include '*.{json,csv,xml,log}' data/
+#
+# This pipeline implements a COMPLETE GDPR COMPLIANCE AUDIT with lineage tracking:
+#
+#   Stage 1: Discover        → Identify all personal data in files
+#   Stage 2: Classify        → Categorize by GDPR data category
+#   Stage 3: Assess Risk     → Calculate risk scores per record
+#   Stage 4: Map Lineage     → Track data origin and processing
+#   Stage 5: Check Consent   → Verify consent markers exist
+#   Stage 6: Retention       → Flag data exceeding retention periods
+#   Stage 7: Remediate       → Apply redaction/pseudonymization
+#   Stage 8: Audit Trail     → Generate compliance documentation
+#
+# Output: Audit report with findings, risk scores, and remediation actions
+
+# =============================================================================
+# STAGE 1: Discover Personal Data
+# Scan for PII patterns defined under GDPR Article 4
+# =============================================================================
+
+# Direct identifiers
+[[step]]
+type = "substitute"
+description = "Stage1: Discover names"
+pattern = "(?i)(first[_-]?name|last[_-]?name|full[_-]?name|name)[\"':=]+\\s*[\"']?([A-Z][a-z]+ ?[A-Z]?[a-z]*)[\"']?"
+replacement = "@@PII:NAME@@$0"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Stage1: Discover email"
+pattern = "[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}"
+replacement = "@@PII:EMAIL@@$0"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Stage1: Discover phone"
+pattern = "(?:\\+?[0-9]{1,3}[-. ]?)?\\(?[0-9]{3}\\)?[-. ]?[0-9]{3}[-. ]?[0-9]{4}"
+replacement = "@@PII:PHONE@@$0"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Stage1: Discover address"
+pattern = "\\d+\\s+[A-Z][a-z]+(?:\\s+[A-Z][a-z]+)*\\s+(?:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Drive|Dr|Lane|Ln)"
+replacement = "@@PII:ADDRESS@@$0"
+flags = ["global"]
+
+# Government IDs (special category)
+[[step]]
+type = "substitute"
+description = "Stage1: Discover SSN/NIN"
+pattern = "\\b\\d{3}-\\d{2}-\\d{4}\\b"
+replacement = "@@PII:GOV_ID@@@@SPECIAL@@$0"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Stage1: Discover passport"
+pattern = "(?i)passport[^:]*:\\s*([A-Z0-9]{6,9})"
+replacement = "@@PII:PASSPORT@@@@SPECIAL@@$0"
+flags = ["global"]
+
+# Financial data
+[[step]]
+type = "substitute"
+description = "Stage1: Discover credit card"
+pattern = "\\b(?:4[0-9]{12}(?:[0-9]{3})?|5[1-5][0-9]{14}|3[47][0-9]{13})\\b"
+replacement = "@@PII:CREDIT_CARD@@@@FINANCIAL@@$0"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Stage1: Discover IBAN"
+pattern = "\\b[A-Z]{2}\\d{2}[A-Z0-9]{4}\\d{7}(?:[A-Z0-9]?){0,16}\\b"
+replacement = "@@PII:IBAN@@@@FINANCIAL@@$0"
+flags = ["global"]
+
+# Health data (special category under GDPR)
+[[step]]
+type = "substitute"
+description = "Stage1: Discover health data"
+pattern = "(?i)(diagnosis|medication|prescription|medical[_-]?record|health[_-]?condition|blood[_-]?type)[\"':=]+\\s*[\"']?([^\"',]+)[\"']?"
+replacement = "@@PII:HEALTH@@@@SPECIAL_CATEGORY@@$0"
+flags = ["global"]
+
+# Biometric data (special category)
+[[step]]
+type = "substitute"
+description = "Stage1: Discover biometric"
+pattern = "(?i)(fingerprint|face[_-]?id|biometric|retina)[\"':=]+\\s*[\"']?([^\"',]+)[\"']?"
+replacement = "@@PII:BIOMETRIC@@@@SPECIAL_CATEGORY@@$0"
+flags = ["global"]
+
+# Religious/Political beliefs (special category)
+[[step]]
+type = "substitute"
+description = "Stage1: Discover beliefs"
+pattern = "(?i)(religion|religious|political[_-]?party|ethnic|race)[\"':=]+\\s*[\"']?([^\"',]+)[\"']?"
+replacement = "@@PII:BELIEFS@@@@SPECIAL_CATEGORY@@$0"
+flags = ["global"]
+
+# IP addresses (indirect identifier)
+[[step]]
+type = "substitute"
+description = "Stage1: Discover IP"
+pattern = "\\b\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\b"
+replacement = "@@PII:IP_ADDRESS@@$0"
+flags = ["global"]
+
+# Cookie/Device IDs (indirect identifier)
+[[step]]
+type = "substitute"
+description = "Stage1: Discover device ID"
+pattern = "(?i)(device[_-]?id|cookie[_-]?id|tracking[_-]?id)[\"':=]+\\s*[\"']?([a-f0-9-]{20,})[\"']?"
+replacement = "@@PII:DEVICE_ID@@$0"
+flags = ["global"]
+
+# Location data
+[[step]]
+type = "substitute"
+description = "Stage1: Discover GPS"
+pattern = "(?i)(lat(?:itude)?|lng|lon(?:gitude)?)[\"':=]+\\s*[\"']?(-?\\d+\\.\\d+)[\"']?"
+replacement = "@@PII:LOCATION@@$0"
+flags = ["global"]
+
+# =============================================================================
+# STAGE 2: Classify by GDPR Category
+# Categorize data according to GDPR Article 9 (special categories)
+# =============================================================================
+
+# Mark special categories (require explicit consent)
+[[step]]
+type = "substitute"
+description = "Stage2: Classify special category"
+pattern = "@@SPECIAL_CATEGORY@@"
+replacement = "@@GDPR:ARTICLE_9@@@@REQUIRES:EXPLICIT_CONSENT@@"
+flags = ["global"]
+
+# Mark financial data (requires security measures)
+[[step]]
+type = "substitute"
+description = "Stage2: Classify financial"
+pattern = "@@FINANCIAL@@"
+replacement = "@@GDPR:FINANCIAL@@@@REQUIRES:ENCRYPTION@@"
+flags = ["global"]
+
+# Mark special identifiers
+[[step]]
+type = "substitute"
+description = "Stage2: Classify special IDs"
+pattern = "@@SPECIAL@@"
+replacement = "@@GDPR:SPECIAL_ID@@@@REQUIRES:PURPOSE_LIMITATION@@"
+flags = ["global"]
+
+# Standard PII classification (only if not already GDPR-tagged) - two-phase
+# Phase 1: Mark all PII for GDPR tagging
+[[step]]
+type = "substitute"
+description = "Stage2: Mark PII for GDPR"
+pattern = "@@PII:([A-Z_]+)@@"
+replacement = "@@PII:$1@@@@NEEDS_GDPR@@"
+flags = ["global"]
+
+# Phase 2: Remove marker if already has @@GDPR:
+[[step]]
+type = "substitute"
+description = "Stage2: Skip already tagged"
+pattern = "@@NEEDS_GDPR@@(.*)@@GDPR:"
+replacement = "$1@@GDPR:"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Stage2: Skip already tagged (before)"
+pattern = "@@GDPR:([^@]+)@@(.*)@@NEEDS_GDPR@@"
+replacement = "@@GDPR:$1@@$2"
+flags = ["global"]
+
+# Phase 3: Tag remaining with Article 6
+[[step]]
+type = "substitute"
+description = "Stage2: Classify standard PII"
+pattern = "@@NEEDS_GDPR@@"
+replacement = "@@GDPR:ARTICLE_6@@"
+flags = ["global"]
+
+# =============================================================================
+# STAGE 3: Assess Risk Level
+# Calculate risk scores based on data sensitivity
+# =============================================================================
+
+# High risk: Special categories + government IDs
+[[step]]
+type = "substitute"
+description = "Stage3: High risk assessment"
+pattern = "@@GDPR:ARTICLE_9@@|@@PII:GOV_ID@@|@@PII:CREDIT_CARD@@"
+replacement = "$0@@RISK:HIGH@@"
+flags = ["global"]
+
+# Medium risk: Direct identifiers (only if not already risk-tagged)
+# Phase 1: Mark candidates
+[[step]]
+type = "substitute"
+description = "Stage3: Mark medium risk candidates"
+pattern = "@@PII:(NAME|EMAIL|PHONE|ADDRESS)@@"
+replacement = "@@PII:$1@@@@NEEDS_RISK_M@@"
+flags = ["global"]
+
+# Phase 2: Remove marker if @@RISK: exists
+[[step]]
+type = "substitute"
+description = "Stage3: Skip already risked (after)"
+pattern = "@@NEEDS_RISK_M@@(.*)@@RISK:"
+replacement = "$1@@RISK:"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Stage3: Skip already risked (before)"
+pattern = "@@RISK:([^@]+)@@(.*)@@NEEDS_RISK_M@@"
+replacement = "@@RISK:$1@@$2"
+flags = ["global"]
+
+# Phase 3: Apply medium risk
+[[step]]
+type = "substitute"
+description = "Stage3: Medium risk assessment"
+pattern = "@@NEEDS_RISK_M@@"
+replacement = "@@RISK:MEDIUM@@"
+flags = ["global"]
+
+# Low risk: Indirect identifiers (only if not already risk-tagged)
+# Phase 1: Mark candidates
+[[step]]
+type = "substitute"
+description = "Stage3: Mark low risk candidates"
+pattern = "@@PII:(IP_ADDRESS|DEVICE_ID)@@"
+replacement = "@@PII:$1@@@@NEEDS_RISK_L@@"
+flags = ["global"]
+
+# Phase 2: Remove marker if @@RISK: exists
+[[step]]
+type = "substitute"
+description = "Stage3: Skip already risked (after)"
+pattern = "@@NEEDS_RISK_L@@(.*)@@RISK:"
+replacement = "$1@@RISK:"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Stage3: Skip already risked (before)"
+pattern = "@@RISK:([^@]+)@@(.*)@@NEEDS_RISK_L@@"
+replacement = "@@RISK:$1@@$2"
+flags = ["global"]
+
+# Phase 3: Apply low risk
+[[step]]
+type = "substitute"
+description = "Stage3: Low risk assessment"
+pattern = "@@NEEDS_RISK_L@@"
+replacement = "@@RISK:LOW@@"
+flags = ["global"]
+
+# =============================================================================
+# STAGE 4: Map Data Lineage
+# Track origin and processing chain
+# =============================================================================
+
+# Identify data source from common patterns
+[[step]]
+type = "substitute"
+description = "Stage4: Source - API response"
+pattern = "^\\{.*\"(status|code|response)\".*\\}$"
+replacement = "@@SOURCE:API@@$0"
+
+[[step]]
+type = "substitute"
+description = "Stage4: Source - Log file"
+pattern = "^\\[?\\d{4}-\\d{2}-\\d{2}.*\\]?"
+replacement = "@@SOURCE:LOG@@$0"
+
+[[step]]
+type = "substitute"
+description = "Stage4: Source - CSV"
+pattern = "^[^{\\[]+,[^{\\[]+,[^{\\[]+"
+replacement = "@@SOURCE:CSV@@$0"
+
+# Add processing timestamp
+[[step]]
+type = "substitute"
+description = "Stage4: Add audit timestamp"
+pattern = "^(@@SOURCE:[A-Z]+@@)?"
+replacement = "$1@@AUDITED:2024-12-22@@"
+
+# =============================================================================
+# STAGE 5: Check Consent Status
+# Verify consent markers exist for data requiring consent
+# =============================================================================
+
+# Look for consent markers
+[[step]]
+type = "substitute"
+description = "Stage5: Find consent marker"
+pattern = "(?i)(consent|gdpr[_-]?consent|marketing[_-]?consent)[\"':=]+\\s*[\"']?(true|yes|1|granted)[\"']?"
+replacement = "@@CONSENT:GRANTED@@$0"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Stage5: Find consent denied"
+pattern = "(?i)(consent|gdpr[_-]?consent|marketing[_-]?consent)[\"':=]+\\s*[\"']?(false|no|0|denied|withdrawn)[\"']?"
+replacement = "@@CONSENT:DENIED@@$0"
+flags = ["global"]
+
+# Flag records requiring consent but missing it - two-phase approach
+# Phase 1: Mark all records requiring consent
+[[step]]
+type = "substitute"
+description = "Stage5: Mark consent required"
+pattern = "@@REQUIRES:EXPLICIT_CONSENT@@"
+replacement = "@@REQUIRES:EXPLICIT_CONSENT@@@@CHECK_CONSENT@@"
+flags = ["global"]
+
+# Phase 2: Remove marker if consent exists
+[[step]]
+type = "substitute"
+description = "Stage5: Skip with consent (after)"
+pattern = "@@CHECK_CONSENT@@(.*)@@CONSENT:"
+replacement = "$1@@CONSENT:"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Stage5: Skip with consent (before)"
+pattern = "@@CONSENT:([^@]+)@@(.*)@@CHECK_CONSENT@@"
+replacement = "@@CONSENT:$1@@$2"
+flags = ["global"]
+
+# Phase 3: Flag remaining as violation
+[[step]]
+type = "substitute"
+description = "Stage5: Flag missing consent"
+pattern = "@@CHECK_CONSENT@@"
+replacement = "@@VIOLATION:MISSING_CONSENT@@"
+flags = ["global"]
+
+# =============================================================================
+# STAGE 6: Check Retention Compliance
+# Flag data that may exceed retention periods
+# =============================================================================
+
+# Look for date fields that indicate age
+[[step]]
+type = "substitute"
+description = "Stage6: Find creation date"
+pattern = "(?i)(created[_-]?at|created[_-]?date|timestamp)[\"':=]+\\s*[\"']?(201[0-9]|202[0-2])[\"']?"
+replacement = "@@RETENTION:OLD_DATA@@$0"
+flags = ["global"]
+
+# Flag potentially expired data
+[[step]]
+type = "substitute"
+description = "Stage6: Flag retention issue"
+pattern = "@@RETENTION:OLD_DATA@@"
+replacement = "@@RETENTION:OLD_DATA@@@@CHECK:RETENTION_POLICY@@"
+flags = ["global"]
+
+# =============================================================================
+# STAGE 7: Apply Remediation
+# Pseudonymize or redact based on requirements
+# =============================================================================
+
+# For high risk data in production mode, redact
+# (This is marked for manual review in audit mode)
+[[step]]
+type = "substitute"
+description = "Stage7: Mark for redaction"
+pattern = "@@RISK:HIGH@@(.*)(@@PII:[A-Z_]+@@)([^@]*)"
+replacement = "@@RISK:HIGH@@$1$2@@ACTION:REQUIRES_REDACTION@@$3"
+flags = ["global"]
+
+# For consent violations, mark for deletion
+[[step]]
+type = "substitute"
+description = "Stage7: Mark for deletion"
+pattern = "@@VIOLATION:MISSING_CONSENT@@"
+replacement = "@@VIOLATION:MISSING_CONSENT@@@@ACTION:REQUIRES_DELETION@@"
+flags = ["global"]
+
+# For retention issues, mark for review
+[[step]]
+type = "substitute"
+description = "Stage7: Mark retention review"
+pattern = "@@CHECK:RETENTION_POLICY@@"
+replacement = "@@CHECK:RETENTION_POLICY@@@@ACTION:REVIEW_RETENTION@@"
+flags = ["global"]
+
+# =============================================================================
+# STAGE 8: Generate Audit Trail
+# Format for compliance documentation
+# =============================================================================
+
+# Format PII findings
+[[step]]
+type = "substitute"
+description = "Stage8: Format PII findings"
+pattern = "@@PII:([A-Z_]+)@@"
+replacement = "[PII:$1]"
+flags = ["global"]
+
+# Format GDPR classification
+[[step]]
+type = "substitute"
+description = "Stage8: Format GDPR class"
+pattern = "@@GDPR:([A-Z_0-9]+)@@"
+replacement = "[GDPR:$1]"
+flags = ["global"]
+
+# Format risk levels
+[[step]]
+type = "substitute"
+description = "Stage8: Format risk"
+pattern = "@@RISK:([A-Z]+)@@"
+replacement = "[RISK:$1]"
+flags = ["global"]
+
+# Format consent status
+[[step]]
+type = "substitute"
+description = "Stage8: Format consent"
+pattern = "@@CONSENT:([A-Z]+)@@"
+replacement = "[CONSENT:$1]"
+flags = ["global"]
+
+# Format violations
+[[step]]
+type = "substitute"
+description = "Stage8: Format violations"
+pattern = "@@VIOLATION:([A-Z_]+)@@"
+replacement = "**[VIOLATION:$1]**"
+flags = ["global"]
+
+# Format required actions
+[[step]]
+type = "substitute"
+description = "Stage8: Format actions"
+pattern = "@@ACTION:([A-Z_]+)@@"
+replacement = "→ ACTION:$1"
+flags = ["global"]
+
+# Format requirements
+[[step]]
+type = "substitute"
+description = "Stage8: Format requirements"
+pattern = "@@REQUIRES:([A-Z_]+)@@"
+replacement = "[REQUIRES:$1]"
+flags = ["global"]
+
+# Format source and timestamp
+[[step]]
+type = "substitute"
+description = "Stage8: Format source"
+pattern = "@@SOURCE:([A-Z]+)@@"
+replacement = "[SOURCE:$1]"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Stage8: Format audit date"
+pattern = "@@AUDITED:([^@]+)@@"
+replacement = "[AUDIT_DATE:$1]"
+flags = ["global"]
+
+# Format retention
+[[step]]
+type = "substitute"
+description = "Stage8: Format retention"
+pattern = "@@RETENTION:([A-Z_]+)@@"
+replacement = "[RETENTION:$1]"
+flags = ["global"]
+
+[[step]]
+type = "substitute"
+description = "Stage8: Format retention check"
+pattern = "@@CHECK:([A-Z_]+)@@"
+replacement = "[CHECK:$1]"
+flags = ["global"]
+
+# Clean remaining markers
+[[step]]
+type = "substitute"
+description = "Stage8: Clean markers"
+pattern = "@@[A-Z_:0-9-]+@@"
+replacement = ""
+flags = ["global"]
+
+# =============================================================================
+# FINALIZE: Compliance Report
+# =============================================================================
+
+[finalize]
+enabled = true
+
+[[finalize.counters]]
+name = "pii_records"
+pattern = "\\[PII:"
+description = "Records containing PII"
+
+[[finalize.counters]]
+name = "high_risk"
+pattern = "\\[RISK:HIGH\\]"
+description = "High risk findings"
+
+[[finalize.counters]]
+name = "medium_risk"
+pattern = "\\[RISK:MEDIUM\\]"
+description = "Medium risk findings"
+
+[[finalize.counters]]
+name = "violations"
+pattern = "\\[VIOLATION:"
+description = "Compliance violations"
+
+[[finalize.counters]]
+name = "article_9"
+pattern = "\\[GDPR:ARTICLE_9\\]"
+description = "Special category data"
+
+[[finalize.counters]]
+name = "consent_denied"
+pattern = "\\[CONSENT:DENIED\\]"
+description = "Consent denied or withdrawn"
+
+[[finalize.counters]]
+name = "actions_required"
+pattern = "ACTION:REQUIRES"
+description = "Required remediation actions"
+
+template = """# GDPR Compliance Audit Report
+
+**Audit Date:** 2024-12-22
+**Pipeline Version:** 1.0.0
+
+---
+
+## Executive Summary
+
+| Metric | Count |
+|--------|-------|
+| Records with PII | {{counters.pii_records}} |
+| High Risk Findings | {{counters.high_risk}} |
+| Medium Risk Findings | {{counters.medium_risk}} |
+| Compliance Violations | {{counters.violations}} |
+| Special Category Data (Art. 9) | {{counters.article_9}} |
+| Consent Denied/Withdrawn | {{counters.consent_denied}} |
+| Actions Required | {{counters.actions_required}} |
+
+---
+
+## Findings Detail
+
+{{output}}
+
+---
+
+## Required Actions
+
+1. Review all **[VIOLATION:]** entries for immediate remediation
+2. Verify consent status for all [GDPR:ARTICLE_9] data
+3. Check retention policies for [RETENTION:OLD_DATA] entries
+4. Apply redaction to [RISK:HIGH] data before sharing
+5. Update data processing records per GDPR Article 30
+
+---
+
+*This report was generated automatically. Manual review is required for compliance sign-off.*
+"""
