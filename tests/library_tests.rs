@@ -336,3 +336,133 @@ test = 'pattern'
     assert!(result.is_ok());
     assert_eq!(result.unwrap().get("test"), Some(&"pattern".to_string()));
 }
+
+#[test]
+fn test_empty_library() {
+    let dir = TempDir::new().unwrap();
+    create_test_library(
+        &dir,
+        "empty.toml",
+        r#"
+name = "Empty Library"
+version = "1.0.0"
+# No patterns defined
+"#,
+    );
+
+    let mut resolver = LibraryResolver::new(Some(dir.path()));
+    let result = resolver.load_libraries(&["empty.toml".to_string()]);
+
+    assert!(result.is_ok());
+    let library = result.unwrap();
+    assert!(library.patterns.is_empty(), "Empty library should have no patterns");
+}
+
+#[test]
+fn test_pattern_conflict_keeps_first_definition() {
+    let dir = TempDir::new().unwrap();
+
+    // First library defines a pattern
+    create_test_library(
+        &dir,
+        "first.toml",
+        r#"
+name = "First"
+[patterns]
+shared = 'first_value'
+"#,
+    );
+
+    // Second library defines the same pattern with different value
+    create_test_library(
+        &dir,
+        "second.toml",
+        r#"
+name = "Second"
+[patterns]
+shared = 'second_value'
+"#,
+    );
+
+    let mut resolver = LibraryResolver::new(Some(dir.path()));
+    // Load both libraries
+    let result = resolver.load_libraries(&[
+        "first.toml".to_string(),
+        "second.toml".to_string(),
+    ]);
+
+    assert!(result.is_ok());
+    let library = result.unwrap();
+    // When a conflict exists, the library keeps the FIRST definition
+    // (and logs a warning about the duplicate)
+    assert_eq!(library.get("shared"), Some(&"first_value".to_string()));
+}
+
+#[test]
+fn test_invalid_toml_syntax_error() {
+    let dir = TempDir::new().unwrap();
+    create_test_library(
+        &dir,
+        "invalid.toml",
+        r#"
+name = "Invalid"
+[patterns
+broken syntax here
+"#,
+    );
+
+    let mut resolver = LibraryResolver::new(Some(dir.path()));
+    let result = resolver.load_libraries(&["invalid.toml".to_string()]);
+
+    assert!(result.is_err(), "Should fail with invalid TOML syntax");
+}
+
+#[test]
+fn test_deeply_nested_patterns() {
+    let dir = TempDir::new().unwrap();
+    create_test_library(
+        &dir,
+        "deep.toml",
+        r#"
+name = "Deep Nesting"
+
+[patterns.level1.level2.level3.level4]
+pattern = 'deeply_nested'
+"#,
+    );
+
+    let mut resolver = LibraryResolver::new(Some(dir.path()));
+    let library = resolver
+        .load_libraries(&["deep.toml".to_string()])
+        .unwrap();
+
+    assert_eq!(
+        library.get("level1.level2.level3.level4.pattern"),
+        Some(&"deeply_nested".to_string())
+    );
+}
+
+#[test]
+fn test_unicode_pattern_names_and_values() {
+    let dir = TempDir::new().unwrap();
+    create_test_library(
+        &dir,
+        "unicode.toml",
+        r#"
+name = "Unicode Test"
+
+[patterns]
+# Pattern with Unicode in the value
+emoji_pattern = '[\x{1F600}-\x{1F64F}]'
+chinese = '[\x{4E00}-\x{9FFF}]+'
+"#,
+    );
+
+    let mut resolver = LibraryResolver::new(Some(dir.path()));
+    let library = resolver
+        .load_libraries(&["unicode.toml".to_string()])
+        .unwrap();
+
+    assert!(library.get("emoji_pattern").is_some());
+    assert!(library.get("chinese").is_some());
+}

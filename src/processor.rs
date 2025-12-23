@@ -149,6 +149,26 @@ struct ContextLine {
     line_ending: LineEnding,
 }
 
+/// Pattern complexity analysis result.
+///
+/// Used internally to assess regex patterns for potential performance issues.
+/// The score helps identify patterns that may be slow to compile or match,
+/// providing early feedback to users before they hit performance problems.
+struct PatternComplexity {
+    /// Complexity score from 0 (simple) to 100 (very complex)
+    ///
+    /// Guidelines:
+    /// - 0-30: Simple patterns, no concerns
+    /// - 31-50: Moderate complexity, logged for debugging
+    /// - 51-80: High complexity, warning logged
+    /// - 81-100: Very high complexity, warning printed to stderr
+    score: u8,
+    /// Human-readable explanation of why the pattern is complex
+    explanation: String,
+    /// Optional suggestion for optimizing the pattern
+    optimization_hint: Option<String>,
+}
+
 /// Core streaming text processor for rexpipe pipelines.
 ///
 /// `StreamProcessor` executes a configured pipeline against text input,
@@ -1306,9 +1326,33 @@ impl StreamProcessor {
             return Ok(CompiledPattern::Fixed(pattern.to_string()));
         }
 
+        // Auto-detect if pattern could use fixed-string mode for better performance
+        // This is purely informational - we still compile as regex for correctness
+        if let Some(suggestion) = Self::check_could_use_fixed_string(pattern) {
+            debug!("{}", suggestion);
+        }
+
         // Check for zero-width match patterns that could cause unexpected behavior
         if let Some(warning) = Self::check_zero_width_pattern(pattern) {
             eprintln!("{}", warning);
+        }
+
+        // Report pattern complexity score for debugging/optimization
+        let complexity = Self::calculate_pattern_complexity(pattern);
+        if complexity.score > 50 {
+            debug!(
+                "Pattern complexity: {} ({})",
+                complexity.score, complexity.explanation
+            );
+        }
+        if complexity.score > 80 {
+            eprintln!(
+                "Warning: Complex pattern detected (score: {})\n  Pattern: {}\n  Issue: {}\n  Tip: {}",
+                complexity.score,
+                if pattern.len() > 60 { format!("{}...", &pattern[..60]) } else { pattern.to_string() },
+                complexity.explanation,
+                complexity.optimization_hint.unwrap_or_else(|| "Consider simplifying the pattern".to_string())
+            );
         }
 
         // PCRE mode - use fancy-regex for advanced features
@@ -1348,6 +1392,123 @@ impl StreamProcessor {
             Ok(regex) => Ok(CompiledPattern::Standard(regex)),
             Err(e) => Err(PatternError::invalid_regex(pattern, e.to_string()))
                 .context("Regex pattern compilation failed"),
+        }
+    }
+
+    /// Check if a pattern could use fixed-string mode for better performance.
+    ///
+    /// Fixed-string mode is faster because it uses literal string matching
+    /// instead of regex compilation. This function detects patterns that
+    /// don't use any regex metacharacters and could benefit from --fixed-strings.
+    fn check_could_use_fixed_string(pattern: &str) -> Option<String> {
+        // Regex metacharacters that indicate the pattern needs regex interpretation
+        const REGEX_METACHARACTERS: &[char] = &[
+            '.', '*', '+', '?', '^', '$', '[', ']', '(', ')', '{', '}', '|', '\\',
+        ];
+
+        // Check if pattern contains any regex metacharacters
+        if !pattern.chars().any(|c| REGEX_METACHARACTERS.contains(&c)) {
+            return Some(format!(
+                "Performance hint: Pattern '{}' contains no regex metacharacters.\n  \
+                 Consider using --fixed-strings (-F) for faster literal matching.",
+                if pattern.len() > 40 {
+                    format!("{}...", &pattern[..40])
+                } else {
+                    pattern.to_string()
+                }
+            ));
+        }
+
+        None
+    }
+
+    /// Calculate a complexity score for a regex pattern.
+    ///
+    /// This helps identify patterns that may be slow to compile or match.
+    /// The score considers:
+    /// - Pattern length
+    /// - Nesting depth of groups
+    /// - Use of quantifiers
+    /// - Unicode character classes
+    /// - Alternation complexity
+    fn calculate_pattern_complexity(pattern: &str) -> PatternComplexity {
+        let mut score: u32 = 0;
+        let mut issues = Vec::new();
+        let mut hint = None;
+
+        // Length-based complexity (longer patterns = more complex)
+        let length_score = (pattern.len() / 20).min(20) as u32;
+        if length_score > 10 {
+            issues.push("long pattern");
+        }
+        score += length_score;
+
+        // Count nesting depth
+        let mut max_depth: u32 = 0;
+        let mut current_depth: u32 = 0;
+        for c in pattern.chars() {
+            match c {
+                '(' | '[' => {
+                    current_depth += 1;
+                    max_depth = max_depth.max(current_depth);
+                }
+                ')' | ']' => {
+                    current_depth = current_depth.saturating_sub(1);
+                }
+                _ => {}
+            }
+        }
+        if max_depth > 3 {
+            score += (max_depth - 3) * 10;
+            issues.push("deeply nested groups");
+            hint = Some("Flatten nested groups where possible".to_string());
+        }
+
+        // Count quantifiers
+        let quantifier_count = pattern.matches('+').count()
+            + pattern.matches('*').count()
+            + pattern.matches('?').count()
+            + pattern.matches('{').count();
+        if quantifier_count > 5 {
+            score += ((quantifier_count - 5) * 5) as u32;
+            issues.push("many quantifiers");
+        }
+
+        // Check for Unicode character classes (can be slow)
+        if pattern.contains("\\p{") || pattern.contains("\\P{") {
+            score += 15;
+            issues.push("Unicode character classes");
+            hint = Some("Unicode classes can be slow; consider ASCII alternatives if applicable".to_string());
+        }
+
+        // Check for complex alternations
+        let alternation_count = pattern.matches('|').count();
+        if alternation_count > 10 {
+            score += ((alternation_count - 10) * 3) as u32;
+            issues.push("many alternations");
+            hint = Some("Consider using character classes instead of long alternations".to_string());
+        }
+
+        // Check for greedy quantifiers in succession (.*.*) - often indicates inefficient pattern
+        if pattern.contains(".*.*") || pattern.contains(".+.+") {
+            score += 20;
+            issues.push("consecutive greedy quantifiers");
+            hint = Some("Use non-greedy quantifiers (.*?) or be more specific".to_string());
+        }
+
+        // Cap score at 100
+        let final_score = score.min(100) as u8;
+
+        let explanation = if issues.is_empty() {
+            "simple pattern".to_string()
+        } else {
+            issues.join(", ")
+        };
+
+        PatternComplexity {
+            score: final_score,
+            explanation,
+            optimization_hint: hint,
         }
     }
 

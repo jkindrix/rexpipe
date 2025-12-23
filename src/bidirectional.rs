@@ -51,8 +51,11 @@ fn unescape_regex(s: &str) -> String {
                     '\\' | '.' | '+' | '*' | '?' | '(' | ')' | '[' | ']' | '{' | '}' | '|' | '^'
                         | '$'
                 ) {
-                    // Skip the backslash, use the metacharacter literally
-                    result.push(chars.next().unwrap());
+                    // Skip the backslash, use the metacharacter literally.
+                    // We already captured `next` from peek(), now advance the iterator
+                    // past it. This avoids unwrap() since we know the value exists.
+                    chars.next();
+                    result.push(next);
                     continue;
                 }
             }

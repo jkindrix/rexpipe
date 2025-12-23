@@ -1,0 +1,52 @@
+# Mutation Testing Configuration for rexpipe
+# See: https://mutants.rs/
+#
+# Run mutation tests with: cargo mutants
+# Install with: cargo install cargo-mutants
+#
+# Mutation testing verifies that tests actually catch bugs by:
+# 1. Making small changes (mutations) to the source code
+# 2. Running tests to see if they fail
+# 3. Reporting "surviving" mutations that tests didn't catch
+
+# Use nextest for faster test execution
+test_tool = "nextest"
+
+# Timeout for each mutation test (seconds)
+# Longer than normal since some mutations may cause slow paths
+timeout = 120
+
+# Maximum concurrent jobs (defaults to number of CPUs)
+# jobs = 4
+
+# Additional arguments to pass to cargo test/nextest
+# additional_cargo_test_args = ["--release"]
+
+# Modules to exclude from mutation testing
+# These are typically:
+# - Generated code
+# - Test utilities
+# - Integration test setup
+exclude_globs = [
+    # JSON schema generation is largely declarative
+    "src/json_schema.rs",
+    # Test support code
+    "src/testing.rs",
+    # Fuzz targets
+    "fuzz/**",
+]
+
+# Specific functions to skip (too trivial or have known issues)
+exclude_re = [
+    # Display/Debug implementations are trivial
+    "impl.*Display.*for",
+    "impl.*Debug.*for",
+    # Default implementations are trivial
+    "impl.*Default.*for",
+    # Serde implementations are generated
+    "Serialize|Deserialize",
+]
+
+# Error handling functions often have many branches that are hard to test
+# but are important for robustness - we can run these separately
+# examine_names = ["error", "validate"]

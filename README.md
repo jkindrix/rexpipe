@@ -844,11 +844,72 @@ Output:
 transform.shell.command = "base64"
 ```
 
+#### Shell Transform Security
+
+Shell transforms execute external commands, which introduces security considerations:
+
+**Security model:**
+- ✅ **Input via stdin**: Matched text is passed through stdin, NOT command interpolation
+- ✅ **No shell injection from data**: Even malicious matched text cannot execute commands
+- ✅ **Timeout protection**: Commands timeout after 30 seconds (configurable)
+- ✅ **Command validation**: Dangerous commands trigger warnings
+- ⚠️ **Config trust required**: The command itself comes from your config file
+
+**Why stdin is safe:**
+```bash
+# UNSAFE (command interpolation - DO NOT DO THIS):
+sh -c "echo '$matched_text'"  # Matched text interpreted by shell!
+
+# SAFE (rexpipe's approach):
+echo "$matched_text" | your_command  # Data never touches shell parser
+```
+
+**Commands that trigger warnings:**
+- File operations: `rm`, `mv`, `cp`, `chmod`, `chown`
+- Network access: `curl`, `wget`, `nc`, `ssh`
+- Privilege escalation: `sudo`, `su`, `doas`
+- Code execution: `eval`, `exec`, `source`
+- Output redirection: `>`, `>>` operators
+
+**Best practices:**
+1. **Review shell commands** in pipeline configs during code review
+2. **Use `allow_shell = false`** in settings to disable shell transforms entirely
+3. **Prefer built-in transforms** when possible (uppercase, base64, etc.)
+4. **Set timeouts** to prevent hanging commands
+5. **Test commands** before adding to production pipelines
+
+**Example with restricted settings:**
+```toml
+[settings]
+allow_shell = false  # Disable all shell transforms - safest option
+strict_mode = true   # Also reject ReDoS patterns
+```
+
 **Plugin transform** (table value):
 ```toml
 transform.plugin.name = "my_plugin"
 transform.plugin.args = ["arg1", "arg2"]
 ```
+
+#### Plugin Security
+
+Plugins are external scripts (shell, Python, Ruby, etc.) that extend rexpipe:
+
+**Plugin search paths** (in order):
+1. `./plugins/` - Project-local plugins
+2. `~/.config/rexpipe/plugins/` - User plugins
+3. `/usr/local/share/rexpipe/plugins/` - System plugins
+
+**Security considerations:**
+- ✅ **Same stdin model as shell transforms** - data isolation
+- ✅ **Script must be executable** - permission check
+- ⚠️ **Trust your plugin sources** - plugins have same access as rexpipe
+- ⚠️ **No sandboxing** - plugins run with your user permissions
+
+**Best practices:**
+1. **Audit plugin code** before installing
+2. **Use project-local plugins** (`./plugins/`) for untrusted sources
+3. **Prefer built-in transforms** when possible
 
 ### Regex Flags
 
@@ -1607,16 +1668,48 @@ cargo build --release --features pcre
 
 ### ReDoS Protection
 
-rexpipe includes protection against Regular Expression Denial of Service (ReDoS) attacks:
+rexpipe includes comprehensive protection against Regular Expression Denial of Service (ReDoS) attacks:
 
-**Standard mode** uses the Rust `regex` crate which guarantees **O(m × n) linear time** matching. This eliminates catastrophic backtracking vulnerabilities found in traditional regex engines.
+**Standard mode** uses the Rust `regex` crate which guarantees **O(m × n) linear time** matching. This eliminates catastrophic backtracking vulnerabilities found in traditional regex engines. You can safely use untrusted patterns in standard mode.
 
 **Built-in safeguards:**
 - **Size limits**: Compiled regex size is limited to 10MB to prevent compilation DoS
 - **DFA size limits**: Deterministic finite automaton size is capped to prevent memory exhaustion
-- **Pattern analysis**: PCRE mode patterns are analyzed for common ReDoS indicators (nested quantifiers, excessive alternations)
+- **Pattern analysis**: PCRE mode patterns are analyzed for common ReDoS indicators
+- **Complexity scoring**: Patterns are scored for complexity with warnings for potentially slow patterns
+- **Strict mode** (`--strict`): Reject patterns with detected ReDoS vulnerability indicators
 
-**PCRE mode warning**: Unlike standard mode, PCRE mode uses a backtracking engine and can be vulnerable to ReDoS. Patterns like `(a+)+`, `(a*)*`, or deeply nested quantifiers will trigger warnings. For untrusted input, prefer standard mode.
+**Pattern complexity analysis** detects:
+- Nested quantifiers: `(a+)+`, `(a*)*`, `(a+)*`
+- Overlapping alternations: `(a|ab)+`, `(x.*x)+`
+- Excessive repetition: `{10000}`, deeply nested groups
+- Consecutive greedy quantifiers: `.*.*`, `.+.+`
+
+**PCRE mode warning**: Unlike standard mode, PCRE mode (`-P`) uses a backtracking engine that CAN be vulnerable to ReDoS. The following patterns will trigger warnings:
+
+| Pattern | Risk | Alternative |
+|---------|------|-------------|
+| `(a+)+` | Exponential backtracking | Use `a+` or `(?>a+)+` (atomic) |
+| `(a*)*` | Exponential backtracking | Use `a*` |
+| `(a\|ab)+` | Overlapping alternatives | Use `(ab?)+` |
+| `.*.*` | Quadratic matching | Use `.*` once, be specific |
+
+**Best practices:**
+1. **Default to standard mode** — it's ReDoS-safe by design
+2. **Use `--strict` with untrusted patterns** — rejects dangerous patterns
+3. **Reserve PCRE mode** for when you specifically need lookahead/lookbehind
+4. **Test patterns against pathological input** before production use
+5. **Use fixed-string mode** (`-F`) when regex isn't needed — fastest and safest
+
+**Example with strict mode:**
+```bash
+# This will be rejected with --strict due to nested quantifiers
+rexpipe --strict -P -p '(a+)+$' < input.txt
+# Error: Pattern may be vulnerable to ReDoS (catastrophic backtracking)
+
+# This is safe and will work
+rexpipe --strict -p 'a+$' < input.txt
+```
 
 ### Named Capture Groups
 

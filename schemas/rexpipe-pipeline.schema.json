@@ -1,0 +1,355 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/jkindrix/rexpipe/schemas/rexpipe-pipeline.schema.json",
+  "title": "rexpipe Pipeline Configuration",
+  "description": "Schema for rexpipe TOML pipeline configuration files. Provides validation and autocomplete in supported editors.",
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "Pipeline name for identification"
+    },
+    "description": {
+      "type": "string",
+      "description": "Human-readable description of what this pipeline does"
+    },
+    "version": {
+      "type": "string",
+      "description": "Pipeline version (semver recommended)",
+      "pattern": "^\\d+\\.\\d+\\.\\d+(-[a-zA-Z0-9.]+)?$"
+    },
+    "extends": {
+      "type": "string",
+      "description": "Path to base pipeline configuration to inherit from"
+    },
+    "patterns_include": {
+      "type": "array",
+      "description": "Pattern library files to include (supports ${pattern.name} references)",
+      "items": {
+        "type": "string"
+      }
+    },
+    "settings": {
+      "$ref": "#/definitions/settings"
+    },
+    "step": {
+      "type": "array",
+      "description": "Pipeline processing steps executed in order",
+      "items": {
+        "$ref": "#/definitions/step"
+      }
+    },
+    "bidirectional": {
+      "$ref": "#/definitions/bidirectional"
+    },
+    "checkpoint": {
+      "$ref": "#/definitions/checkpoint"
+    },
+    "cross_file": {
+      "$ref": "#/definitions/cross_file"
+    },
+    "test": {
+      "type": "array",
+      "description": "Inline test cases for pipeline validation",
+      "items": {
+        "$ref": "#/definitions/test_case"
+      }
+    },
+    "finalize": {
+      "$ref": "#/definitions/finalize"
+    }
+  },
+  "definitions": {
+    "settings": {
+      "type": "object",
+      "description": "Pipeline-wide settings",
+      "properties": {
+        "pcre_mode": {
+          "type": "boolean",
+          "default": false,
+          "description": "Use PCRE-compatible regex engine (fancy-regex) for lookahead/lookbehind support"
+        },
+        "fixed_strings": {
+          "type": "boolean",
+          "default": false,
+          "description": "Treat patterns as literal strings (no regex interpretation)"
+        },
+        "context_before": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0,
+          "description": "Number of lines to show before matches (like grep -B)"
+        },
+        "context_after": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0,
+          "description": "Number of lines to show after matches (like grep -A)"
+        },
+        "timeout_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0,
+          "description": "Timeout in milliseconds for regex matching per line (0 = no timeout)"
+        },
+        "allow_shell": {
+          "type": "boolean",
+          "default": false,
+          "description": "Allow shell command execution in transforms (security sensitive)"
+        },
+        "strict_mode": {
+          "type": "boolean",
+          "default": false,
+          "description": "Reject patterns with potential ReDoS vulnerabilities"
+        },
+        "block_mode": {
+          "type": "boolean",
+          "default": false,
+          "description": "Operate on multi-line blocks rather than individual lines"
+        },
+        "preserve_line_endings": {
+          "type": "boolean",
+          "default": false,
+          "description": "Preserve CRLF line endings in in-place editing mode"
+        },
+        "max_line_length": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0,
+          "description": "Maximum line length in bytes (0 = no limit)"
+        },
+        "max_line_action": {
+          "type": "string",
+          "enum": ["skip", "error", "truncate"],
+          "default": "skip",
+          "description": "Action when line exceeds max_line_length"
+        },
+        "shell_timeout_secs": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 30,
+          "description": "Timeout in seconds for shell transform commands"
+        },
+        "regex_size_limit": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 10485760,
+          "description": "Maximum regex pattern size in bytes (default 10MB)"
+        }
+      }
+    },
+    "step": {
+      "type": "object",
+      "description": "A processing step in the pipeline",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["substitute", "filter", "extract", "validate", "transform", "block"],
+          "description": "Step type determining the operation performed"
+        },
+        "pattern": {
+          "type": "string",
+          "description": "Regex pattern to match (supports ${library.pattern} references)"
+        },
+        "replacement": {
+          "type": "string",
+          "description": "Replacement string (for substitute steps, supports $1 capture groups)"
+        },
+        "action": {
+          "type": "string",
+          "enum": ["keep_line", "drop_line", "keep_match", "drop_match", "deduplicate_by_prefix", "keep_block", "drop_block", "collect_block", "deduplicate"],
+          "description": "Action for filter/block steps"
+        },
+        "transform": {
+          "type": "string",
+          "enum": [
+            "uppercase", "lowercase", "title_case",
+            "trim", "reverse", "remove_whitespace", "normalize_whitespace",
+            "base64_encode", "base64_decode", "url_encode", "url_decode",
+            "char_count", "word_count", "mask_deterministic"
+          ],
+          "description": "Built-in transformation to apply"
+        },
+        "flags": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["global", "case_insensitive", "multiline", "dotall", "unicode", "extended"]
+          },
+          "description": "Regex flags for this step"
+        },
+        "description": {
+          "type": "string",
+          "description": "Human-readable description of what this step does"
+        },
+        "enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Whether this step is active"
+        },
+        "start_pattern": {
+          "type": "string",
+          "description": "Start pattern for block steps"
+        },
+        "end_pattern": {
+          "type": "string",
+          "description": "End pattern for block steps"
+        },
+        "on_mismatch": {
+          "type": "string",
+          "enum": ["error", "warn", "skip"],
+          "default": "error",
+          "description": "Action when validation fails"
+        },
+        "language": {
+          "type": "string",
+          "enum": ["rust", "python", "javascript", "typescript", "go", "json", "yaml"],
+          "description": "Language for syntax-aware matching (requires tree-sitter feature)"
+        },
+        "scope": {
+          "type": "string",
+          "enum": ["code", "comment", "string", "function", "class", "type", "import"],
+          "description": "Syntax scope to limit matching to"
+        },
+        "exclude_scopes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Syntax scopes to exclude from matching"
+        }
+      },
+      "required": ["type"]
+    },
+    "bidirectional": {
+      "type": "object",
+      "description": "Configuration for reversible transformations",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false
+        },
+        "mapping_file": {
+          "type": "string",
+          "description": "Path to store/read mapping file"
+        }
+      }
+    },
+    "checkpoint": {
+      "type": "object",
+      "description": "Configuration for incremental processing",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false
+        },
+        "file": {
+          "type": "string",
+          "description": "Path to checkpoint file"
+        }
+      }
+    },
+    "cross_file": {
+      "type": "object",
+      "description": "Configuration for cross-file consistency checking",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false
+        },
+        "relationships": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "source_pattern": {"type": "string"},
+              "target_pattern": {"type": "string"},
+              "action": {"type": "string"}
+            }
+          }
+        }
+      }
+    },
+    "test_case": {
+      "type": "object",
+      "description": "Inline test case for pipeline validation",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Test case name"
+        },
+        "input": {
+          "type": "string",
+          "description": "Input text to process"
+        },
+        "expected": {
+          "type": "string",
+          "description": "Expected output"
+        }
+      },
+      "required": ["input", "expected"]
+    },
+    "finalize": {
+      "type": "object",
+      "description": "Post-processing aggregation and summary",
+      "properties": {
+        "template": {
+          "type": "string",
+          "description": "Output template with ${count:NAME} references"
+        },
+        "shell": {
+          "type": "string",
+          "description": "Shell command to run after processing"
+        },
+        "counters": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/counter"
+          }
+        },
+        "suppress_output": {
+          "type": "boolean",
+          "default": false,
+          "description": "Only show finalize output, not processed lines"
+        },
+        "output_format": {
+          "type": "string",
+          "enum": ["text", "json"],
+          "default": "text"
+        }
+      }
+    },
+    "counter": {
+      "type": "object",
+      "description": "Counter for aggregation",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Counter name (used in template as ${count:NAME})"
+        },
+        "pattern": {
+          "type": "string",
+          "description": "Pattern to match for incrementing counter"
+        },
+        "deduplicate": {
+          "type": "boolean",
+          "default": false,
+          "description": "Only count unique matches"
+        },
+        "description": {
+          "type": "string"
+        },
+        "collect_values": {
+          "type": "boolean",
+          "default": false,
+          "description": "Store matched values (available in JSON output)"
+        },
+        "max_collected_values": {
+          "type": "integer",
+          "default": 1000
+        }
+      },
+      "required": ["name", "pattern"]
+    }
+  }
+}

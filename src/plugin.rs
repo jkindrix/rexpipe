@@ -716,27 +716,45 @@ impl PluginRegistry {
         use std::io::Write;
         use std::time::Duration;
 
+        // SECURITY: Platform-specific shell selection
+        // Why sh -c on Unix: Provides consistent POSIX shell behavior
+        // Why cmd /C on Windows: Native command processor with similar semantics
         #[cfg(target_os = "windows")]
         let shell_cmd = ("cmd", "/C");
         #[cfg(not(target_os = "windows"))]
         let shell_cmd = ("sh", "-c");
 
+        // SECURITY: Why we use stdin for input instead of command interpolation:
+        //
+        // UNSAFE: format!("echo '{}'", user_input)
+        //   - If user_input contains quotes or special chars, shell injection occurs
+        //   - Example: user_input = "'; rm -rf /" would execute destructive command
+        //
+        // SAFE: Pass via stdin + child.stdin.write_all()
+        //   - Input never touches shell parser
+        //   - No injection possible regardless of input content
+        //   - This is why matched regex text is safe to pass through transforms
+        //
+        // The command itself comes from the configuration file which is trusted,
+        // but the INPUT data (matched text) could be anything - even malicious.
         let mut child = Command::new(shell_cmd.0)
             .arg(shell_cmd.1)
             .arg(command)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
+            .stdin(Stdio::piped())    // Capture stdin for safe input passing
+            .stdout(Stdio::piped())   // Capture output for return value
+            .stderr(Stdio::piped())   // Capture errors for diagnostics
             .spawn()
             .map_err(|e| format!("Failed to spawn shell command: {}", e))?;
 
-        // Write input to stdin (safe - no shell interpolation)
+        // Write input to stdin - this is the SAFE way to pass data to shell commands
+        // The shell never interprets this data; it goes directly to the command's stdin
         if let Some(ref mut stdin) = child.stdin {
             stdin
                 .write_all(input.as_bytes())
                 .map_err(|e| format!("Failed to write to stdin: {}", e))?;
         }
-        // Close stdin so the child process knows input is complete
+        // Close stdin to signal EOF - command can now process and exit
+        // Why explicit drop: Ensures the pipe is closed even if we return early
         drop(child.stdin.take());
 
         // Wait with timeout to prevent hanging commands (0 = no timeout)
