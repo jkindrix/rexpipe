@@ -2435,8 +2435,10 @@ impl StreamProcessor {
         let needs_var_expansion = replacement.contains("${seq}") || replacement.contains("${count}");
 
         // Check if bidirectional recording is needed
-        let record_mappings = self.bidirectional_manager.is_some()
-            && self.bidirectional_manager.as_ref().map_or(false, |m| m.is_enabled());
+        let record_mappings = self
+            .bidirectional_manager
+            .as_ref()
+            .is_some_and(|m| m.is_enabled());
 
         if !needs_var_expansion && !record_mappings {
             // Fast path: no variable expansion or mapping needed
@@ -2462,6 +2464,7 @@ impl StreamProcessor {
     }
 
     /// Applies substitution with variable expansion and optional bidirectional mapping.
+    #[allow(clippy::too_many_arguments)]
     fn apply_substitution_with_vars(
         &mut self,
         pattern: &CompiledPattern,
@@ -2791,6 +2794,21 @@ impl StreamProcessor {
 
     pub fn get_config(&self) -> &PipelineConfig {
         &self.config
+    }
+
+    /// Get bidirectional mapping statistics if bidirectional mode is enabled.
+    pub fn get_bidirectional_stats(&self) -> Option<crate::bidirectional::MappingStats> {
+        self.bidirectional_manager
+            .as_ref()
+            .map(|m| m.mappings().stats())
+    }
+
+    /// Save bidirectional mappings if modified.
+    pub fn save_bidirectional_mappings(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        if let Some(ref mut manager) = self.bidirectional_manager {
+            manager.save_if_modified()?;
+        }
+        Ok(())
     }
 
     pub fn performance_report(&self) -> String {

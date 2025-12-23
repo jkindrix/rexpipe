@@ -34,6 +34,35 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
+/// Unescape regex metacharacters to get the literal string.
+///
+/// This reverses the effect of `regex::escape()` by removing the backslashes
+/// before regex metacharacters.
+fn unescape_regex(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            // Check if next char is a regex metacharacter that was escaped
+            if let Some(&next) = chars.peek() {
+                if matches!(
+                    next,
+                    '\\' | '.' | '+' | '*' | '?' | '(' | ')' | '[' | ']' | '{' | '}' | '|' | '^'
+                        | '$'
+                ) {
+                    // Skip the backslash, use the metacharacter literally
+                    result.push(chars.next().unwrap());
+                    continue;
+                }
+            }
+        }
+        result.push(c);
+    }
+
+    result
+}
+
 /// Errors that can occur during bidirectional operations.
 #[derive(Error, Debug)]
 pub enum BidirectionalError {
@@ -266,6 +295,45 @@ impl MappingStore {
     /// Check if the store is empty.
     pub fn is_empty(&self) -> bool {
         self.forward.is_empty()
+    }
+
+    /// Get statistics about the mapping store.
+    pub fn stats(&self) -> MappingStats {
+        let unique_steps: std::collections::HashSet<usize> =
+            self.by_step.keys().copied().collect();
+
+        MappingStats {
+            total_mappings: self.forward.len(),
+            steps_with_mappings: unique_steps.len(),
+            unique_originals: self.forward.len(),
+            unique_transformed: self.reverse.len(),
+        }
+    }
+}
+
+/// Statistics about bidirectional mappings.
+#[derive(Debug, Clone)]
+pub struct MappingStats {
+    /// Total number of recorded mappings
+    pub total_mappings: usize,
+    /// Number of pipeline steps that recorded mappings
+    pub steps_with_mappings: usize,
+    /// Number of unique original values
+    pub unique_originals: usize,
+    /// Number of unique transformed values
+    pub unique_transformed: usize,
+}
+
+impl std::fmt::Display for MappingStats {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Mappings: {} total ({} original → {} transformed, {} steps)",
+            self.total_mappings,
+            self.unique_originals,
+            self.unique_transformed,
+            self.steps_with_mappings
+        )
     }
 }
 
@@ -541,12 +609,15 @@ pub fn generate_reverse_pipeline(
             StepType::Substitute => {
                 // Swap pattern and replacement
                 // The replacement becomes the new pattern, so we need to escape any
-                // regex metacharacters in it to match the literal replacement text
+                // regex metacharacters in it to match the literal replacement text.
+                // The old pattern may have escaped metacharacters, so we unescape
+                // them when using it as a replacement string.
                 if let Some(ref replacement) = step.replacement {
                     let old_pattern = step.pattern.clone();
                     // Escape regex metacharacters in the replacement to use as literal pattern
                     step.pattern = regex::escape(replacement);
-                    step.replacement = Some(old_pattern);
+                    // Unescape the old pattern so it becomes a literal replacement string
+                    step.replacement = Some(unescape_regex(&old_pattern));
                 }
             }
             StepType::Transform => {
