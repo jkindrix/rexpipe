@@ -1368,11 +1368,11 @@ fn main() {
     let verbose_count = matches.get_count("verbose");
     let quiet = matches.get_flag("quiet");
     let log_level = match (verbose_count, quiet) {
-        (0, true) => "error",  // -q alone: errors only
-        (0, false) => "warn",  // default: warnings
-        (1, _) => "info",      // -v (overrides -q)
-        (2, _) => "debug",     // -vv
-        _ => "trace",          // -vvv+
+        (0, true) => "error", // -q alone: errors only
+        (0, false) => "warn", // default: warnings
+        (1, _) => "info",     // -v (overrides -q)
+        (2, _) => "debug",    // -vv
+        _ => "trace",         // -vvv+
     };
 
     env_logger::Builder::from_env(

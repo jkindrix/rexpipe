@@ -103,7 +103,6 @@ pub struct PipelineConfig {
     // These provide a more concise syntax: [[filter]] instead of [[step]] + type = "filter"
     // Steps from these sections are merged into `step` with appropriate step_type set.
     // Order: filter, substitute, extract, validate, transform, block (appended after [[step]])
-
     /// Shorthand for filter steps: `[[filter]]` instead of `[[step]]` + `type = "filter"`
     #[serde(default)]
     pub filter: Vec<PipelineStep>,
@@ -1032,12 +1031,36 @@ impl PipelineConfig {
         }
 
         // Append shorthand sections in defined order
-        append_with_type(&mut self.step, std::mem::take(&mut self.filter), StepType::Filter);
-        append_with_type(&mut self.step, std::mem::take(&mut self.substitute), StepType::Substitute);
-        append_with_type(&mut self.step, std::mem::take(&mut self.extract), StepType::Extract);
-        append_with_type(&mut self.step, std::mem::take(&mut self.validate), StepType::Validate);
-        append_with_type(&mut self.step, std::mem::take(&mut self.transform), StepType::Transform);
-        append_with_type(&mut self.step, std::mem::take(&mut self.block), StepType::Block);
+        append_with_type(
+            &mut self.step,
+            std::mem::take(&mut self.filter),
+            StepType::Filter,
+        );
+        append_with_type(
+            &mut self.step,
+            std::mem::take(&mut self.substitute),
+            StepType::Substitute,
+        );
+        append_with_type(
+            &mut self.step,
+            std::mem::take(&mut self.extract),
+            StepType::Extract,
+        );
+        append_with_type(
+            &mut self.step,
+            std::mem::take(&mut self.validate),
+            StepType::Validate,
+        );
+        append_with_type(
+            &mut self.step,
+            std::mem::take(&mut self.transform),
+            StepType::Transform,
+        );
+        append_with_type(
+            &mut self.step,
+            std::mem::take(&mut self.block),
+            StepType::Block,
+        );
 
         self
     }
