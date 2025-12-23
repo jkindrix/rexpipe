@@ -1114,7 +1114,11 @@ fn main() {
 
         // Extract only from code scope (not strings or comments)
         let code_extracts = analyzer.scoped_extract(source, &pattern, &ScopeFilter::Code);
-        assert_eq!(code_extracts.len(), 1, "Should extract 'foo' only from code");
+        assert_eq!(
+            code_extracts.len(),
+            1,
+            "Should extract 'foo' only from code"
+        );
         assert_eq!(code_extracts[0], "foo");
 
         // Extract only from strings scope
@@ -1150,7 +1154,10 @@ fn main() {
             analyzer.scoped_transform(source, &pattern, |s| s.to_uppercase(), &ScopeFilter::Code);
 
         // Variable name should be uppercased
-        assert!(result.contains("HELLO"), "Variable name should be uppercased");
+        assert!(
+            result.contains("HELLO"),
+            "Variable name should be uppercased"
+        );
         // String content should remain unchanged
         assert!(
             result.contains("\"hello\""),
