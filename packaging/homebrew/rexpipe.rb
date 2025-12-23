@@ -7,13 +7,13 @@ class Rexpipe < Formula
   on_macos do
     on_arm do
       url "https://github.com/jkindrix/rexpipe/releases/download/v#{version}/rexpipe-darwin-aarch64.tar.gz"
-      # sha256 will be filled in during release
+      # SHA256 checksums are updated automatically by the release workflow.
+      # To update manually, run: shasum -a 256 <archive>.tar.gz
       sha256 "PLACEHOLDER_SHA256_DARWIN_AARCH64"
     end
 
     on_intel do
       url "https://github.com/jkindrix/rexpipe/releases/download/v#{version}/rexpipe-darwin-x86_64.tar.gz"
-      # sha256 will be filled in during release
       sha256 "PLACEHOLDER_SHA256_DARWIN_X86_64"
     end
   end
@@ -36,21 +36,29 @@ class Rexpipe < Formula
     # Generate shell completions
     generate_completions_from_executable(bin/"rexpipe", "--completions", shells: [:bash, :zsh, :fish])
 
-    # Generate man page
-    system bin/"rexpipe", "--man", ">", man1/"rexpipe.1"
+    # Generate and install man page
+    # rexpipe --man outputs man page content to stdout
+    (man1/"rexpipe.1").write Utils.safe_popen_read(bin/"rexpipe", "--man")
   end
 
   test do
-    # Test basic functionality
-    assert_match "2.0.0", shell_output("#{bin}/rexpipe --version")
+    # Test basic functionality - version output
+    assert_match(/rexpipe 2\.\d+\.\d+/, shell_output("#{bin}/rexpipe --version"))
 
-    # Test substitution
-    output = pipe_output("#{bin}/rexpipe -e 's/foo/bar/'", "hello foo world")
+    # Test substitution: -p for pattern, -r for replacement
+    output = pipe_output("#{bin}/rexpipe -p 'foo' -r 'bar' --text", "hello foo world\n")
     assert_match "hello bar world", output
 
-    # Test filter
-    output = pipe_output("#{bin}/rexpipe -e 'filter/DEBUG/drop'", "INFO: hello\nDEBUG: debug\nINFO: world")
-    assert_no_match(/DEBUG/, output)
-    assert_match "hello", output
+    # Test using a config file for filter
+    (testpath/"filter.toml").write <<~EOS
+      [[step]]
+      type = "filter"
+      pattern = "DEBUG"
+      action = "drop_line"
+    EOS
+
+    output = pipe_output("#{bin}/rexpipe -c #{testpath}/filter.toml --text", "INFO: hello\nDEBUG: debug\nINFO: world\n")
+    refute_match(/DEBUG/, output)
+    assert_match "INFO: hello", output
   end
 end
