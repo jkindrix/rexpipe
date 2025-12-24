@@ -94,6 +94,21 @@ pub struct PipelineConfig {
     /// Pattern libraries to include (supports ${pattern_name} references in steps)
     #[serde(default)]
     pub patterns_include: Vec<String>,
+    /// Inline pattern aliases for this config.
+    /// Define reusable patterns that can be referenced as ${alias_name} in steps.
+    ///
+    /// # Example
+    /// ```toml
+    /// [aliases]
+    /// noise = "(^\\[OK\\]|^\\[INFO\\]|^\\s*Finished)"
+    /// concerns = "(warning|error|fail)"
+    ///
+    /// [[filter]]
+    /// pattern = "${noise}"
+    /// action = "drop_line"
+    /// ```
+    #[serde(default)]
+    pub aliases: std::collections::HashMap<String, String>,
     #[serde(default)]
     pub settings: PipelineSettings,
     #[serde(default)]
@@ -215,6 +230,17 @@ pub struct PipelineSettings {
     /// Default: 10MB (10 * 1024 * 1024 bytes).
     #[serde(default = "default_regex_size_limit")]
     pub regex_size_limit: usize,
+    /// Invert match behavior for filter steps (like grep -v).
+    ///
+    /// When true, filter actions are inverted:
+    /// - `keep_line` becomes `drop_line`
+    /// - `drop_line` becomes `keep_line`
+    /// - `keep_match` becomes `drop_match`
+    /// - `drop_match` becomes `keep_match`
+    ///
+    /// Default: false
+    #[serde(default)]
+    pub invert_match: bool,
 }
 
 impl Default for PipelineSettings {
@@ -233,6 +259,7 @@ impl Default for PipelineSettings {
             max_line_action: MaxLineAction::default(),
             shell_timeout_secs: default_shell_timeout(),
             regex_size_limit: default_regex_size_limit(),
+            invert_match: false,
         }
     }
 }
@@ -306,6 +333,11 @@ impl PipelineSettings {
                 self.regex_size_limit
             } else {
                 base.regex_size_limit
+            },
+            invert_match: if self.invert_match != default.invert_match {
+                self.invert_match
+            } else {
+                base.invert_match
             },
         }
     }
@@ -460,6 +492,44 @@ pub enum MaxLineAction {
     Truncate,
 }
 
+/// A pattern or list of patterns for shorthand filter syntax.
+///
+/// Supports both single pattern strings and arrays of patterns:
+/// - `drop = "pattern"` → Single pattern
+/// - `drop = ["p1", "p2", "p3"]` → Multiple patterns (combined with |)
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum PatternOrPatterns {
+    /// Single pattern string
+    Single(String),
+    /// Multiple patterns (will be combined with | to form alternation)
+    Multiple(Vec<String>),
+}
+
+impl PatternOrPatterns {
+    /// Convert to a single pattern string.
+    /// Multiple patterns are combined with | (alternation) and each is wrapped in (?:...) for safety.
+    pub fn to_pattern(&self) -> String {
+        match self {
+            PatternOrPatterns::Single(p) => p.clone(),
+            PatternOrPatterns::Multiple(patterns) => {
+                if patterns.is_empty() {
+                    String::new()
+                } else if patterns.len() == 1 {
+                    patterns[0].clone()
+                } else {
+                    // Wrap each pattern in non-capturing group and join with |
+                    patterns
+                        .iter()
+                        .map(|p| format!("(?:{})", p))
+                        .collect::<Vec<_>>()
+                        .join("|")
+                }
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PipelineStep {
     #[serde(rename = "type", default)]
@@ -467,6 +537,16 @@ pub struct PipelineStep {
     /// Pattern to match (for non-block steps: substitute, filter, extract, validate, transform)
     #[serde(default)]
     pub pattern: String,
+    /// Negative pattern - lines matching this pattern are excluded even if they match `pattern`.
+    /// Example: Keep ERROR lines but not if they contain "expected":
+    /// ```toml
+    /// [[filter]]
+    /// pattern = "ERROR"
+    /// not_pattern = "expected"
+    /// action = "keep_line"
+    /// ```
+    #[serde(default)]
+    pub not_pattern: Option<String>,
     #[serde(default)]
     pub replacement: Option<String>,
     /// Unified action field - works for Filter, Block, and other step types.
@@ -474,11 +554,30 @@ pub struct PipelineStep {
     /// For Block steps: "keep_block", "drop_block", "collect_block", "deduplicate"
     #[serde(default)]
     pub action: Option<StepAction>,
+
+    // === Shorthand action syntax ===
+    // These provide a more concise way to define filter steps:
+    // `drop = "pattern"` instead of `pattern = "..." action = "drop_line"`
+    // `keep = "pattern"` instead of `pattern = "..." action = "keep_line"`
+    // Also supports arrays: `drop = ["pattern1", "pattern2"]`
+    /// Shorthand for drop_line filter: `drop = "pattern"` or `drop = ["p1", "p2"]`
+    /// Expands to: pattern = "p1|p2", action = "drop_line"
+    #[serde(default)]
+    pub drop: Option<PatternOrPatterns>,
+
+    /// Shorthand for keep_line filter: `keep = "pattern"` or `keep = ["p1", "p2"]`
+    /// Expands to: pattern = "p1|p2", action = "keep_line"
+    #[serde(default)]
+    pub keep: Option<PatternOrPatterns>,
     /// Transform action for Transform step type
     #[serde(default)]
     pub transform: Option<TransformAction>,
     #[serde(default)]
     pub flags: Option<Vec<RegexFlag>>,
+    /// Human-readable name for this step, used in trace/debug output.
+    /// Example: `name = "drop-ok-lines"` shows in trace as "DROPPED by 'drop-ok-lines'"
+    #[serde(default)]
+    pub name: Option<String>,
     #[serde(default)]
     pub description: Option<String>,
     #[serde(default)]
@@ -922,6 +1021,8 @@ pub enum RegexFlag {
 #[derive(Debug, Clone)]
 pub struct PipelineResult {
     pub lines_processed: u64,
+    pub lines_output: u64,
+    pub lines_dropped: u64,
     pub matches_found: u64,
     pub transformations_applied: u64,
     pub errors: Vec<PipelineError>,
@@ -937,10 +1038,14 @@ pub struct StepResult {
     pub step_type: StepType,
     /// The regex pattern used by this step
     pub pattern: String,
+    /// Human-readable name for this step (used in trace/stats output)
+    pub name: Option<String>,
     /// Number of matches found by this step
     pub matches: u64,
     /// Number of transformations applied by this step
     pub transformations: u64,
+    /// Number of lines dropped by this step (filter steps only)
+    pub lines_dropped: u64,
     /// Time spent processing this step in milliseconds
     pub processing_time_ms: u64,
     /// Any errors that occurred during this step
@@ -1011,9 +1116,45 @@ impl PipelineConfig {
     /// Normalize shorthand sections ([[filter]], [[substitute]], etc.) into the main step vec.
     /// This enables concise syntax like `[[filter]]` instead of `[[step]]` + `type = "filter"`.
     ///
+    /// Also normalizes shorthand action syntax:
+    /// - `drop = "pattern"` → `pattern = "pattern", action = "drop_line"`
+    /// - `keep = "pattern"` → `pattern = "pattern", action = "keep_line"`
+    /// - `drop = ["p1", "p2"]` → `pattern = "(?:p1)|(?:p2)", action = "drop_line"`
+    ///
     /// Order of processing: steps from [[step]] come first, then shorthand sections in order:
     /// filter, substitute, extract, validate, transform, block.
     fn normalize_shorthand_sections(mut self) -> Self {
+        // Helper to normalize drop/keep shorthand on a step
+        fn normalize_step_shorthand(step: &mut PipelineStep) {
+            // Process `drop` shorthand: drop = "pattern" → pattern + action = drop_line
+            if let Some(ref drop_patterns) = step.drop.take() {
+                if step.pattern.is_empty() {
+                    step.pattern = drop_patterns.to_pattern();
+                }
+                if step.action.is_none() {
+                    step.action = Some(StepAction::DropLine);
+                }
+                // Set step type to Filter if not already set
+                if step.step_type == StepType::default() {
+                    step.step_type = StepType::Filter;
+                }
+            }
+
+            // Process `keep` shorthand: keep = "pattern" → pattern + action = keep_line
+            if let Some(ref keep_patterns) = step.keep.take() {
+                if step.pattern.is_empty() {
+                    step.pattern = keep_patterns.to_pattern();
+                }
+                if step.action.is_none() {
+                    step.action = Some(StepAction::KeepLine);
+                }
+                // Set step type to Filter if not already set
+                if step.step_type == StepType::default() {
+                    step.step_type = StepType::Filter;
+                }
+            }
+        }
+
         // Helper to set step_type on each step and append to main vec
         fn append_with_type(
             steps: &mut Vec<PipelineStep>,
@@ -1021,6 +1162,8 @@ impl PipelineConfig {
             step_type: StepType,
         ) {
             for step in &mut shorthand {
+                // Normalize drop/keep shorthand first
+                normalize_step_shorthand(step);
                 // Only override step_type if it's the default (Substitute)
                 // This allows explicit type override in shorthand sections if needed
                 if step.step_type == StepType::default() {
@@ -1028,6 +1171,11 @@ impl PipelineConfig {
                 }
             }
             steps.extend(shorthand);
+        }
+
+        // Normalize shorthand on [[step]] entries first
+        for step in &mut self.step {
+            normalize_step_shorthand(step);
         }
 
         // Append shorthand sections in defined order
@@ -1079,6 +1227,10 @@ impl PipelineConfig {
             }
         }
 
+        // Aliases are merged (child overrides base)
+        let mut merged_aliases = base.aliases;
+        merged_aliases.extend(self.aliases);
+
         PipelineConfig {
             // Keep this config's metadata (name, description, version)
             name: self.name.or(base.name),
@@ -1086,6 +1238,7 @@ impl PipelineConfig {
             version: self.version.or(base.version),
             extends: None, // Clear extends since we've processed it
             patterns_include: merged_patterns,
+            aliases: merged_aliases,
             // Merge settings (this config's settings override base)
             settings: self.settings.merge_with_base(base.settings),
             step: merged_steps,
@@ -1159,14 +1312,18 @@ impl PipelineConfig {
         let step = PipelineStep {
             step_type,
             pattern: pattern.to_string(),
+            not_pattern: None,
             replacement: replacement.map(|s| s.to_string()),
             action: if replacement.is_none() {
                 Some(StepAction::KeepMatch)
             } else {
                 None
             },
+            drop: None,
+            keep: None,
             transform: None,
             flags: Some(vec![RegexFlag::Global]),
+            name: None,
             description: None,
             enabled: Some(true),
             start_pattern: None,
@@ -1290,12 +1447,14 @@ impl PipelineConfig {
         }
 
         // Check for pattern references without loaded libraries
+        // (Builtin patterns like ${builtin:email} and aliases are always available)
         if self.patterns_include.is_empty() {
             for (i, step) in self.step.iter().enumerate() {
-                if crate::library::has_pattern_references(&step.pattern) {
+                if crate::library::has_non_alias_pattern_references(&step.pattern, &self.aliases) {
                     errors.push(format!(
                         "Step {}: Pattern uses reference syntax (${{...}}) but no pattern libraries are included. \
-                         Add 'patterns_include' to your config or use --library",
+                         Add 'patterns_include' to your config, define in [aliases], or use --library. \
+                         Note: ${{builtin:*}} patterns and [aliases] entries are always available.",
                         i + 1
                     ));
                 }
@@ -1432,13 +1591,14 @@ impl PipelineConfig {
             }
 
             // Check for pattern references without libraries
+            // (Builtin patterns like ${builtin:email} and aliases are always available)
             if self.patterns_include.is_empty()
-                && crate::library::has_pattern_references(&step.pattern)
+                && crate::library::has_non_alias_pattern_references(&step.pattern, &self.aliases)
             {
                 errors.push(crate::error::ValidationError::step_error(
                     step_num,
                     "Pattern uses reference syntax (${...}) but no libraries are loaded",
-                    "Add 'patterns_include' to your config or use --library flag",
+                    "Add 'patterns_include' to your config, define in [aliases], or use --library flag. Note: ${builtin:*} patterns and [aliases] entries are always available.",
                 ));
             }
         }
@@ -1583,9 +1743,66 @@ impl PipelineConfig {
         }
     }
 
+    /// Resolve pattern aliases defined in the [aliases] section.
+    ///
+    /// This method modifies the config in place, replacing alias references
+    /// (like `${alias_name}`) with their actual patterns from the aliases map.
+    /// Also resolves `${builtin:*}` patterns.
+    ///
+    /// Call this before `resolve_pattern_references` if using both aliases and libraries.
+    pub fn resolve_aliases(&mut self) -> Result<(), Vec<String>> {
+        if self.aliases.is_empty() {
+            return Ok(());
+        }
+
+        let mut all_errors = Vec::new();
+
+        for (i, step) in self.step.iter_mut().enumerate() {
+            // Check if pattern contains references
+            if !crate::library::has_pattern_references(&step.pattern) {
+                continue;
+            }
+
+            match crate::library::resolve_pattern_aliases(&step.pattern, &self.aliases) {
+                Ok(resolved) => {
+                    step.pattern = resolved;
+                }
+                Err(errors) => {
+                    for error in errors {
+                        all_errors.push(format!("Step {}: {}", i + 1, error));
+                    }
+                }
+            }
+        }
+
+        if all_errors.is_empty() {
+            Ok(())
+        } else {
+            Err(all_errors)
+        }
+    }
+
+    /// Check if any step has unresolved pattern references that require a library.
+    ///
+    /// Returns true if there are references that are not:
+    /// - Builtin patterns (`${builtin:*}`)
+    /// - Defined in the aliases section
+    pub fn has_unresolved_library_references(&self) -> bool {
+        self.step.iter().any(|step| {
+            crate::library::has_non_alias_pattern_references(&step.pattern, &self.aliases)
+        })
+    }
+
     /// Check if this config uses pattern libraries
     pub fn uses_pattern_libraries(&self) -> bool {
         !self.patterns_include.is_empty()
+    }
+
+    /// Check if any step uses pattern references (library or builtin)
+    pub fn has_any_pattern_references(&self) -> bool {
+        self.step
+            .iter()
+            .any(|step| crate::library::has_pattern_references(&step.pattern))
     }
 }
 
@@ -1599,6 +1816,8 @@ impl PipelineResult {
     pub fn new() -> Self {
         Self {
             lines_processed: 0,
+            lines_output: 0,
+            lines_dropped: 0,
             matches_found: 0,
             transformations_applied: 0,
             errors: Vec::new(),
@@ -1609,7 +1828,13 @@ impl PipelineResult {
     pub fn add_step_result(&mut self, result: StepResult) {
         self.matches_found += result.matches;
         self.transformations_applied += result.transformations;
+        self.lines_dropped += result.lines_dropped;
         self.step_results.push(result);
+    }
+
+    /// Increment lines output counter
+    pub fn add_output_line(&mut self) {
+        self.lines_output += 1;
     }
 
     /// Add an error to the pipeline result.
@@ -1647,16 +1872,98 @@ impl PipelineResult {
             self.errors.len()
         )
     }
+
+    /// Generate a statistics summary suitable for --stats output
+    pub fn stats_summary(&self) -> String {
+        use std::collections::HashMap;
+
+        let reduction_pct = if self.lines_processed > 0 {
+            ((self.lines_processed - self.lines_output) as f64 / self.lines_processed as f64)
+                * 100.0
+        } else {
+            0.0
+        };
+
+        let mut summary = format!(
+            "Lines: {} input → {} output ({:.1}% reduction)\n",
+            self.lines_processed, self.lines_output, reduction_pct
+        );
+
+        // Consolidate per-step stats (multiple StepResults may exist for same step)
+        // Stores (dropped_count, pattern, name)
+        let mut step_drops: HashMap<usize, (u64, String, Option<String>)> = HashMap::new();
+        for result in &self.step_results {
+            if result.lines_dropped > 0 {
+                step_drops
+                    .entry(result.step_index)
+                    .and_modify(|(count, _, _)| *count += result.lines_dropped)
+                    .or_insert((
+                        result.lines_dropped,
+                        result.pattern.clone(),
+                        result.name.clone(),
+                    ));
+            }
+        }
+
+        // Sort by step index and output
+        let mut sorted_steps: Vec<_> = step_drops.into_iter().collect();
+        sorted_steps.sort_by_key(|(idx, _)| *idx);
+
+        for (step_idx, (dropped, pattern, name)) in sorted_steps {
+            let step_id = match name {
+                Some(ref n) => format!("'{}' (step {})", n, step_idx + 1),
+                None => format!("Step {}", step_idx + 1),
+            };
+            summary.push_str(&format!(
+                "  {}: dropped {} lines (pattern: {})\n",
+                step_id,
+                dropped,
+                truncate_pattern(&pattern, 40)
+            ));
+        }
+
+        // Show matches and transformations if any
+        if self.matches_found > 0 {
+            summary.push_str(&format!("Matches: {}\n", self.matches_found));
+        }
+        if self.transformations_applied > 0 {
+            summary.push_str(&format!(
+                "Transformations: {}\n",
+                self.transformations_applied
+            ));
+        }
+        if !self.errors.is_empty() {
+            summary.push_str(&format!("Errors: {}\n", self.errors.len()));
+        }
+
+        summary
+    }
+}
+
+/// Truncate a pattern string for display
+fn truncate_pattern(pattern: &str, max_len: usize) -> String {
+    if pattern.len() <= max_len {
+        pattern.to_string()
+    } else {
+        format!("{}...", &pattern[..max_len - 3])
+    }
 }
 
 impl StepResult {
-    pub fn new(step_index: usize, step_type: StepType, pattern: String) -> Self {
+    pub fn new(
+        step_index: usize,
+        step_type: StepType,
+        pattern: String,
+        name: Option<String>,
+    ) -> Self {
         Self {
             step_index,
             step_type,
             pattern,
+            name,
             matches: 0,
             transformations: 0,
+            lines_dropped: 0,
             processing_time_ms: 0,
             errors: Vec::new(),
         }
@@ -1668,6 +1975,11 @@ impl StepResult {
 
     pub fn add_transformation(&mut self) {
         self.transformations += 1;
+    }
+
+    /// Record that a line was dropped by this step
+    pub fn add_dropped(&mut self) {
+        self.lines_dropped += 1;
     }
 
     /// Add an error message to this step's result.
@@ -1791,8 +2103,10 @@ mod tests {
             step_index: 0,
             step_type: StepType::Substitute,
             pattern: "test".to_string(),
+            name: None,
             matches: 5,
             transformations: 3,
+            lines_dropped: 0,
             processing_time_ms: 100,
             errors: Vec::new(),
         };
@@ -2199,5 +2513,186 @@ mod tests {
         assert_eq!(config.step[3].step_type, StepType::Validate);
         assert_eq!(config.step[4].step_type, StepType::Transform);
         assert_eq!(config.step[5].step_type, StepType::Block);
+    }
+
+    #[test]
+    fn test_shorthand_drop_single_pattern() {
+        let toml = r#"
+            [[filter]]
+            drop = "^\\[OK\\]"
+        "#;
+
+        let config: PipelineConfig = toml::from_str(toml).unwrap();
+        let config = config.normalize_shorthand_sections();
+
+        assert_eq!(config.step.len(), 1);
+        assert_eq!(config.step[0].step_type, StepType::Filter);
+        assert_eq!(config.step[0].pattern, r"^\[OK\]");
+        assert_eq!(config.step[0].action, Some(StepAction::DropLine));
+    }
+
+    #[test]
+    fn test_shorthand_keep_single_pattern() {
+        let toml = r#"
+            [[filter]]
+            keep = "error|warning"
+        "#;
+
+        let config: PipelineConfig = toml::from_str(toml).unwrap();
+        let config = config.normalize_shorthand_sections();
+
+        assert_eq!(config.step.len(), 1);
+        assert_eq!(config.step[0].step_type, StepType::Filter);
+        assert_eq!(config.step[0].pattern, "error|warning");
+        assert_eq!(config.step[0].action, Some(StepAction::KeepLine));
+    }
+
+    #[test]
+    fn test_shorthand_drop_multiple_patterns() {
+        let toml = r#"
+            [[filter]]
+            drop = [
+                "^\\[OK\\]",
+                "^\\[INFO\\]",
+                "^\\s*Finished",
+            ]
+        "#;
+
+        let config: PipelineConfig = toml::from_str(toml).unwrap();
+        let config = config.normalize_shorthand_sections();
+
+        assert_eq!(config.step.len(), 1);
+        assert_eq!(config.step[0].step_type, StepType::Filter);
+        // Multiple patterns should be combined with | and wrapped in (?:...)
+        assert_eq!(
+            config.step[0].pattern,
+            r"(?:^\[OK\])|(?:^\[INFO\])|(?:^\s*Finished)"
+        );
+        assert_eq!(config.step[0].action, Some(StepAction::DropLine));
+    }
+
+    #[test]
+    fn test_shorthand_keep_multiple_patterns() {
+        let toml = r#"
+            [[filter]]
+            keep = ["error", "warning", "fatal"]
+        "#;
+
+        let config: PipelineConfig = toml::from_str(toml).unwrap();
+        let config = config.normalize_shorthand_sections();
+
+        assert_eq!(config.step.len(), 1);
+        assert_eq!(config.step[0].step_type, StepType::Filter);
+        assert_eq!(config.step[0].pattern, "(?:error)|(?:warning)|(?:fatal)");
+        assert_eq!(config.step[0].action, Some(StepAction::KeepLine));
+    }
+
+    #[test]
+    fn test_shorthand_in_step_section() {
+        // drop/keep should also work in [[step]] section
+        let toml = r#"
+            [[step]]
+            drop = "^DEBUG"
+        "#;
+
+        let config: PipelineConfig = toml::from_str(toml).unwrap();
+        let config = config.normalize_shorthand_sections();
+
+        assert_eq!(config.step.len(), 1);
+        assert_eq!(config.step[0].step_type, StepType::Filter);
+        assert_eq!(config.step[0].pattern, "^DEBUG");
+        assert_eq!(config.step[0].action, Some(StepAction::DropLine));
+    }
+
+    #[test]
+    fn test_pattern_or_patterns_single() {
+        let p = PatternOrPatterns::Single("test".to_string());
+        assert_eq!(p.to_pattern(), "test");
+    }
+
+    #[test]
+    fn test_pattern_or_patterns_multiple() {
+        let p =
+            PatternOrPatterns::Multiple(vec!["a".to_string(), "b".to_string(), "c".to_string()]);
+        assert_eq!(p.to_pattern(), "(?:a)|(?:b)|(?:c)");
+    }
+
+    #[test]
+    fn test_pattern_or_patterns_single_in_array() {
+        let p = PatternOrPatterns::Multiple(vec!["only_one".to_string()]);
+        assert_eq!(p.to_pattern(), "only_one");
+    }
+
+    #[test]
+    fn test_pattern_or_patterns_empty_array() {
+        let p = PatternOrPatterns::Multiple(vec![]);
+        assert_eq!(p.to_pattern(), "");
+    }
+
+    #[test]
+    fn test_aliases_section() {
+        let toml = r#"
+            [aliases]
+            noise = "(^\\[OK\\]|^\\[INFO\\])"
+            concerns = "(error|warning)"
+
+            [[filter]]
+            pattern = "${noise}"
+            action = "drop_line"
+
+            [[filter]]
+            pattern = "${concerns}"
+            action = "keep_line"
+        "#;
+
+        let config: PipelineConfig = toml::from_str(toml).unwrap();
+        let config = config.normalize_shorthand_sections();
+
+        assert_eq!(config.step.len(), 2);
+        assert_eq!(config.aliases.len(), 2);
+        assert_eq!(
+            config.aliases.get("noise").unwrap(),
+            "(^\\[OK\\]|^\\[INFO\\])"
+        );
+        assert_eq!(config.aliases.get("concerns").unwrap(), "(error|warning)");
+    }
+
+    #[test]
+    fn test_aliases_resolution() {
+        let toml = r#"
+            [aliases]
+            mypattern = "test_value"
+
+            [[filter]]
+            pattern = "${mypattern}"
+            action = "keep_line"
+        "#;
+
+        let mut config: PipelineConfig = toml::from_str(toml).unwrap();
+        config = config.normalize_shorthand_sections();
+
+        // Resolve aliases
+        config.resolve_aliases().unwrap();
+
+        assert_eq!(config.step[0].pattern, "test_value");
+    }
+
+    #[test]
+    fn test_aliases_validation_passes() {
+        let toml = r#"
+            [aliases]
+            mypattern = "test"
+
+            [[filter]]
+            pattern = "${mypattern}"
+            action = "keep_line"
+        "#;
+
+        let config: PipelineConfig = toml::from_str(toml).unwrap();
+        let config = config.normalize_shorthand_sections();
+
+        // Should pass validation since the alias is defined
+        let result = config.validate();
+        assert!(result.is_ok(), "Expected validation to pass: {:?}", result);
     }
 }

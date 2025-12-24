@@ -341,6 +341,8 @@ pub struct StreamProcessor {
     global_match_count: usize,
     /// Bidirectional transform manager for recording/replaying mappings
     bidirectional_manager: Option<BidirectionalManager>,
+    /// When true, output dropped lines to stderr (for debugging filters)
+    show_dropped: bool,
 }
 
 /// State for finalize section - tracks counters and collected values during processing.
@@ -858,6 +860,8 @@ pub struct CaptureGroup {
 struct CompiledStep {
     step_index: usize,
     pattern: CompiledPattern,
+    /// Negative pattern - if this matches, the line is excluded even if `pattern` matches
+    not_pattern: Option<CompiledPattern>,
     replacement: Option<String>,
     /// Unified action for Filter and Block steps
     action: Option<StepAction>,
@@ -877,6 +881,8 @@ struct CompiledStep {
     output_template: Option<String>,
     first_only: bool,
     deduplicate: bool,
+    /// Human-readable name for this step (used in trace/debug output)
+    name: Option<String>,
     // Syntax-aware processing fields (require tree-sitter feature)
     /// Languages this step applies to (if any of these match, the step is applied)
     #[cfg(feature = "tree-sitter")]
@@ -1173,7 +1179,13 @@ impl StreamProcessor {
             seq_counters: HashMap::new(),
             global_match_count: 0,
             bidirectional_manager,
+            show_dropped: false,
         })
+    }
+
+    /// Enable output of dropped lines to stderr for debugging
+    pub fn set_show_dropped(&mut self, show: bool) {
+        self.show_dropped = show;
     }
 
     /// Check if context lines feature is enabled
@@ -1200,6 +1212,13 @@ impl StreamProcessor {
             };
             let pattern = Self::build_pattern(pattern_str, &step.flags, settings)?;
             let replacement = step.replacement.clone();
+
+            // Compile the not_pattern if specified
+            let not_pattern = if let Some(ref not_pattern_str) = step.not_pattern {
+                Some(Self::build_pattern(not_pattern_str, &step.flags, settings)?)
+            } else {
+                None
+            };
 
             // Compile the end pattern for Block steps
             let end_pattern = if let Some(ref end_str) = step.end_pattern {
@@ -1282,6 +1301,7 @@ impl StreamProcessor {
             compiled_steps.push(CompiledStep {
                 step_index: index,
                 pattern,
+                not_pattern,
                 replacement,
                 action: step.action.clone(),
                 transform_action,
@@ -1295,6 +1315,7 @@ impl StreamProcessor {
                 output_template: step.output_template.clone(),
                 first_only: step.first_only.unwrap_or(false),
                 deduplicate: step.deduplicate.unwrap_or(false),
+                name: step.name.clone(),
                 #[cfg(feature = "tree-sitter")]
                 languages,
                 #[cfg(feature = "tree-sitter")]
@@ -2145,9 +2166,11 @@ impl StreamProcessor {
             let is_global = self.compiled_steps[step_idx].is_global;
             let replacement = self.compiled_steps[step_idx].replacement.clone();
             let pattern_debug = format!("{:?}", self.compiled_steps[step_idx].pattern);
+            let step_name = self.compiled_steps[step_idx].name.clone();
 
             let step_start = Instant::now();
-            let mut step_result = StepResult::new(step_index, step_type.clone(), pattern_debug);
+            let mut step_result =
+                StepResult::new(step_index, step_type.clone(), pattern_debug, step_name);
 
             match step_type {
                 StepType::Substitute => {
@@ -2172,8 +2195,32 @@ impl StreamProcessor {
                 StepType::Filter => {
                     // Re-borrow compiled_step for non-mutable operations
                     let compiled_step = &self.compiled_steps[step_idx];
-                    let matches = compiled_step.pattern.is_match(&current_line);
-                    if matches {
+                    let raw_matches = compiled_step.pattern.is_match(&current_line);
+
+                    // Check not_pattern: if it matches, negate the result
+                    // This allows patterns like: pattern = "ERROR", not_pattern = "expected"
+                    // to keep ERROR lines but exclude those containing "expected"
+                    let matches_after_negation = if raw_matches {
+                        // Only check not_pattern if the main pattern matched
+                        if let Some(ref not_pattern) = compiled_step.not_pattern {
+                            let negation_matches = not_pattern.is_match(&current_line);
+                            !negation_matches // If not_pattern matches, treat as no match
+                        } else {
+                            true // No not_pattern, keep the match
+                        }
+                    } else {
+                        false
+                    };
+
+                    // Apply invert_match setting (like grep -v)
+                    // When inverted: matching lines are dropped, non-matching lines are kept
+                    let matches = if self.config.settings.invert_match {
+                        !matches_after_negation
+                    } else {
+                        matches_after_negation
+                    };
+
+                    if raw_matches {
                         step_result.add_match();
                     }
 
@@ -2218,14 +2265,32 @@ impl StreamProcessor {
                         };
 
                         if !should_output {
+                            // Format step identifier with name if available
+                            let step_id = match &compiled_step.name {
+                                Some(name) => format!("'{}' (step {})", name, step_idx + 1),
+                                None => format!("step {}", step_idx + 1),
+                            };
                             // Log step-level attribution for dropped lines
                             trace!(
-                                "Line {} DROPPED by step {} ({:?}, pattern: {})",
+                                "Line {} DROPPED by {} ({:?}, pattern: {})",
                                 line_number,
-                                step_idx,
+                                step_id,
                                 action,
                                 compiled_step.pattern.pattern_str()
                             );
+                            // Output dropped line to stderr if debugging is enabled
+                            if self.show_dropped {
+                                eprintln!(
+                                    "[DROPPED line {}] {}: {}",
+                                    line_number, step_id, current_line
+                                );
+                            }
+                            // Record the drop in step statistics
+                            step_result.add_dropped();
+                            let elapsed = step_start.elapsed().as_millis() as u64;
+                            step_result.set_processing_time(elapsed);
+                            self.stats.step_timings.insert(step_index, elapsed);
+                            result.add_step_result(step_result);
                             break;
                         }
                     }
@@ -2707,6 +2772,7 @@ impl StreamProcessor {
         }
 
         if should_output {
+            result.add_output_line();
             Ok(Some(current_line))
         } else {
             Ok(None)
