@@ -1153,6 +1153,10 @@ impl PipelineConfig {
     ///
     /// Order of processing: steps from [[step]] come first, then shorthand sections in order:
     /// filter, substitute, extract, validate, transform, block.
+    pub fn normalize(self) -> Self {
+        self.normalize_shorthand_sections()
+    }
+
     fn normalize_shorthand_sections(mut self) -> Self {
         // Helper to normalize drop/keep shorthand on a step
         fn normalize_step_shorthand(step: &mut PipelineStep) {
