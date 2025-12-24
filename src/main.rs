@@ -1,5 +1,5 @@
 use anyhow::{Error as AnyhowError, Result, anyhow};
-use clap::{Arg, ArgAction, Command, ValueHint, value_parser};
+use clap::{Arg, ArgAction, ArgMatches, Command, ValueHint, value_parser};
 use clap_complete::{Generator, Shell, generate};
 use clap_mangen::Man;
 use log::{debug, info};
@@ -660,6 +660,59 @@ fn build_cli() -> Command {
                 .value_parser(["text", "json"])
                 .default_value("text"),
         )
+        .arg(
+            Arg::new("stats")
+                .long("stats")
+                .help("Show processing statistics summary (lines in/out, per-step drops)")
+                .action(ArgAction::SetTrue),
+        )
+        .arg(
+            Arg::new("show-dropped")
+                .long("show-dropped")
+                .help("Show dropped lines to stderr (for debugging filters)")
+                .action(ArgAction::SetTrue),
+        )
+        .arg(
+            Arg::new("tips")
+                .long("tips")
+                .help("Show helpful tips about related features after processing")
+                .action(ArgAction::SetTrue),
+        )
+        .arg(
+            Arg::new("fail-if-match")
+                .long("fail-if-match")
+                .help("Exit with code 1 if any line matches the pattern (for CI/CD)")
+                .action(ArgAction::SetTrue),
+        )
+        .arg(
+            Arg::new("fail-if-no-match")
+                .long("fail-if-no-match")
+                .help("Exit with code 1 if no lines match the pattern (for CI/CD)")
+                .action(ArgAction::SetTrue),
+        )
+        .arg(
+            Arg::new("invert")
+                .long("invert-match")
+                .alias("invert")
+                .help("Invert match: keep non-matching lines, drop matching lines (like grep -v)")
+                .action(ArgAction::SetTrue),
+        )
+        .arg(
+            Arg::new("github-annotations")
+                .long("github-annotations")
+                .value_name("LEVEL")
+                .help("Output in GitHub Actions annotation format (::warning::, ::error::, ::notice::)")
+                .value_parser(["error", "warning", "notice"])
+                .num_args(0..=1)
+                .default_missing_value("warning"),
+        )
+        .arg(
+            Arg::new("line-numbers")
+                .short('n')
+                .long("line-numbers")
+                .help("Show line numbers in output (format: 'N: line')")
+                .action(ArgAction::SetTrue),
+        )
         // === Context Lines (for inspection) ===
         .arg(
             Arg::new("context-before")
@@ -696,6 +749,26 @@ fn build_cli() -> Command {
                 .value_name("LIBRARY")
                 .help("Validate a pattern library file")
                 .value_hint(ValueHint::FilePath),
+        )
+        .arg(
+            Arg::new("list-builtins")
+                .long("list-builtins")
+                .help("List all built-in patterns available via ${builtin:name} syntax")
+                .action(ArgAction::SetTrue),
+        )
+        .arg(
+            Arg::new("help-topic")
+                .long("help-topic")
+                .value_name("TOPIC")
+                .help("Show detailed help on a topic: filters, patterns, shorthand, config, ci, debugging")
+                .value_parser(["filters", "patterns", "shorthand", "config", "ci", "debugging", "list"]),
+        )
+        .arg(
+            Arg::new("examples")
+                .long("examples")
+                .value_name("CATEGORY")
+                .help("Show usage examples: basic, filter, substitute, config, ci, all")
+                .value_parser(["basic", "filter", "substitute", "config", "ci", "all"]),
         )
         // === Git Filter Integration ===
         .arg(
@@ -1464,6 +1537,21 @@ fn run_application(matches: &clap::ArgMatches) -> Result<()> {
         return validate_library_file(library_path);
     }
 
+    // Handle list-builtins (show available ${builtin:*} patterns)
+    if matches.get_flag("list-builtins") {
+        return list_builtin_patterns();
+    }
+
+    // Handle help-topic (show detailed help on a topic)
+    if let Some(topic) = matches.get_one::<String>("help-topic") {
+        return show_help_topic(topic);
+    }
+
+    // Handle examples (show usage examples)
+    if let Some(category) = matches.get_one::<String>("examples") {
+        return show_examples(category);
+    }
+
     // Handle config validation (--validate-config)
     if matches.get_flag("validate-config") {
         return validate_config_file(matches);
@@ -1657,6 +1745,8 @@ fn build_pipeline_settings(matches: &clap::ArgMatches) -> PipelineSettings {
         // --max-line-length limits line length
         max_line_length,
         max_line_action,
+        // --invert or -v inverts match behavior (like grep -v)
+        invert_match: matches.get_flag("invert"),
         // Use defaults for new configurable settings
         ..Default::default()
     }
@@ -2393,10 +2483,27 @@ fn load_pipeline_config(
         let config_path = Path::new(config_file);
         let mut config = PipelineConfig::from_file(config_file)?;
 
+        // First resolve inline aliases from [aliases] section
+        // This also handles ${builtin:*} patterns
+        if !config.aliases.is_empty() || config.has_any_pattern_references() {
+            if let Err(errors) = config.resolve_aliases() {
+                return Err(anyhow!(
+                    "Failed to resolve pattern aliases:\n  {}",
+                    errors.join("\n  ")
+                ));
+            }
+        }
+
         // Load and resolve pattern libraries if specified
-        if config.uses_pattern_libraries() {
-            let mut resolver = LibraryResolver::new(config_path.parent());
-            let library = resolver.load_libraries(&config.patterns_include)?;
+        // Also resolve builtin patterns (${builtin:*}) even without external libraries
+        if config.uses_pattern_libraries() || config.has_any_pattern_references() {
+            let library = if config.uses_pattern_libraries() {
+                let mut resolver = LibraryResolver::new(config_path.parent());
+                resolver.load_libraries(&config.patterns_include)?
+            } else {
+                // Empty library - builtin patterns will still be resolved
+                rexpipe::library::ResolvedLibrary::new()
+            };
 
             if let Err(errors) = config.resolve_pattern_references(&library) {
                 return Err(anyhow!(
@@ -2435,6 +2542,11 @@ fn load_pipeline_config(
         // --strict flag enables ReDoS pattern rejection
         if settings.strict_mode {
             config.settings.strict_mode = true;
+        }
+
+        // --invert or -v flag inverts filter match behavior
+        if settings.invert_match {
+            config.settings.invert_match = true;
         }
 
         // Validate shell transform usage if disabled
@@ -2536,10 +2648,14 @@ fn load_pipeline_config(
         let step = PipelineStep {
             step_type,
             pattern: pattern.to_string(),
+            not_pattern: None,
             replacement,
             action,
+            drop: None,
+            keep: None,
             transform,
             flags: Some(vec![RegexFlag::Global]),
+            name: None,
             description: None,
             enabled: Some(true),
             start_pattern: None,
@@ -2889,6 +3005,466 @@ fn list_library_patterns(library_path: &str) -> Result<()> {
     Ok(())
 }
 
+/// List all built-in patterns available via ${builtin:name} syntax
+fn list_builtin_patterns() -> Result<()> {
+    let patterns = library::list_builtin_patterns();
+
+    println!("Built-in patterns ({} total):\n", patterns.len());
+    println!("Use these patterns in configs with ${{builtin:name}} syntax.\n");
+
+    // Group patterns by category
+    let mut identity_patterns = Vec::new();
+    let mut datetime_patterns = Vec::new();
+    let mut log_patterns = Vec::new();
+    let mut other_patterns = Vec::new();
+
+    for name in &patterns {
+        match *name {
+            "email" | "ipv4" | "ipv6" | "phone_us" | "ssn" | "uuid" | "credit_card" => {
+                identity_patterns.push(*name);
+            }
+            "date_iso" | "date_us" | "time_24h" | "datetime_iso" | "timestamp_syslog" => {
+                datetime_patterns.push(*name);
+            }
+            "log_level" | "json_object" => {
+                log_patterns.push(*name);
+            }
+            _ => {
+                other_patterns.push(*name);
+            }
+        }
+    }
+
+    if !identity_patterns.is_empty() {
+        println!("[Identity & Contact]");
+        for name in &identity_patterns {
+            if let Some(pattern) = library::get_builtin_pattern(name) {
+                let display = if pattern.len() > 50 {
+                    format!("{}...", &pattern[..47])
+                } else {
+                    pattern.to_string()
+                };
+                println!("  ${{builtin:{}}} = '{}'", name, display);
+            }
+        }
+        println!();
+    }
+
+    if !datetime_patterns.is_empty() {
+        println!("[Dates & Times]");
+        for name in &datetime_patterns {
+            if let Some(pattern) = library::get_builtin_pattern(name) {
+                println!("  ${{builtin:{}}} = '{}'", name, pattern);
+            }
+        }
+        println!();
+    }
+
+    if !log_patterns.is_empty() {
+        println!("[Logging]");
+        for name in &log_patterns {
+            if let Some(pattern) = library::get_builtin_pattern(name) {
+                println!("  ${{builtin:{}}} = '{}'", name, pattern);
+            }
+        }
+        println!();
+    }
+
+    if !other_patterns.is_empty() {
+        println!("[Other]");
+        for name in &other_patterns {
+            if let Some(pattern) = library::get_builtin_pattern(name) {
+                let display = if pattern.len() > 50 {
+                    format!("{}...", &pattern[..47])
+                } else {
+                    pattern.to_string()
+                };
+                println!("  ${{builtin:{}}} = '{}'", name, display);
+            }
+        }
+        println!();
+    }
+
+    println!("Example usage:");
+    println!("  [[filter]]");
+    println!("  pattern = \"${{builtin:email}}\"");
+    println!("  action = \"keep_line\"");
+
+    Ok(())
+}
+
+/// Show detailed help on a specific topic
+fn show_help_topic(topic: &str) -> Result<()> {
+    match topic {
+        "list" => {
+            println!("Available help topics:");
+            println!();
+            println!("  filters     - Filter actions and behavior");
+            println!("  patterns    - Pattern syntax and built-in patterns");
+            println!("  shorthand   - Shorthand configuration syntax");
+            println!("  config      - Configuration file format");
+            println!("  ci          - CI/CD integration features");
+            println!("  debugging   - Debugging and troubleshooting");
+            println!();
+            println!("Usage: rexpipe --help-topic <TOPIC>");
+        }
+        "filters" => {
+            println!("FILTER ACTIONS");
+            println!("==============");
+            println!();
+            println!("Filter steps control which lines pass through the pipeline:");
+            println!();
+            println!("  keep_line    Keep matching lines, drop non-matching (default)");
+            println!("  drop_line    Drop matching lines, keep non-matching");
+            println!("  keep_match   Output only the matched portion of each line");
+            println!("  drop_match   Remove matched portion, keep the rest of the line");
+            println!();
+            println!("SHORTHAND SYNTAX:");
+            println!("  drop = \"pattern\"        Equivalent to pattern + action = \"drop_line\"");
+            println!("  keep = \"pattern\"        Equivalent to pattern + action = \"keep_line\"");
+            println!("  drop = [\"p1\", \"p2\"]    Multiple patterns (OR logic)");
+            println!();
+            println!("EXAMPLES:");
+            println!();
+            println!("  # Keep only error lines");
+            println!("  [[filter]]");
+            println!("  pattern = \"ERROR|FATAL\"");
+            println!("  action = \"keep_line\"");
+            println!();
+            println!("  # Drop debug lines (shorthand)");
+            println!("  [[filter]]");
+            println!("  drop = \"^DEBUG:\"");
+            println!();
+            println!("  # Invert globally with --invert-match");
+            println!("  rexpipe -p 'ERROR' --invert-match < log.txt");
+            println!();
+            println!("PATTERN NEGATION:");
+            println!("  Use not_pattern to exclude lines even if they match pattern:");
+            println!();
+            println!("  [[filter]]");
+            println!("  pattern = \"ERROR\"");
+            println!("  not_pattern = \"expected\"");
+            println!("  action = \"keep_line\"");
+            println!();
+            println!("  This keeps ERROR lines but excludes those containing 'expected'.");
+        }
+        "patterns" => {
+            println!("PATTERN SYNTAX");
+            println!("==============");
+            println!();
+            println!("Patterns are regular expressions (Rust regex syntax by default).");
+            println!();
+            println!("BASIC SYNTAX:");
+            println!("  .           Any character");
+            println!("  \\d          Digit [0-9]");
+            println!("  \\w          Word char [a-zA-Z0-9_]");
+            println!("  \\s          Whitespace");
+            println!("  [abc]       Character class");
+            println!("  ^           Start of line");
+            println!("  $           End of line");
+            println!("  *           Zero or more");
+            println!("  +           One or more");
+            println!("  ?           Zero or one");
+            println!("  (group)     Capture group ($1, $2, ...)");
+            println!("  (?:group)   Non-capturing group");
+            println!();
+            println!("BUILT-IN PATTERNS:");
+            println!("  ${{builtin:email}}       Email addresses");
+            println!("  ${{builtin:ipv4}}        IPv4 addresses");
+            println!("  ${{builtin:uuid}}        UUIDs");
+            println!("  ${{builtin:credit_card}} Credit card numbers");
+            println!("  (Run --list-builtins for full list)");
+            println!();
+            println!("PCRE MODE (lookahead/lookbehind):");
+            println!("  Enable with: --pcre (global) or flags = [\"pcre\"] (per-step)");
+            println!();
+            println!("ALIASES (define in config):");
+            println!("  [aliases]");
+            println!("  noise = \"^\\\\[DEBUG\\\\]|^\\\\[TRACE\\\\]\"");
+            println!("  ");
+            println!("  [[filter]]");
+            println!("  drop = \"${{noise}}\"");
+        }
+        "shorthand" => {
+            println!("SHORTHAND SYNTAX");
+            println!("================");
+            println!();
+            println!("Instead of [[step]] + type = \"...\", use direct section names:");
+            println!();
+            println!("  [[filter]]      instead of [[step]] + type = \"filter\"");
+            println!("  [[substitute]]  instead of [[step]] + type = \"substitute\"");
+            println!("  [[extract]]     instead of [[step]] + type = \"extract\"");
+            println!("  [[validate]]    instead of [[step]] + type = \"validate\"");
+            println!("  [[transform]]   instead of [[step]] + type = \"transform\"");
+            println!("  [[block]]       instead of [[step]] + type = \"block\"");
+            println!();
+            println!("ACTION SHORTHAND:");
+            println!("  drop = \"pattern\"      Filter with drop_line action");
+            println!("  keep = \"pattern\"      Filter with keep_line action");
+            println!("  drop = [\"p1\", \"p2\"]  Multiple patterns (OR logic)");
+            println!();
+            println!("EXAMPLE:");
+            println!();
+            println!("  # Before (verbose)");
+            println!("  [[step]]");
+            println!("  type = \"filter\"");
+            println!("  pattern = \"DEBUG\"");
+            println!("  action = \"drop_line\"");
+            println!();
+            println!("  # After (shorthand)");
+            println!("  [[filter]]");
+            println!("  drop = \"DEBUG\"");
+        }
+        "config" => {
+            println!("CONFIGURATION FILE FORMAT");
+            println!("=========================");
+            println!();
+            println!("rexpipe uses TOML configuration files:");
+            println!();
+            println!("BASIC STRUCTURE:");
+            println!("  name = \"my-pipeline\"");
+            println!("  description = \"What this pipeline does\"");
+            println!("  version = \"1.0.0\"");
+            println!();
+            println!("  [settings]");
+            println!("  strict_mode = true");
+            println!("  max_line_length = 10000");
+            println!();
+            println!("  [aliases]");
+            println!("  noise = \"^DEBUG|^TRACE\"");
+            println!();
+            println!("  [[filter]]");
+            println!("  drop = \"${{noise}}\"");
+            println!();
+            println!("  [[substitute]]");
+            println!("  pattern = \"old\"");
+            println!("  replacement = \"new\"");
+            println!();
+            println!("STEP FIELDS:");
+            println!("  pattern         Regex pattern (required)");
+            println!("  replacement     Replacement text (for substitute)");
+            println!("  action          Filter action (keep_line, drop_line, etc.)");
+            println!("  name            Step name (shown in trace/stats)");
+            println!("  description     Human-readable description");
+            println!("  flags           [\"global\", \"case_insensitive\", \"pcre\"]");
+            println!("  enabled         true/false to enable/disable step");
+            println!();
+            println!("See also: --explain, --validate-config");
+        }
+        "ci" => {
+            println!("CI/CD INTEGRATION");
+            println!("=================");
+            println!();
+            println!("FLAGS FOR CI/CD PIPELINES:");
+            println!();
+            println!("  --fail-if-match       Exit code 1 if any pattern matches");
+            println!("  --fail-if-no-match    Exit code 1 if no patterns match");
+            println!("  --github-annotations  Output GitHub Actions annotations");
+            println!();
+            println!("GITHUB ANNOTATIONS:");
+            println!("  rexpipe -p 'TODO|FIXME' --github-annotations=warning < src/*.rs");
+            println!();
+            println!("  Levels: error, warning, notice");
+            println!("  Output format: ::warning file=path,line=N::message");
+            println!();
+            println!("SCRIPTING (JSON output):");
+            println!("  --json            JSON output format");
+            println!("  --error-format json  Machine-parseable errors");
+            println!();
+            println!("DRY-RUN & VALIDATION:");
+            println!("  --dry-run         Show changes without applying");
+            println!("  --validate-config Validate config without running");
+            println!("  --explain         Describe pipeline behavior");
+        }
+        "debugging" => {
+            println!("DEBUGGING & TROUBLESHOOTING");
+            println!("===========================");
+            println!();
+            println!("VERBOSITY FLAGS:");
+            println!("  -v              Info level logging");
+            println!("  -vv             Debug level logging");
+            println!("  -vvv            Trace level (shows step-by-step processing)");
+            println!("  RUST_LOG=rexpipe=trace  Alternative via environment");
+            println!();
+            println!("FILTER DEBUGGING:");
+            println!("  --stats         Show lines in/out and per-step drops");
+            println!("  --show-dropped  Print dropped lines to stderr");
+            println!("  --tips          Show feature suggestions after run");
+            println!();
+            println!("STEP NAMING (for trace output):");
+            println!("  [[filter]]");
+            println!("  name = \"drop-debug-noise\"");
+            println!("  drop = \"^DEBUG\"");
+            println!();
+            println!("  Trace output shows: DROPPED by 'drop-debug-noise' (step 1)");
+            println!();
+            println!("INSPECTION MODE:");
+            println!("  --inspect       Interactive match preview");
+            println!();
+            println!("PATTERN TESTING:");
+            println!("  echo 'test' | rexpipe -p 'pattern' --stats");
+        }
+        _ => {
+            return Err(anyhow!(
+                "Unknown help topic: {}. Use --help-topic list for available topics.",
+                topic
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Show usage examples by category
+fn show_examples(category: &str) -> Result<()> {
+    match category {
+        "basic" => {
+            println!("BASIC EXAMPLES");
+            println!("==============");
+            println!();
+            println!("# Replace 'foo' with 'bar':");
+            println!("echo 'foo bar foo' | rexpipe -p 'foo' -r 'bar'");
+            println!("# Output: bar bar bar");
+            println!();
+            println!("# Search for a pattern (like grep):");
+            println!("cat log.txt | rexpipe -p 'ERROR'");
+            println!();
+            println!("# Count matches:");
+            println!("rexpipe -p 'error' -c < log.txt");
+            println!();
+            println!("# Case-insensitive search:");
+            println!("rexpipe -p 'error' -i < log.txt");
+            println!();
+            println!("# Invert match (like grep -v):");
+            println!("rexpipe -p 'DEBUG' --invert-match < log.txt");
+            println!();
+            println!("# Show line numbers:");
+            println!("rexpipe -p 'ERROR' -n < log.txt");
+        }
+        "filter" => {
+            println!("FILTER EXAMPLES");
+            println!("===============");
+            println!();
+            println!("# Keep only lines containing 'ERROR':");
+            println!("echo -e 'INFO: ok\\nERROR: fail\\nDEBUG: test' | rexpipe -p 'ERROR'");
+            println!("# Output: ERROR: fail");
+            println!();
+            println!("# Drop lines matching a pattern (invert):");
+            println!("rexpipe -p 'DEBUG|TRACE' --invert-match < log.txt");
+            println!();
+            println!("# Using config file:");
+            println!("  [[filter]]");
+            println!("  drop = \"^\\\\[DEBUG\\\\]\"");
+            println!();
+            println!("  [[filter]]");
+            println!("  keep = \"ERROR|FATAL\"");
+            println!();
+            println!("# Drop multiple patterns:");
+            println!("  [[filter]]");
+            println!("  drop = [\"DEBUG\", \"TRACE\", \"^#\"]");
+        }
+        "substitute" => {
+            println!("SUBSTITUTION EXAMPLES");
+            println!("=====================");
+            println!();
+            println!("# Simple replacement:");
+            println!("echo 'hello world' | rexpipe -p 'world' -r 'universe'");
+            println!("# Output: hello universe");
+            println!();
+            println!("# Using capture groups:");
+            println!("echo 'John Smith' | rexpipe -p '(\\\\w+) (\\\\w+)' -r '$2, $1'");
+            println!("# Output: Smith, John");
+            println!();
+            println!("# Redact email addresses:");
+            println!(
+                "echo 'Contact: user@example.com' | rexpipe -p '${{builtin:email}}' -r '[EMAIL]'"
+            );
+            println!();
+            println!("# Case transformation:");
+            println!("  [[substitute]]");
+            println!("  pattern = \"error\"");
+            println!("  replacement = \"ERROR\"");
+            println!("  flags = [\"case_insensitive\", \"global\"]");
+            println!();
+            println!("# Redact sensitive data:");
+            println!("  [[substitute]]");
+            println!("  pattern = \"${{builtin:credit_card}}\"");
+            println!("  replacement = \"[REDACTED]\"");
+        }
+        "config" => {
+            println!("CONFIGURATION EXAMPLES");
+            println!("======================");
+            println!();
+            println!("# Minimal pipeline (pipeline.toml):");
+            println!("  [[substitute]]");
+            println!("  pattern = \"old\"");
+            println!("  replacement = \"new\"");
+            println!();
+            println!("# Full pipeline with settings:");
+            println!("  name = \"log-sanitizer\"");
+            println!("  description = \"Sanitize logs for sharing\"");
+            println!();
+            println!("  [settings]");
+            println!("  strict_mode = true");
+            println!();
+            println!("  [aliases]");
+            println!("  noise = \"DEBUG|TRACE\"");
+            println!();
+            println!("  [[filter]]");
+            println!("  name = \"drop-noise\"");
+            println!("  drop = \"${{noise}}\"");
+            println!();
+            println!("  [[substitute]]");
+            println!("  name = \"redact-emails\"");
+            println!("  pattern = \"${{builtin:email}}\"");
+            println!("  replacement = \"[EMAIL]\"");
+            println!();
+            println!("# Run with: rexpipe -c pipeline.toml < input.txt");
+        }
+        "ci" => {
+            println!("CI/CD EXAMPLES");
+            println!("==============");
+            println!();
+            println!("# Fail if TODO/FIXME found:");
+            println!("rexpipe -p 'TODO|FIXME' --fail-if-match < src/*.rs");
+            println!();
+            println!("# GitHub Actions annotations:");
+            println!("rexpipe -p 'TODO' --github-annotations=warning < src/*.rs");
+            println!("# Output: ::warning file=src/main.rs,line=42::TODO");
+            println!();
+            println!("# Validate config before deploy:");
+            println!("rexpipe -c pipeline.toml --validate-config && echo 'Valid!'");
+            println!();
+            println!("# JSON output for scripting:");
+            println!("rexpipe -p 'ERROR' --json < log.txt | jq '.matches'");
+            println!();
+            println!("# Dry-run mode (preview changes):");
+            println!("rexpipe -c sanitize.toml --dry-run < input.txt");
+            println!();
+            println!("# Explain what a pipeline does:");
+            println!("rexpipe -c pipeline.toml --explain");
+        }
+        "all" => {
+            // Show all categories
+            show_examples("basic")?;
+            println!("\n{}\n", "=".repeat(50));
+            show_examples("filter")?;
+            println!("\n{}\n", "=".repeat(50));
+            show_examples("substitute")?;
+            println!("\n{}\n", "=".repeat(50));
+            show_examples("config")?;
+            println!("\n{}\n", "=".repeat(50));
+            show_examples("ci")?;
+        }
+        _ => {
+            return Err(anyhow!(
+                "Unknown examples category: {}. Valid: basic, filter, substitute, config, ci, all",
+                category
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn validate_library_file(library_path: &str) -> Result<()> {
     let path = Path::new(library_path);
 
@@ -3162,7 +3738,16 @@ fn run_processing_mode(
     let json_output = should_use_json(matches);
     let count_only = matches.get_flag("count");
 
+    // Check for special output formatting modes
+    let github_annotations = matches.get_one::<String>("github-annotations");
+    let show_line_numbers = matches.get_flag("line-numbers");
+
     let mut processor = StreamProcessor::new(config.clone())?;
+
+    // Enable show-dropped debugging if requested
+    if matches.get_flag("show-dropped") {
+        processor.set_show_dropped(true);
+    }
 
     // Check if syntax-aware processing is needed (requires tree-sitter feature)
     #[cfg(feature = "tree-sitter")]
@@ -3236,7 +3821,53 @@ fn run_processing_mode(
             Box::new(io::stdout())
         };
 
-    let result = if use_syntax_aware {
+    // Check if we need special output formatting (github annotations or line numbers)
+    let needs_line_formatting = github_annotations.is_some() || show_line_numbers;
+
+    let result = if needs_line_formatting {
+        // Buffer output for line-by-line formatting
+        let mut buffer = Vec::new();
+        let result = if use_syntax_aware {
+            #[cfg(feature = "tree-sitter")]
+            {
+                let content = read_input_to_string(input)?;
+                let (processed, result) = processor.process_file_content(&content, cli_language)?;
+                buffer = processed.into_bytes();
+                result
+            }
+            #[cfg(not(feature = "tree-sitter"))]
+            {
+                processor.process_stream(input, &mut buffer)?
+            }
+        } else {
+            processor.process_stream(input, &mut buffer)?
+        };
+
+        // Get optional file name for annotations
+        let file_name = matches.get_one::<String>("input").map(|s| s.as_str());
+
+        // Format and output each line
+        let output_str = String::from_utf8_lossy(&buffer);
+        for (idx, line) in output_str.lines().enumerate() {
+            let line_num = idx + 1;
+
+            if let Some(level) = github_annotations {
+                // GitHub Actions annotation format: ::level file=path,line=N::message
+                let file_part = file_name
+                    .map(|f| format!("file={},", f))
+                    .unwrap_or_default();
+                writeln!(
+                    output,
+                    "::{}::{}line={}::{}",
+                    level, file_part, line_num, line
+                )?;
+            } else if show_line_numbers {
+                // Simple line number format: N: line
+                writeln!(output, "{}: {}", line_num, line)?;
+            }
+        }
+        result
+    } else if use_syntax_aware {
         #[cfg(feature = "tree-sitter")]
         {
             // Syntax-aware processing: buffer input, process with AST, write output
@@ -3271,7 +3902,83 @@ fn run_processing_mode(
         output_verification_summary(&result, json_output, bidir_stats)?;
     }
 
+    // Output stats summary if requested
+    if matches.get_flag("stats") {
+        eprintln!("\n{}", result.stats_summary());
+    }
+
+    // Show feature tips if requested
+    if matches.get_flag("tips") {
+        show_feature_tips(matches, &result);
+    }
+
+    // Handle exit code flags for CI/CD
+    if matches.get_flag("fail-if-match") && result.matches_found > 0 {
+        std::process::exit(1);
+    }
+    if matches.get_flag("fail-if-no-match") && result.matches_found == 0 {
+        std::process::exit(1);
+    }
+
     Ok(())
+}
+
+/// Show helpful tips about related features based on current usage
+fn show_feature_tips(matches: &ArgMatches, result: &rexpipe::pipeline::PipelineResult) {
+    let mut tips: Vec<&str> = Vec::new();
+
+    // Tip: If using --show-dropped but not --stats, suggest --stats
+    if matches.get_flag("show-dropped") && !matches.get_flag("stats") {
+        tips.push("Use --stats for a summary of lines dropped per step");
+    }
+
+    // Tip: If using --stats and lines were dropped, suggest step names
+    if matches.get_flag("stats") && result.lines_dropped > 0 {
+        tips.push("Add name = \"...\" to steps for clearer stats output");
+    }
+
+    // Tip: If using inline pattern, suggest built-in patterns
+    if matches.get_one::<String>("pattern").is_some() && !matches.get_flag("list-builtins") {
+        tips.push("Use --list-builtins to see reusable patterns like ${builtin:email}");
+    }
+
+    // Tip: If not using --explain, suggest it
+    if matches.get_one::<PathBuf>("config").is_some() && !matches.get_flag("explain") {
+        tips.push("Use --explain to see what the pipeline does before running");
+    }
+
+    // Tip: If matches were found, suggest --fail-if-match for CI
+    if result.matches_found > 0 && !matches.get_flag("fail-if-match") {
+        tips.push("Use --fail-if-match for CI/CD to exit with code 1 on matches");
+    }
+
+    // Tip: If using verbose logging, mention trace-level step names
+    if matches.get_count("verbose") >= 3 {
+        tips.push("Step names (name = \"...\") appear in trace output for easier debugging");
+    }
+
+    // Tip: If using PCRE, mention per-step PCRE
+    if matches.get_flag("pcre") {
+        tips.push("Use flags = [\"pcre\"] per-step instead of global --pcre for finer control");
+    }
+
+    // Tip: For config users, suggest shorthand syntax
+    if matches.get_one::<PathBuf>("config").is_some() {
+        tips.push(
+            "Try [[filter]] and [[substitute]] shorthand instead of [[step]] + type = \"...\"",
+        );
+    }
+
+    // Show at most 2 tips to avoid overwhelming the user
+    if !tips.is_empty() {
+        eprintln!("\nTips:");
+        for tip in tips.iter().take(2) {
+            eprintln!("  • {}", tip);
+        }
+        if tips.len() > 2 {
+            eprintln!("  (Run with --help for more features)");
+        }
+    }
 }
 
 /// Read all input from a BufRead into a String.

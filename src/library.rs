@@ -36,6 +36,69 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
+/// Built-in pattern library for common regex patterns.
+///
+/// These patterns can be used in configs with `${builtin:pattern_name}` syntax.
+/// For example: `pattern = "${builtin:email}"` expands to the email regex.
+static BUILTIN_PATTERNS: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| {
+    let mut m = HashMap::new();
+    // Email and identity
+    m.insert("email", r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}");
+    m.insert("ipv4", r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b");
+    m.insert("ipv6", r"\b([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}\b");
+    m.insert("phone_us", r"\b\d{3}[-.]?\d{3}[-.]?\d{4}\b");
+    m.insert("ssn", r"\b\d{3}-\d{2}-\d{4}\b");
+
+    // Dates and times
+    m.insert("date_iso", r"\b\d{4}-\d{2}-\d{2}\b");
+    m.insert("date_us", r"\b\d{1,2}/\d{1,2}/\d{4}\b");
+    m.insert("time_24h", r"\b\d{1,2}:\d{2}(:\d{2})?\b");
+    m.insert("datetime_iso", r"\b\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}");
+
+    // Identifiers
+    m.insert(
+        "uuid",
+        r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b",
+    );
+    m.insert("hex_id", r"\b[0-9a-fA-F]{8,}\b");
+    m.insert("url", r#"https?://[^\s<>"']+"#);
+    m.insert("credit_card", r"\b\d{4}[- ]?\d{4}[- ]?\d{4}[- ]?\d{4}\b");
+    m.insert("api_key", r"\b[A-Za-z0-9_-]{20,}\b");
+    m.insert("base64", r"\b[A-Za-z0-9+/]{20,}={0,2}\b");
+
+    // Common log patterns
+    m.insert(
+        "log_level",
+        r"\b(DEBUG|INFO|WARN|WARNING|ERROR|FATAL|TRACE)\b",
+    );
+    m.insert(
+        "timestamp_syslog",
+        r"[A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}",
+    );
+    m.insert("json_object", r"\{[^{}]*\}");
+
+    // Semantic versioning
+    m.insert(
+        "semver",
+        r"\b\d+\.\d+\.\d+(-[a-zA-Z0-9.]+)?(\+[a-zA-Z0-9.]+)?\b",
+    );
+    m
+});
+
+/// Get a builtin pattern by name.
+///
+/// Returns `None` if the pattern name is not found.
+pub fn get_builtin_pattern(name: &str) -> Option<&'static str> {
+    BUILTIN_PATTERNS.get(name).copied()
+}
+
+/// List all available builtin pattern names.
+pub fn list_builtin_patterns() -> Vec<&'static str> {
+    let mut names: Vec<_> = BUILTIN_PATTERNS.keys().copied().collect();
+    names.sort();
+    names
+}
+
 /// Check if a path string is a URL (http:// or https://)
 pub fn is_url(path: &str) -> bool {
     path.starts_with("http://") || path.starts_with("https://")
@@ -85,9 +148,10 @@ pub fn fetch_url(url: &str) -> Result<String> {
     ))
 }
 
-/// Pre-compiled regex for pattern references like `${pattern.name}`
+/// Pre-compiled regex for pattern references like `${pattern.name}` or `${builtin:email}`
 static PATTERN_REF_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"\$\{([a-zA-Z_][a-zA-Z0-9_.]*)\}").expect("invalid pattern ref regex")
+    // Allows: letters, digits, underscores, dots, and colons (for builtin:name syntax)
+    Regex::new(r"\$\{([a-zA-Z_][a-zA-Z0-9_.:]*)\}").expect("invalid pattern ref regex")
 });
 
 /// Pattern library configuration as loaded from TOML
@@ -571,7 +635,19 @@ impl LibraryResolver {
 /// Resolve pattern references in a string
 ///
 /// Replaces `${pattern_name}` with the actual pattern from the library.
+/// Also supports `${builtin:name}` for built-in patterns (email, ipv4, uuid, etc.).
 /// Returns the resolved string and any errors encountered.
+///
+/// # Built-in patterns
+///
+/// Use `${builtin:name}` to reference built-in patterns:
+/// - `${builtin:email}` - Email addresses
+/// - `${builtin:ipv4}` - IPv4 addresses
+/// - `${builtin:uuid}` - UUIDs
+/// - `${builtin:url}` - URLs
+/// - `${builtin:date_iso}` - ISO dates (YYYY-MM-DD)
+/// - `${builtin:log_level}` - Common log levels (DEBUG, INFO, WARN, ERROR, etc.)
+/// - And more... use `list_builtin_patterns()` to see all available patterns.
 pub fn resolve_pattern_references(
     input: &str,
     library: &ResolvedLibrary,
@@ -582,17 +658,37 @@ pub fn resolve_pattern_references(
     let result = PATTERN_REF_REGEX
         .replace_all(input, |caps: &regex::Captures| {
             let ref_name = &caps[1];
-            match library.get(ref_name) {
-                Some(pattern) => pattern.clone(),
-                None => {
-                    if !unresolved_refs.contains(ref_name) {
-                        errors.push(format!(
-                            "Unknown pattern reference '${{{}}}' - not found in library",
-                            ref_name
-                        ));
-                        unresolved_refs.insert(ref_name.to_string());
+
+            // Check for builtin: prefix
+            if let Some(builtin_name) = ref_name.strip_prefix("builtin:") {
+                match get_builtin_pattern(builtin_name) {
+                    Some(pattern) => pattern.to_string(),
+                    None => {
+                        if !unresolved_refs.contains(ref_name) {
+                            errors.push(format!(
+                                "Unknown builtin pattern '${{{}}}' - available: {}",
+                                ref_name,
+                                list_builtin_patterns().join(", ")
+                            ));
+                            unresolved_refs.insert(ref_name.to_string());
+                        }
+                        caps[0].to_string()
                     }
-                    caps[0].to_string() // Keep original for error display
+                }
+            } else {
+                // Regular library reference
+                match library.get(ref_name) {
+                    Some(pattern) => pattern.clone(),
+                    None => {
+                        if !unresolved_refs.contains(ref_name) {
+                            errors.push(format!(
+                                "Unknown pattern reference '${{{}}}' - not found in library",
+                                ref_name
+                            ));
+                            unresolved_refs.insert(ref_name.to_string());
+                        }
+                        caps[0].to_string() // Keep original for error display
+                    }
                 }
             }
         })
@@ -603,6 +699,133 @@ pub fn resolve_pattern_references(
     } else {
         Err(errors)
     }
+}
+
+/// Resolve pattern references using inline aliases.
+///
+/// Resolves `${alias_name}` references using the provided aliases map.
+/// Also handles `${builtin:name}` for built-in patterns.
+/// Library references (patterns not in aliases) are left unchanged for later resolution.
+///
+/// # Example
+///
+/// ```rust
+/// use std::collections::HashMap;
+/// use rexpipe::library::resolve_pattern_aliases;
+///
+/// let mut aliases = HashMap::new();
+/// aliases.insert("noise".to_string(), "(^\\[OK\\]|^\\[INFO\\])".to_string());
+///
+/// let result = resolve_pattern_aliases("${noise}|other", &aliases).unwrap();
+/// assert_eq!(result, "(^\\[OK\\]|^\\[INFO\\])|other");
+/// ```
+pub fn resolve_pattern_aliases(
+    input: &str,
+    aliases: &std::collections::HashMap<String, String>,
+) -> Result<String, Vec<String>> {
+    let mut errors = Vec::new();
+    let mut unresolved_refs = HashSet::new();
+
+    let result = PATTERN_REF_REGEX
+        .replace_all(input, |caps: &regex::Captures| {
+            let ref_name = &caps[1];
+
+            // Check for builtin: prefix first
+            if let Some(builtin_name) = ref_name.strip_prefix("builtin:") {
+                match get_builtin_pattern(builtin_name) {
+                    Some(pattern) => pattern.to_string(),
+                    None => {
+                        if !unresolved_refs.contains(ref_name) {
+                            errors.push(format!(
+                                "Unknown builtin pattern '${{{}}}' - available: {}",
+                                ref_name,
+                                list_builtin_patterns().join(", ")
+                            ));
+                            unresolved_refs.insert(ref_name.to_string());
+                        }
+                        caps[0].to_string()
+                    }
+                }
+            } else if let Some(pattern) = aliases.get(ref_name) {
+                // Found in aliases
+                pattern.clone()
+            } else {
+                // Not found - keep as-is (might be a library reference or error)
+                caps[0].to_string()
+            }
+        })
+        .into_owned();
+
+    if errors.is_empty() {
+        Ok(result)
+    } else {
+        Err(errors)
+    }
+}
+
+/// Check if a pattern reference requires an external library (not a builtin or alias).
+///
+/// Returns true if the pattern contains `${...}` references that are NOT:
+/// - Variable expansions (`${seq}`, `${count}`)
+/// - Builtin patterns (`${builtin:...}`)
+/// - Defined in the provided aliases
+pub fn has_non_alias_pattern_references(
+    input: &str,
+    aliases: &std::collections::HashMap<String, String>,
+) -> bool {
+    // Find all ${...} sequences
+    let mut i = 0;
+    let bytes = input.as_bytes();
+    while i < bytes.len().saturating_sub(1) {
+        if bytes[i] == b'$' && bytes.get(i + 1) == Some(&b'{') {
+            // Find the closing brace
+            if let Some(end) = input[i..].find('}') {
+                let ref_content = &input[i + 2..i + end];
+                // Skip known variable expansions, builtin patterns, and aliases
+                if ref_content != "seq"
+                    && ref_content != "count"
+                    && !ref_content.starts_with("builtin:")
+                    && !aliases.contains_key(ref_content)
+                {
+                    return true;
+                }
+            }
+            i += 2;
+        } else {
+            i += 1;
+        }
+    }
+    false
+}
+
+/// Check if a pattern reference requires an external library (not a builtin).
+///
+/// Returns true if the pattern contains `${...}` references that are NOT:
+/// - Variable expansions (`${seq}`, `${count}`)
+/// - Builtin patterns (`${builtin:...}`)
+pub fn has_non_builtin_pattern_references(input: &str) -> bool {
+    // Find all ${...} sequences
+    let mut i = 0;
+    let bytes = input.as_bytes();
+    while i < bytes.len().saturating_sub(1) {
+        if bytes[i] == b'$' && bytes.get(i + 1) == Some(&b'{') {
+            // Find the closing brace
+            if let Some(end) = input[i..].find('}') {
+                let ref_content = &input[i + 2..i + end];
+                // Skip known variable expansions and builtin patterns
+                if ref_content != "seq"
+                    && ref_content != "count"
+                    && !ref_content.starts_with("builtin:")
+                {
+                    return true;
+                }
+            }
+            i += 2;
+        } else {
+            i += 1;
+        }
+    }
+    false
 }
 
 /// Check if a string contains pattern references (library references, not variable expansions)
