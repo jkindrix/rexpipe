@@ -348,6 +348,10 @@ pub struct StreamProcessor {
     dedup_block_seen: HashMap<usize, std::collections::HashSet<u64>>,
     /// Buffer for block context overlap (step_index -> trailing content from previous block)
     block_overlap_buffer: HashMap<usize, String>,
+    /// Buffer for content-filtered blocks (step_index -> buffered lines)
+    block_content_buffer: HashMap<usize, Vec<String>>,
+    /// Track if content pattern matched in current block (step_index -> matched)
+    block_content_matched: HashMap<usize, bool>,
     /// Track seen extracted values for deduplicate in extract steps (step_index -> seen values)
     dedup_extract_seen: HashMap<usize, std::collections::HashSet<String>>,
     /// Track whether CSV header has been written for each step (step_index -> header_written)
@@ -890,6 +894,8 @@ struct CompiledStep {
     // Block step fields
     /// End pattern for block steps (previously `until`)
     end_pattern: Option<CompiledPattern>,
+    /// Content pattern for filtering blocks - blocks only kept/dropped if content matches
+    content_pattern: Option<CompiledPattern>,
     block_context: Option<crate::pipeline::BlockContextValue>,
     // Validation step fields
     /// Action to take when validation fails
@@ -1192,6 +1198,8 @@ impl StreamProcessor {
             dedup_block_buffer: HashMap::new(),
             dedup_block_seen: HashMap::new(),
             block_overlap_buffer: HashMap::new(),
+            block_content_buffer: HashMap::new(),
+            block_content_matched: HashMap::new(),
             dedup_extract_seen: HashMap::new(),
             csv_header_written: HashMap::new(),
             finalize_state,
@@ -1242,6 +1250,17 @@ impl StreamProcessor {
             // Compile the end pattern for Block steps
             let end_pattern = if let Some(ref end_str) = step.end_pattern {
                 Some(Self::build_pattern(end_str, &step.flags, settings)?)
+            } else {
+                None
+            };
+
+            // Compile content pattern for Block steps that filter by content
+            // If start_pattern is specified, the main pattern field is used for content filtering
+            let content_pattern = if matches!(step.step_type, StepType::Block)
+                && step.start_pattern.is_some()
+                && !step.pattern.is_empty()
+            {
+                Some(Self::build_pattern(&step.pattern, &step.flags, settings)?)
             } else {
                 None
             };
@@ -1327,6 +1346,7 @@ impl StreamProcessor {
                 step_type: step.step_type.clone(),
                 is_global,
                 end_pattern,
+                content_pattern,
                 block_context: step.block_context.clone(),
                 on_mismatch: step.on_mismatch.clone().unwrap_or_default(),
                 capture_names: step.capture_names.clone(),
@@ -2340,7 +2360,14 @@ impl StreamProcessor {
                         compiled_step.pattern.captures_iter(&current_line);
 
                     if captures.is_empty() {
-                        // No matches, keep current line as-is (or empty depending on mode)
+                        // No matches in extract mode - drop the line from output
+                        should_output = false;
+                        step_result.add_dropped();
+                        let elapsed = step_start.elapsed().as_millis() as u64;
+                        step_result.set_processing_time(elapsed);
+                        self.stats.step_timings.insert(step_index, elapsed);
+                        result.add_step_result(step_result);
+                        break;
                     } else {
                         // Apply first_only if specified
                         let captures_to_process: Vec<&CaptureGroup> = if compiled_step.first_only {
@@ -2649,6 +2676,9 @@ impl StreamProcessor {
                         .map(|p| p.is_match(&current_line))
                         .unwrap_or(false);
 
+                    // Check if this step has content filtering
+                    let has_content_filter = compiled_step.content_pattern.is_some();
+
                     // Convert StepAction to BlockAction for block-specific handling
                     let block_action_clone = compiled_step
                         .action
@@ -2670,6 +2700,12 @@ impl StreamProcessor {
                             self.dedup_block_buffer.insert(step_idx, Vec::new());
                         }
 
+                        // Initialize content filter buffer if content filtering is enabled
+                        if has_content_filter {
+                            self.block_content_buffer.insert(step_idx, Vec::new());
+                            self.block_content_matched.insert(step_idx, false);
+                        }
+
                         // Handle block context overlap on block entry
                         if let Some(ref _ctx) = block_context_clone {
                             if let Some(overlap) = self.block_overlap_buffer.remove(&step_idx) {
@@ -2681,6 +2717,41 @@ impl StreamProcessor {
                     } else if exiting_block {
                         // Exit block on end pattern
                         self.block_states[step_idx] = false;
+
+                        // Handle content-filtered block completion
+                        if has_content_filter {
+                            let content_matched = self
+                                .block_content_matched
+                                .remove(&step_idx)
+                                .unwrap_or(false);
+                            let mut buffered_lines = self
+                                .block_content_buffer
+                                .remove(&step_idx)
+                                .unwrap_or_default();
+
+                            // Determine if block should be output based on action and content match
+                            let output_block = match &block_action_clone {
+                                Some(BlockAction::KeepBlock) => content_matched, // Keep only if content matched
+                                Some(BlockAction::DropBlock) => !content_matched, // Drop if content matched
+                                _ => true, // For other actions, always output
+                            };
+
+                            if output_block {
+                                // Add the end line to buffered lines
+                                buffered_lines.push(current_line.clone());
+                                // Join all buffered lines with newlines and set as current_line
+                                // This will be output through the normal output path
+                                current_line = buffered_lines.join("\n");
+                                // Skip the normal block action processing since we've handled it
+                                // (continue to next step in pipeline or output)
+                            } else {
+                                // Don't output this block
+                                should_output = false;
+                                break;
+                            }
+                            // Skip normal block action processing for content-filtered blocks
+                            continue;
+                        }
 
                         // Handle block context overlap on block exit
                         if let Some(ref ctx) = block_context_clone {
@@ -2709,6 +2780,23 @@ impl StreamProcessor {
                                     .insert(step_idx, current_line.clone());
                             }
                         }
+                    }
+
+                    // For content-filtered blocks, buffer lines and check for content match
+                    if has_content_filter && (is_in_block || entering_block) && !exiting_block {
+                        // Check if this line matches the content pattern
+                        if let Some(ref content_pat) = compiled_step.content_pattern {
+                            if content_pat.is_match(&current_line) {
+                                self.block_content_matched.insert(step_idx, true);
+                            }
+                        }
+                        // Buffer the line
+                        if let Some(buffer) = self.block_content_buffer.get_mut(&step_idx) {
+                            buffer.push(current_line.clone());
+                        }
+                        // Don't output yet - wait until block ends to decide
+                        should_output = false;
+                        break;
                     }
 
                     // Apply block action if we're inside the block (including start/end lines)

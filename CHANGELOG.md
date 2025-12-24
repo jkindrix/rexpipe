@@ -136,9 +136,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `--library init` - Create a new pattern library template
   - `--library install URL` - Install a pattern library from URL (requires `remote` feature)
   - `--library registry` - Show community pattern registry info and contribution guidelines
+- **Improved `--library` syntax**: Now accepts natural syntax like `--library search email`
+  instead of requiring `--library search --library-arg email`
+- **Interactive lint fix (`--lint --fix`)**: Interactively apply lint suggestions with
+  y/n/a/q prompts. Creates a backup before applying changes. Currently supports
+  auto-fixing `flags = ["i"]` to `ignore_case = true` with more fixes planned
+- **Streaming `--why-dropped` output**: Now streams dropped lines as they are
+  processed for real-time feedback on large files, rather than waiting until
+  the end to display results
 
 ### Fixed
 
+- **Extract mode now filters non-matching lines**: `--extract` now correctly drops
+  lines that don't match the pattern, outputting only the extracted content
+- **Conventional commits `feat!:` syntax**: The `--conventional-commits` validator
+  now correctly parses breaking change syntax like `feat!:`, `fix!:`, and `feat(scope)!:`
+- **Bidirectional `--mapping-file` with CLI flags**: The `--mapping-file` flag now
+  correctly creates mapping files when used with `-p` (inline patterns). Previously,
+  `auto_save` defaulted to `false` for CLI-created configs, preventing mappings from
+  being saved.
+- **Block content pattern filtering**: `[[block]]` steps now correctly filter blocks
+  by content when both `start_pattern` and `pattern` are specified. For example,
+  `action = "keep_block"` with `pattern = "MAGIC"` now only keeps blocks containing
+  "MAGIC".
 - **Benchmark CI configuration**: Fixed `cargo bench` to specify benchmark target
   explicitly, preventing false failures from lib/bin targets
 

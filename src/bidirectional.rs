@@ -128,7 +128,7 @@ impl std::str::FromStr for Direction {
 }
 
 /// Configuration for bidirectional pipeline support.
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct BidirectionalConfig {
     /// Enable bidirectional mode
     #[serde(default)]
@@ -153,6 +153,18 @@ pub struct BidirectionalConfig {
 
 fn default_auto_save() -> bool {
     true
+}
+
+impl Default for BidirectionalConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            mapping_file: None,
+            direction: Direction::default(),
+            auto_save: true, // Default to true for CLI usage
+            strict_reverse: false,
+        }
+    }
 }
 
 impl BidirectionalConfig {

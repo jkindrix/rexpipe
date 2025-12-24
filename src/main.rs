@@ -527,6 +527,22 @@ fn build_cli() -> Command {
                 .action(ArgAction::SetTrue),
         )
         .arg(
+            Arg::new("fix")
+                .long("fix")
+                .help("Interactively apply lint suggestions (use with --lint)")
+                .long_help(
+                    "When used with --lint, interactively prompts to apply each suggestion.\n\
+                     For each applicable fix, you'll be asked:\n\
+                       [y] Apply this fix\n\
+                       [n] Skip this fix\n\
+                       [a] Apply all remaining fixes\n\
+                       [q] Quit without further changes\n\n\
+                     A backup of the original file is created with .bak extension."
+                )
+                .action(ArgAction::SetTrue)
+                .requires("lint"),
+        )
+        .arg(
             Arg::new("preset")
                 .long("preset")
                 .value_name("NAME")
@@ -851,24 +867,22 @@ fn build_cli() -> Command {
         .arg(
             Arg::new("library")
                 .long("library")
-                .value_name("COMMAND")
-                .help("Pattern library operations: list, search, info, install, init")
+                .value_names(["COMMAND", "ARG"])
+                .num_args(1..=2)
+                .help("Pattern library operations: list, search <query>, info <name>, install <url>, init")
                 .long_help(
                     "Pattern library ecosystem commands:\n\
                      - list              List all available pattern libraries\n\
-                     - search QUERY      Search for patterns matching QUERY\n\
-                     - info PATTERN      Show detailed info about a pattern\n\
-                     - install URL       Install a pattern library from URL\n\
+                     - search <query>    Search for patterns matching query\n\
+                     - info <name>       Show detailed info about a pattern\n\
+                     - install <url>     Install a pattern library from URL\n\
                      - init              Create a new pattern library template\n\
-                     - registry          Show community pattern registry info"
+                     - registry          Show community pattern registry info\n\n\
+                     Examples:\n\
+                       --library list\n\
+                       --library search email\n\
+                       --library info uuid"
                 ),
-        )
-        .arg(
-            Arg::new("library-arg")
-                .long("library-arg")
-                .value_name("ARG")
-                .help("Additional argument for --library commands (e.g., search query)")
-                .requires("library"),
         )
         .arg(
             Arg::new("help-topic")
@@ -1697,8 +1711,10 @@ fn run_application(matches: &clap::ArgMatches) -> Result<()> {
     }
 
     // Handle pattern library commands (--library)
-    if let Some(command) = matches.get_one::<String>("library") {
-        let arg = matches.get_one::<String>("library-arg");
+    if let Some(values) = matches.get_many::<String>("library") {
+        let args: Vec<&String> = values.collect();
+        let command = args[0];
+        let arg = args.get(1).copied();
         return run_library_command(command, arg);
     }
 
@@ -3864,6 +3880,8 @@ fn validate_config_file(matches: &clap::ArgMatches) -> Result<()> {
 
 /// Lint a pipeline configuration file and provide suggestions.
 fn lint_config_file(matches: &clap::ArgMatches) -> Result<()> {
+    use std::io::{Write, stdin, stdout};
+
     let config_path = matches
         .get_one::<String>("config")
         .ok_or_else(|| anyhow!("--lint requires a config file (-c/--config)"))?;
@@ -3872,6 +3890,8 @@ fn lint_config_file(matches: &clap::ArgMatches) -> Result<()> {
     if !path.exists() {
         return Err(anyhow!("Config file not found: {}", config_path));
     }
+
+    let interactive_fix = matches.get_flag("fix");
 
     // Read raw content for analysis
     let content =
@@ -4024,11 +4044,13 @@ fn lint_config_file(matches: &clap::ArgMatches) -> Result<()> {
         if let Some(ref name) = config.name {
             println!("  Name: {}", name);
         }
-        Ok(())
-    } else {
-        println!("Found {} suggestions:\n", suggestions.len());
+        return Ok(());
+    }
 
-        // Group by category
+    println!("Found {} suggestions:\n", suggestions.len());
+
+    if !interactive_fix {
+        // Non-interactive: just show grouped suggestions
         let mut by_category: std::collections::HashMap<&str, Vec<(&str, &str)>> =
             std::collections::HashMap::new();
         for (cat, issue, suggestion) in &suggestions {
@@ -4048,12 +4070,156 @@ fn lint_config_file(matches: &clap::ArgMatches) -> Result<()> {
         }
 
         println!(
-            "Tip: These are suggestions, not errors. The config is valid and will work correctly."
+            "Tip: Use --lint --fix to interactively apply suggestions."
         );
-
-        // Return success even with suggestions (they're not errors)
-        Ok(())
+        return Ok(());
     }
+
+    // Interactive fix mode
+    println!("Interactive fix mode. For each suggestion:");
+    println!("  [y] Apply  [n] Skip  [a] Apply all  [q] Quit\n");
+
+    // Create backup
+    let backup_path = format!("{}.bak", config_path);
+    std::fs::copy(path, &backup_path)
+        .map_err(|e| anyhow!("Failed to create backup: {}", e))?;
+    println!("Created backup: {}\n", backup_path);
+
+    let mut modified_content = content.clone();
+    let mut apply_all = false;
+    let mut fixes_applied = 0;
+
+    for (idx, (category, issue, suggestion)) in suggestions.iter().enumerate() {
+        println!("[{}/{}] {} - {}", idx + 1, suggestions.len(), category, issue);
+        println!("      Suggestion: {}", suggestion);
+
+        // Determine if this is a fixable suggestion and what the fix is
+        let fix_result = determine_fix(category, issue, suggestion, &modified_content);
+
+        if let Some((old_text, new_text, description)) = fix_result {
+            print!("      Fix: {} [y/n/a/q]? ", description);
+            stdout().flush()?;
+
+            let response = if apply_all {
+                println!("y (auto)");
+                'y'
+            } else {
+                let mut input = String::new();
+                stdin().read_line(&mut input)?;
+                input.trim().chars().next().unwrap_or('n')
+            };
+
+            match response {
+                'y' | 'Y' => {
+                    modified_content = modified_content.replace(&old_text, &new_text);
+                    fixes_applied += 1;
+                    println!("      ✓ Applied\n");
+                }
+                'a' | 'A' => {
+                    apply_all = true;
+                    modified_content = modified_content.replace(&old_text, &new_text);
+                    fixes_applied += 1;
+                    println!("      ✓ Applied (will apply all remaining)\n");
+                }
+                'q' | 'Q' => {
+                    println!("      Quitting...\n");
+                    break;
+                }
+                _ => {
+                    println!("      ✗ Skipped\n");
+                }
+            }
+        } else {
+            println!("      (Manual fix required - cannot auto-apply)\n");
+        }
+    }
+
+    // Write the modified content if any fixes were applied
+    if fixes_applied > 0 {
+        std::fs::write(path, &modified_content)
+            .map_err(|e| anyhow!("Failed to write fixed config: {}", e))?;
+        println!("Applied {} fix(es). Original saved to {}", fixes_applied, backup_path);
+    } else {
+        // Remove backup if no changes were made
+        let _ = std::fs::remove_file(&backup_path);
+        println!("No fixes applied. Backup removed.");
+    }
+
+    Ok(())
+}
+
+/// Determine if a lint suggestion can be automatically fixed.
+/// Returns Some((old_text, new_text, description)) if fixable, None otherwise.
+fn determine_fix(category: &str, issue: &str, _suggestion: &str, content: &str) -> Option<(String, String, String)> {
+    // Extract step number from issue string like "Step 3: ..." or "'name' (step 3): ..."
+    let step_pattern = regex::Regex::new(r"(?:step )?(\d+)").ok()?;
+    let step_num: usize = step_pattern
+        .captures(issue)
+        .and_then(|c| c.get(1))
+        .and_then(|m| m.as_str().parse().ok())?;
+
+    match category {
+        "Shorthand" if issue.contains("Uses flags = [\"i\"]") => {
+            // Find the step section and replace flags = ["i"] with ignore_case = true
+            // This is a simple text replacement within the step
+            if let Some(flags_match) = find_in_step(content, step_num, r#"flags = ["i"]"#) {
+                Some((
+                    flags_match,
+                    "ignore_case = true".to_string(),
+                    "Replace flags = [\"i\"] with ignore_case = true".to_string(),
+                ))
+            } else {
+                None
+            }
+        }
+        "Shorthand" if issue.contains("pattern + action = \"drop_line\"") => {
+            // This requires restructuring the step - more complex
+            None // Skip for now - requires TOML restructuring
+        }
+        "Shorthand" if issue.contains("pattern + action = \"keep_line\"") => {
+            // This requires restructuring the step - more complex
+            None // Skip for now - requires TOML restructuring
+        }
+        _ => None,
+    }
+}
+
+/// Find a pattern within a specific step section of the TOML content.
+fn find_in_step(content: &str, step_num: usize, pattern: &str) -> Option<String> {
+    // Find the nth step section (accounting for shorthand sections too)
+    let step_headers = [
+        "[[step]]", "[[filter]]", "[[substitute]]", "[[extract]]",
+        "[[validate]]", "[[transform]]", "[[block]]",
+    ];
+
+    let mut current_step = 0;
+    let mut in_target_step = false;
+    let mut step_start = 0;
+
+    for (line_idx, line) in content.lines().enumerate() {
+        let trimmed = line.trim();
+
+        // Check if this is a step header
+        if step_headers.iter().any(|h| trimmed.starts_with(h)) {
+            current_step += 1;
+            if current_step == step_num {
+                in_target_step = true;
+                step_start = line_idx;
+            } else if in_target_step {
+                // We've passed the target step
+                break;
+            }
+        }
+
+        if in_target_step && line.contains(pattern) {
+            return Some(pattern.to_string());
+        }
+    }
+
+    // Also check if pattern is at step_start position (unlikely but possible)
+    let _ = step_start;
+
+    None
 }
 
 /// Get a pre-built pipeline preset configuration.
@@ -5502,8 +5668,8 @@ fn run_conventional_commits_validation(matches: &clap::ArgMatches) -> Result<()>
         "revert",
     ];
 
-    // Parse type
-    let type_end = first_line.find(['(', ':', '!']);
+    // Parse type - use explicit closure to find first delimiter
+    let type_end = first_line.find(|c: char| c == '(' || c == ':' || c == '!');
     let commit_type = match type_end {
         Some(idx) => &first_line[..idx],
         None => {
@@ -6008,6 +6174,7 @@ fn run_why_mode(
 ///
 /// This mode processes the input and traces each line that matches the given pattern
 /// but was dropped from the output, showing which step caused the drop.
+/// Output is streamed as lines are processed for real-time feedback.
 fn run_why_dropped_mode(
     config: &PipelineConfig,
     input: Box<dyn io::BufRead>,
@@ -6022,75 +6189,97 @@ fn run_why_dropped_mode(
     let why_regex = Regex::new(why_pattern)
         .map_err(|e| anyhow::anyhow!("Invalid --why-dropped pattern '{}': {}", why_pattern, e))?;
 
-    // Read all input lines into memory (we need to track them)
-    let mut input_lines: Vec<(usize, String)> = Vec::new();
-    for (idx, line) in input.lines().enumerate() {
-        input_lines.push((idx + 1, line?));
-    }
+    eprintln!("=== Streaming Dropped Lines Analysis ===");
+    eprintln!("Pattern: '{}'\n", why_pattern);
 
-    // Create a new processor that tracks dropped lines
-    let mut processor = StreamProcessor::new(config.clone())?;
-    processor.set_show_dropped(false); // We'll handle this ourselves
-
-    // Track which lines were dropped and by which step
-    // We do this by processing each line individually and checking the result
+    // Track which lines were dropped and by which step (for summary)
     let mut dropped_lines: Vec<(usize, String, usize, String)> = Vec::new(); // (line_num, content, step_idx, step_name)
+    let mut lines_checked = 0u64;
+    let mut lines_matched_pattern = 0u64;
 
-    for (line_num, line) in &input_lines {
+    // Process lines one at a time, streaming output
+    for (idx, line_result) in input.lines().enumerate() {
+        let line_num = idx + 1;
+        let line = line_result?;
+        lines_checked += 1;
+
         // Check if this line matches the pattern
-        if why_regex.is_match(line) {
-            // Process this single line to see if it survives
-            let mut single_input = std::io::Cursor::new(format!("{}\n", line));
-            let mut output_buffer = Vec::new();
+        if !why_regex.is_match(&line) {
+            continue;
+        }
 
-            // Create a fresh processor for each line to isolate step tracking
-            let mut single_processor = StreamProcessor::new(config.clone())?;
-            let result = single_processor.process_stream(&mut single_input, &mut output_buffer)?;
+        lines_matched_pattern += 1;
 
-            // If line was dropped, find which step dropped it
-            if result.lines_output == 0 && result.lines_processed > 0 {
-                // Find the step that dropped this line (first step with lines_dropped > 0)
-                let mut dropped_by_step = None;
-                let mut dropped_by_name = String::from("unknown");
+        // Process this single line to see if it survives
+        let mut single_input = std::io::Cursor::new(format!("{}\n", line));
+        let mut output_buffer = Vec::new();
 
-                for step_result in &result.step_results {
-                    if step_result.lines_dropped > 0 {
-                        dropped_by_step = Some(step_result.step_index);
-                        // Get step name
-                        if let Some(step) = config.step.get(step_result.step_index) {
-                            dropped_by_name = step.name.clone().unwrap_or_else(|| {
-                                format!("step {} ({:?})", step_result.step_index + 1, step.step_type)
-                            });
-                        }
-                        break;
+        // Create a fresh processor for each line to isolate step tracking
+        let mut single_processor = StreamProcessor::new(config.clone())?;
+        let result = single_processor.process_stream(&mut single_input, &mut output_buffer)?;
+
+        // If line was dropped, find which step dropped it
+        if result.lines_output == 0 && result.lines_processed > 0 {
+            // Find the step that dropped this line (first step with lines_dropped > 0)
+            let mut dropped_by_step = None;
+            let mut dropped_by_name = String::from("unknown");
+            let mut pattern_preview = String::new();
+
+            for step_result in &result.step_results {
+                if step_result.lines_dropped > 0 {
+                    dropped_by_step = Some(step_result.step_index);
+                    // Get step name and pattern
+                    if let Some(step) = config.step.get(step_result.step_index) {
+                        dropped_by_name = step.name.clone().unwrap_or_else(|| {
+                            format!("step {} ({:?})", step_result.step_index + 1, step.step_type)
+                        });
+                        pattern_preview = if step.pattern.len() > 30 {
+                            format!("{}...", &step.pattern[..27])
+                        } else {
+                            step.pattern.clone()
+                        };
                     }
+                    break;
                 }
+            }
 
-                if let Some(step_idx) = dropped_by_step {
-                    dropped_lines.push((*line_num, line.clone(), step_idx, dropped_by_name));
-                }
+            if let Some(step_idx) = dropped_by_step {
+                // Stream output immediately
+                let content_preview = if line.len() > 60 {
+                    format!("{}...", &line[..57])
+                } else {
+                    line.clone()
+                };
+                eprintln!(
+                    "[DROPPED] Line {}: '{}' → by '{}' (pattern: {})",
+                    line_num, content_preview, dropped_by_name, pattern_preview
+                );
+
+                // Also collect for summary
+                dropped_lines.push((line_num, line.clone(), step_idx, dropped_by_name));
             }
         }
     }
 
-    // Output results
+    // Output summary
+    eprintln!();
+
     if dropped_lines.is_empty() {
-        eprintln!(
-            "No lines matching pattern '{}' were dropped by the pipeline.",
-            why_pattern
-        );
-        eprintln!("Either all matching lines passed through, or no lines matched the pattern.");
+        eprintln!("=== Summary ===");
+        eprintln!("Lines checked: {}", lines_checked);
+        eprintln!("Lines matching '{}': {}", why_pattern, lines_matched_pattern);
+        eprintln!("Lines dropped: 0");
+        eprintln!("\nNo matching lines were dropped. All {} matching lines passed through.", lines_matched_pattern);
         return Ok(());
     }
 
-    eprintln!("=== Dropped Lines Analysis ===");
-    eprintln!(
-        "Found {} lines matching '{}' that were dropped:\n",
-        dropped_lines.len(),
-        why_pattern
-    );
+    eprintln!("=== Summary ===");
+    eprintln!("Lines checked: {}", lines_checked);
+    eprintln!("Lines matching '{}': {}", why_pattern, lines_matched_pattern);
+    eprintln!("Lines dropped: {}", dropped_lines.len());
+    eprintln!();
 
-    // Group by step for summary
+    // Group by step for per-step breakdown
     let mut by_step: HashMap<usize, Vec<(usize, String)>> = HashMap::new();
     for (line_num, content, step_idx, _) in &dropped_lines {
         by_step
@@ -6099,40 +6288,22 @@ fn run_why_dropped_mode(
             .push((*line_num, content.clone()));
     }
 
-    // Show per-step breakdown
+    // Show per-step breakdown (condensed since we already streamed details)
+    eprintln!("Per-step breakdown:");
     for (step_idx, lines) in by_step.iter() {
         let step = &config.step[*step_idx];
         let step_name = step.name.as_deref().unwrap_or("unnamed");
         let step_type = format!("{:?}", step.step_type);
-        let pattern_preview = if step.pattern.len() > 50 {
-            format!("{}...", &step.pattern[..47])
-        } else {
-            step.pattern.clone()
-        };
 
         eprintln!(
-            "--- Step {} '{}' [{}] ---",
+            "  Step {} '{}' [{}]: dropped {} line(s)",
             step_idx + 1,
             step_name,
-            step_type
+            step_type,
+            lines.len()
         );
-        eprintln!("Pattern: {}", pattern_preview);
-        eprintln!("Dropped {} lines:", lines.len());
-
-        for (line_num, content) in lines.iter().take(10) {
-            let preview = if content.len() > 80 {
-                format!("{}...", &content[..77])
-            } else {
-                content.clone()
-            };
-            eprintln!("  Line {}: {}", line_num, preview);
-        }
-
-        if lines.len() > 10 {
-            eprintln!("  ... and {} more lines", lines.len() - 10);
-        }
-        eprintln!();
     }
+    eprintln!();
 
     // Provide actionable suggestions
     eprintln!("=== Suggestions ===");
