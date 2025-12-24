@@ -90,7 +90,6 @@ use log::{debug, trace};
 use regex::{Regex, RegexBuilder};
 use std::collections::{HashMap, VecDeque};
 use std::io::{BufRead, Write};
-#[cfg(feature = "pcre")]
 use std::sync::LazyLock;
 use std::time::Instant;
 
@@ -98,6 +97,26 @@ use std::time::Instant;
 #[cfg(feature = "pcre")]
 static REPETITION_REGEX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\{(\d+)\}").expect("invalid repetition regex"));
+
+/// Pre-compiled regex for stripping ANSI escape sequences.
+/// Matches CSI sequences (e.g., colors), OSC sequences, and simple escape sequences.
+static ANSI_ESCAPE_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"(?x)
+        \x1b\[[0-9;]*[A-Za-z]     |  # CSI sequences (colors, cursor, etc.)
+        \x1b\][^\x07]*\x07        |  # OSC sequences (title, etc.)
+        \x1b\][^\x1b]*\x1b\\      |  # OSC with ST terminator
+        \x1b[PX^_][^\x1b]*\x1b\\  |  # DCS, SOS, PM, APC sequences
+        \x1b.                        # Simple two-byte escape sequences
+        ",
+    )
+    .expect("invalid ANSI escape regex")
+});
+
+/// Strip ANSI escape sequences from a string.
+fn strip_ansi_codes(s: &str) -> std::borrow::Cow<'_, str> {
+    ANSI_ESCAPE_REGEX.replace_all(s, "")
+}
 
 #[cfg(feature = "pcre")]
 use fancy_regex::Regex as FancyRegex;
@@ -1903,18 +1922,36 @@ impl StreamProcessor {
 
         let max_line_length = self.config.settings.max_line_length;
         let max_line_action = self.config.settings.max_line_action;
+        let sample_limit = self.config.settings.sample_limit;
+        let strip_ansi = self.config.settings.strip_ansi;
 
         // Check if we should suppress normal output (finalize-only mode)
         let suppress_output = self.config.finalize.suppress_output;
 
         while reader.read_line(&mut line_buffer)? > 0 {
             line_number += 1;
+
+            // Stop processing if sample limit reached
+            if sample_limit > 0 && line_number > sample_limit {
+                break;
+            }
+
             self.stats.lines_read += 1;
             self.stats.bytes_processed += line_buffer.len() as u64;
 
             // Update finalize counters with original line content (before processing)
             if let Some(ref mut finalize_state) = self.finalize_state {
                 finalize_state.process_line(&line_buffer);
+            }
+
+            // Strip ANSI escape sequences if configured
+            if strip_ansi {
+                let stripped = strip_ansi_codes(&line_buffer);
+                // Only reallocate if there were ANSI codes to strip
+                if let std::borrow::Cow::Owned(s) = stripped {
+                    line_buffer.clear();
+                    line_buffer.push_str(&s);
+                }
             }
 
             // Check for lines exceeding the maximum length

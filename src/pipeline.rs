@@ -241,6 +241,20 @@ pub struct PipelineSettings {
     /// Default: false
     #[serde(default)]
     pub invert_match: bool,
+    /// Maximum number of input lines to process (0 = no limit).
+    ///
+    /// When set, only the first N lines of input will be processed.
+    /// Useful for quick iteration during pipeline development.
+    /// Default: 0 (no limit).
+    #[serde(default)]
+    pub sample_limit: u64,
+    /// Strip ANSI escape sequences from input before processing.
+    ///
+    /// When true, ANSI color codes and other escape sequences are removed
+    /// from each line before pattern matching. Useful for processing logs
+    /// from colored output. Default: false.
+    #[serde(default)]
+    pub strip_ansi: bool,
 }
 
 impl Default for PipelineSettings {
@@ -260,6 +274,8 @@ impl Default for PipelineSettings {
             shell_timeout_secs: default_shell_timeout(),
             regex_size_limit: default_regex_size_limit(),
             invert_match: false,
+            sample_limit: 0,
+            strip_ansi: false,
         }
     }
 }
@@ -338,6 +354,16 @@ impl PipelineSettings {
                 self.invert_match
             } else {
                 base.invert_match
+            },
+            sample_limit: if self.sample_limit != default.sample_limit {
+                self.sample_limit
+            } else {
+                base.sample_limit
+            },
+            strip_ansi: if self.strip_ansi != default.strip_ansi {
+                self.strip_ansi
+            } else {
+                base.strip_ansi
             },
         }
     }
@@ -640,6 +666,10 @@ pub struct PipelineStep {
     /// Deduplicate extracted values (only unique values are output)
     #[serde(default)]
     pub deduplicate: Option<bool>,
+    /// Shorthand for case-insensitive matching: `ignore_case = true`
+    /// Equivalent to `flags = ["i"]`
+    #[serde(default)]
+    pub ignore_case: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -998,7 +1028,7 @@ pub struct BlockContextConfig {
 /// flags = ["pcre"]  # Enable PCRE for this step only
 /// action = "keep_line"
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RegexFlag {
     /// Apply replacement globally (all matches, not just first)
@@ -1151,6 +1181,14 @@ impl PipelineConfig {
                 // Set step type to Filter if not already set
                 if step.step_type == StepType::default() {
                     step.step_type = StepType::Filter;
+                }
+            }
+
+            // Process `ignore_case = true` shorthand → adds CaseInsensitive flag
+            if let Some(true) = step.ignore_case.take() {
+                let flags = step.flags.get_or_insert_with(Vec::new);
+                if !flags.contains(&RegexFlag::CaseInsensitive) {
+                    flags.push(RegexFlag::CaseInsensitive);
                 }
             }
         }
@@ -1339,6 +1377,7 @@ impl PipelineConfig {
             output_template: None,
             first_only: None,
             deduplicate: None,
+            ignore_case: None,
         };
 
         PipelineConfig {
@@ -1937,6 +1976,77 @@ impl PipelineResult {
         }
 
         summary
+    }
+
+    /// Generate a JSON statistics output for machine consumption
+    pub fn stats_json(&self) -> String {
+        use serde_json::json;
+        use std::collections::BTreeMap;
+
+        let reduction_pct = if self.lines_processed > 0 {
+            ((self.lines_processed - self.lines_output) as f64 / self.lines_processed as f64)
+                * 100.0
+        } else {
+            0.0
+        };
+
+        // Aggregate step stats by step index
+        struct StepAgg {
+            name: Option<String>,
+            step_type: StepType,
+            pattern: String,
+            matches: u64,
+            dropped: u64,
+            transformations: u64,
+        }
+
+        let mut step_agg: BTreeMap<usize, StepAgg> = BTreeMap::new();
+
+        for r in &self.step_results {
+            step_agg
+                .entry(r.step_index)
+                .and_modify(|agg| {
+                    agg.matches += r.matches;
+                    agg.dropped += r.lines_dropped;
+                    agg.transformations += r.transformations;
+                })
+                .or_insert(StepAgg {
+                    name: r.name.clone(),
+                    step_type: r.step_type.clone(),
+                    pattern: r.pattern.clone(),
+                    matches: r.matches,
+                    dropped: r.lines_dropped,
+                    transformations: r.transformations,
+                });
+        }
+
+        let steps: Vec<_> = step_agg
+            .iter()
+            .map(|(idx, agg)| {
+                json!({
+                    "step": idx + 1,
+                    "name": agg.name,
+                    "type": format!("{:?}", agg.step_type),
+                    "pattern": agg.pattern,
+                    "matches": agg.matches,
+                    "dropped": agg.dropped,
+                    "transformations": agg.transformations
+                })
+            })
+            .collect();
+
+        let stats = json!({
+            "input_lines": self.lines_processed,
+            "output_lines": self.lines_output,
+            "dropped_lines": self.lines_dropped,
+            "reduction_percent": (reduction_pct * 10.0).round() / 10.0,
+            "matches": self.matches_found,
+            "transformations": self.transformations_applied,
+            "errors": self.errors.len(),
+            "steps": steps
+        });
+
+        serde_json::to_string_pretty(&stats).unwrap_or_else(|_| "{}".to_string())
     }
 }
 
