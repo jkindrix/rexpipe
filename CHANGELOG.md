@@ -24,6 +24,69 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   shows which step dropped each line for easier pipeline debugging
 - **Comprehensive help sections**: Added SHORTHAND SYNTAX, FILTER ACTIONS,
   PER-STEP FLAGS, CONFIG COMPOSITION, and DEBUGGING sections to `--help` output
+- **Processing statistics (`--stats`)**: Show summary of lines processed, output,
+  dropped, with per-step breakdowns for filter debugging
+- **Show dropped lines (`--show-dropped`)**: Debug mode that outputs dropped lines
+  to stderr, showing which step filtered each line
+- **Built-in patterns (`${builtin:*}`)**: Use common regex patterns without external
+  library files. Available patterns: email, ipv4, ipv6, uuid, url, date_iso, date_us,
+  time_24h, datetime_iso, phone_us, ssn, credit_card, api_key, base64, log_level,
+  timestamp_syslog, json_object, semver
+- **CI exit codes (`--fail-if-match`, `--fail-if-no-match`)**: Control exit code
+  based on match results for CI/CD pipeline integration
+- **Default action shorthand (`drop`, `keep`)**: Use `drop = "pattern"` or
+  `keep = "pattern"` instead of separate `pattern` and `action` fields.
+  Supports arrays for multiple patterns: `drop = ["pattern1", "pattern2"]`
+- **Pattern aliases (`[aliases]`)**: Define reusable patterns inline in your config
+  file using the `[aliases]` section, then reference them as `${alias_name}`
+  ```toml
+  [aliases]
+  noise = "(^\\[OK\\]|^\\[INFO\\])"
+  [[filter]]
+  pattern = "${noise}"
+  action = "drop_line"
+  ```
+- **Invert match (`--invert-match`)**: Invert filter behavior like `grep -v`.
+  Keep non-matching lines and drop matching lines
+- **GitHub Actions annotations (`--github-annotations`)**: Output matches in
+  GitHub Actions workflow command format for CI integration
+  ```
+  ::warning file=src/main.rs,line=42::Potential issue found
+  ```
+  Supports levels: `error`, `warning`, `notice`
+- **Line numbers (`-n`, `--line-numbers`)**: Show line numbers in output
+  with format `N: line content`
+- **List built-in patterns (`--list-builtins`)**: Display all available built-in
+  patterns grouped by category (identity, datetime, logging, other) with example usage
+- **Step naming (`name = "..."`)**: Add human-readable names to pipeline steps for
+  clearer trace output and statistics. Names appear in `--stats` and `-vvv` trace output
+  as `DROPPED by 'step-name' (step N)` instead of just step numbers
+- **Feature tips (`--tips`)**: Show contextual tips about related features after
+  processing. Helps users discover features they might not know about
+- **Help topics (`--help-topic`)**: Detailed help on specific topics:
+  - `rexpipe --help-topic list` - List all topics
+  - `rexpipe --help-topic filters` - Filter actions and behavior
+  - `rexpipe --help-topic patterns` - Pattern syntax and built-ins
+  - `rexpipe --help-topic shorthand` - Shorthand config syntax
+  - `rexpipe --help-topic config` - Configuration file format
+  - `rexpipe --help-topic ci` - CI/CD integration features
+  - `rexpipe --help-topic debugging` - Debugging and troubleshooting
+- **Usage examples (`--examples`)**: Show categorized usage examples:
+  - `rexpipe --examples basic` - Basic patterns and substitutions
+  - `rexpipe --examples filter` - Filter operations
+  - `rexpipe --examples substitute` - Substitution patterns
+  - `rexpipe --examples config` - Configuration file examples
+  - `rexpipe --examples ci` - CI/CD integration examples
+  - `rexpipe --examples all` - Show all examples
+- **Pattern negation (`not_pattern`)**: Exclude lines matching a secondary pattern
+  even if they match the primary pattern. Useful for filtering with exceptions:
+  ```toml
+  [[filter]]
+  pattern = "ERROR"
+  not_pattern = "expected"
+  action = "keep_line"
+  ```
+  This keeps all ERROR lines except those containing "expected".
 
 ### Fixed
 
