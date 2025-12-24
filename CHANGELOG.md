@@ -87,6 +87,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   action = "keep_line"
   ```
   This keeps all ERROR lines except those containing "expected".
+- **Dead pattern detection (`--warn-unused`)**: Warn about patterns that matched 0 lines,
+  helping identify potentially dead patterns in your pipeline configuration
+- **JSON stats output (`--stats-json`)**: Output processing statistics in JSON format
+  for consumption by CI dashboards, monitoring tools, or post-processing scripts.
+  Aggregates stats per step for clean machine-readable output
+- **Sample mode (`--sample N`, `-S`)**: Only process the first N lines of input.
+  Useful for quick iteration during pipeline development without processing entire files
+- **ANSI stripping (`--strip-ansi`)**: Automatically strip ANSI escape sequences
+  (color codes, cursor movement) from input before pattern matching. Essential for
+  processing logs from colored terminal output
+- **Case-insensitive shorthand (`ignore_case = true`)**: Convenient shorthand on step
+  definitions equivalent to `flags = ["i"]`. Makes case-insensitive patterns more readable:
+  ```toml
+  [[filter]]
+  pattern = "error"
+  ignore_case = true
+  action = "keep_line"
+  ```
+- **Why query mode (`--why PATTERN`)**: Debug mode to trace why specific lines appear
+  in output. Shows which pipeline steps processed each matching line and what
+  transformations were applied. Invaluable for understanding complex pipelines
 
 ### Fixed
 
