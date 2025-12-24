@@ -667,10 +667,41 @@ fn build_cli() -> Command {
                 .action(ArgAction::SetTrue),
         )
         .arg(
+            Arg::new("warn-unused")
+                .long("warn-unused")
+                .help("Warn about patterns that matched 0 lines (dead patterns)")
+                .action(ArgAction::SetTrue),
+        )
+        .arg(
+            Arg::new("stats-json")
+                .long("stats-json")
+                .help("Output stats in JSON format (implies --stats)")
+                .action(ArgAction::SetTrue),
+        )
+        .arg(
+            Arg::new("sample")
+                .long("sample")
+                .short('S')
+                .value_name("N")
+                .help("Only process first N lines (for fast iteration during development)")
+                .value_parser(clap::value_parser!(u64)),
+        )
+        .arg(
             Arg::new("show-dropped")
                 .long("show-dropped")
                 .help("Show dropped lines to stderr (for debugging filters)")
                 .action(ArgAction::SetTrue),
+        )
+        .arg(
+            Arg::new("why")
+                .long("why")
+                .value_name("PATTERN")
+                .help("Trace why lines matching PATTERN appear in output")
+                .long_help(
+                    "Debug mode to trace why specific lines appear in the output. \
+                     Shows which pipeline steps processed each matching line and what \
+                     transformations were applied. Useful for understanding complex pipelines."
+                ),
         )
         .arg(
             Arg::new("tips")
@@ -1014,6 +1045,18 @@ fn build_cli() -> Command {
                     "Preserve original line endings when processing files. By default, all \
                      output uses Unix-style LF line endings. With this flag, lines that had \
                      CRLF (Windows) endings in the input will have CRLF endings in the output."
+                )
+                .action(ArgAction::SetTrue),
+        )
+        // === Input Preprocessing ===
+        .arg(
+            Arg::new("strip-ansi")
+                .long("strip-ansi")
+                .help("Strip ANSI escape sequences (colors) from input before processing")
+                .long_help(
+                    "Remove ANSI escape sequences (color codes, cursor movement, etc.) from \
+                     input lines before pattern matching. Useful when processing logs from \
+                     colored terminal output. The stripped output will not contain any ANSI codes."
                 )
                 .action(ArgAction::SetTrue),
         )
@@ -1747,6 +1790,10 @@ fn build_pipeline_settings(matches: &clap::ArgMatches) -> PipelineSettings {
         max_line_action,
         // --invert or -v inverts match behavior (like grep -v)
         invert_match: matches.get_flag("invert"),
+        // --sample N limits input to first N lines
+        sample_limit: matches.get_one::<u64>("sample").copied().unwrap_or(0),
+        // --strip-ansi removes ANSI escape sequences from input
+        strip_ansi: matches.get_flag("strip-ansi"),
         // Use defaults for new configurable settings
         ..Default::default()
     }
@@ -2671,6 +2718,7 @@ fn load_pipeline_config(
             output_template: None,
             first_only: None,
             deduplicate: None,
+            ignore_case: None,
         };
 
         // Build bidirectional config from CLI flags
@@ -3749,6 +3797,11 @@ fn run_processing_mode(
         processor.set_show_dropped(true);
     }
 
+    // Handle --why trace mode
+    if let Some(why_pattern) = matches.get_one::<String>("why") {
+        return run_why_mode(config, input, why_pattern, matches);
+    }
+
     // Check if syntax-aware processing is needed (requires tree-sitter feature)
     #[cfg(feature = "tree-sitter")]
     let use_syntax_aware = processor.has_syntax_aware_steps();
@@ -3903,8 +3956,42 @@ fn run_processing_mode(
     }
 
     // Output stats summary if requested
-    if matches.get_flag("stats") {
-        eprintln!("\n{}", result.stats_summary());
+    let stats_json = matches.get_flag("stats-json");
+    if matches.get_flag("stats") || stats_json {
+        if stats_json {
+            eprintln!("\n{}", result.stats_json());
+        } else {
+            eprintln!("\n{}", result.stats_summary());
+        }
+    }
+
+    // Warn about unused patterns (dead pattern detection)
+    // Aggregate step results by step index to get total matches per step
+    if matches.get_flag("warn-unused") {
+        use std::collections::HashMap;
+        let mut step_totals: HashMap<usize, (u64, u64, Option<String>)> = HashMap::new();
+
+        for step_result in &result.step_results {
+            let entry = step_totals
+                .entry(step_result.step_index)
+                .or_insert((0, 0, step_result.name.clone()));
+            entry.0 += step_result.matches;
+            entry.1 += step_result.transformations;
+        }
+
+        for (step_index, (total_matches, total_transforms, name)) in &step_totals {
+            // Warn if pattern never matched and never transformed
+            if *total_matches == 0 && *total_transforms == 0 {
+                let step_id = match name {
+                    Some(n) => format!("'{}' (step {})", n, step_index + 1),
+                    None => format!("Step {}", step_index + 1),
+                };
+                eprintln!(
+                    "Warning: {} pattern matched 0 lines (dead pattern?)",
+                    step_id
+                );
+            }
+        }
     }
 
     // Show feature tips if requested
@@ -5308,6 +5395,114 @@ fn generate_sample_from_pattern(pattern: &str, index: u32, rng: &mut impl rand::
     } else {
         sample
     }
+}
+
+/// Run --why trace mode: shows why lines matching a pattern appear in output.
+///
+/// This mode processes the input and traces each line that matches the given pattern,
+/// showing which pipeline steps processed it and how it was transformed.
+fn run_why_mode(
+    config: &PipelineConfig,
+    input: Box<dyn io::BufRead>,
+    why_pattern: &str,
+    _matches: &clap::ArgMatches,
+) -> Result<()> {
+    use regex::Regex;
+
+    // Compile the why pattern
+    let why_regex = Regex::new(why_pattern)
+        .map_err(|e| anyhow::anyhow!("Invalid --why pattern '{}': {}", why_pattern, e))?;
+
+    let mut processor = StreamProcessor::new(config.clone())?;
+
+    // Process all input and capture output
+    let mut output_buffer = Vec::new();
+    let result = processor.process_stream(input, &mut output_buffer)?;
+
+    let output_str = String::from_utf8_lossy(&output_buffer);
+
+    // Find lines in the output that match the why pattern
+    let mut found_any = false;
+    for (line_num, line) in output_str.lines().enumerate() {
+        if why_regex.is_match(line) {
+            found_any = true;
+            eprintln!("=== Line {} in output ===", line_num + 1);
+            eprintln!("Content: {}", line);
+            eprintln!();
+
+            // Show which steps processed this output
+            eprintln!("Pipeline processing trace:");
+            for (step_idx, step) in config.step.iter().enumerate() {
+                let step_name = step
+                    .name
+                    .as_deref()
+                    .map(|n| format!("'{}' ", n))
+                    .unwrap_or_default();
+                let step_type = format!("{:?}", step.step_type);
+                let pattern_preview = if step.pattern.len() > 40 {
+                    format!("{}...", &step.pattern[..37])
+                } else {
+                    step.pattern.clone()
+                };
+
+                // Find matching step result for this step
+                let step_stats: (u64, u64, u64) = result
+                    .step_results
+                    .iter()
+                    .filter(|r| r.step_index == step_idx)
+                    .fold((0, 0, 0), |acc, r| {
+                        (acc.0 + r.matches, acc.1 + r.lines_dropped, acc.2 + r.transformations)
+                    });
+
+                eprintln!(
+                    "  Step {} {}[{}]: pattern='{}' → {} matches, {} dropped, {} transforms",
+                    step_idx + 1,
+                    step_name,
+                    step_type,
+                    pattern_preview,
+                    step_stats.0,
+                    step_stats.1,
+                    step_stats.2
+                );
+            }
+            eprintln!();
+        }
+    }
+
+    if !found_any {
+        eprintln!(
+            "No output lines matched pattern '{}'. Try running without --why to see output.",
+            why_pattern
+        );
+    } else {
+        // Show overall stats
+        eprintln!("=== Summary ===");
+        eprintln!(
+            "Input: {} lines → Output: {} lines ({:.1}% reduction)",
+            result.lines_processed,
+            result.lines_output,
+            if result.lines_processed > 0 {
+                ((result.lines_processed - result.lines_output) as f64
+                    / result.lines_processed as f64)
+                    * 100.0
+            } else {
+                0.0
+            }
+        );
+    }
+
+    // Also print the matching output lines
+    if found_any {
+        eprintln!();
+        println!("--- Matching output lines ---");
+        for line in output_str.lines() {
+            if why_regex.is_match(line) {
+                println!("{}", line);
+            }
+        }
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
