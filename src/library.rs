@@ -119,8 +119,13 @@ pub fn is_url(path: &str) -> bool {
 pub fn fetch_url(url: &str) -> Result<String> {
     log::debug!("Fetching remote library: {}", url);
 
-    let response = ureq::get(url)
-        .timeout(std::time::Duration::from_secs(30))
+    let config = ureq::Agent::config_builder()
+        .timeout_global(Some(std::time::Duration::from_secs(30)))
+        .build();
+    let agent: ureq::Agent = config.into();
+
+    let response = agent
+        .get(url)
         .call()
         .map_err(|e| anyhow::anyhow!("Failed to fetch '{}': {}", url, e))?;
 
@@ -133,7 +138,8 @@ pub fn fetch_url(url: &str) -> Result<String> {
     }
 
     response
-        .into_string()
+        .into_body()
+        .read_to_string()
         .map_err(|e| anyhow::anyhow!("Failed to read response from '{}': {}", url, e))
 }
 

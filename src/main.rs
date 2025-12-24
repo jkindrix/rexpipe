@@ -5189,7 +5189,7 @@ fn run_test_data_generation(
 
     let use_json = matches.get_flag("json");
     let mut generated: Vec<String> = Vec::with_capacity(count as usize);
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
 
     // Extract patterns from steps (only steps with non-empty patterns)
     let patterns: Vec<(&str, Option<&str>)> = config
@@ -5205,7 +5205,7 @@ fn run_test_data_generation(
 
     for i in 0..count {
         // Pick a random pattern to generate from
-        let (pattern, description) = patterns[rng.gen_range(0..patterns.len())];
+        let (pattern, description) = patterns[rng.random_range(0..patterns.len())];
 
         // Generate a sample that matches the pattern
         // This is a simplified generator - for complex patterns, we generate approximations
@@ -5243,14 +5243,14 @@ fn generate_sample_from_pattern(pattern: &str, index: u32, rng: &mut impl rand::
     // Common pattern substitutions
     let sample = pattern
         // Digit patterns
-        .replace(r"\d+", &format!("{}", rng.gen_range(100..9999)))
-        .replace(r"\d{3}", &format!("{:03}", rng.gen_range(0..999)))
-        .replace(r"\d{4}", &format!("{:04}", rng.gen_range(0..9999)))
-        .replace(r"\d{2}", &format!("{:02}", rng.gen_range(0..99)))
-        .replace(r"\d", &format!("{}", rng.gen_range(0..9)))
+        .replace(r"\d+", &format!("{}", rng.random_range(100..9999)))
+        .replace(r"\d{3}", &format!("{:03}", rng.random_range(0..999)))
+        .replace(r"\d{4}", &format!("{:04}", rng.random_range(0..9999)))
+        .replace(r"\d{2}", &format!("{:02}", rng.random_range(0..99)))
+        .replace(r"\d", &format!("{}", rng.random_range(0..9)))
         // Word patterns
         .replace(r"\w+", &format!("word{}", index))
-        .replace(r"\w*", &format!("text{}", rng.gen_range(0..100)))
+        .replace(r"\w*", &format!("text{}", rng.random_range(0..100)))
         // Space patterns
         .replace(r"\s+", " ")
         .replace(r"\s*", " ")
@@ -5262,7 +5262,7 @@ fn generate_sample_from_pattern(pattern: &str, index: u32, rng: &mut impl rand::
         .replace(r"[a-zA-Z]+", &format!("Sample{}", index))
         .replace(r"[a-z]+", "example")
         .replace(r"[A-Z]+", "EXAMPLE")
-        .replace(r"[0-9]+", &format!("{}", rng.gen_range(1000..9999)))
+        .replace(r"[0-9]+", &format!("{}", rng.random_range(1000..9999)))
         // Email-like patterns
         .replace(
             r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}",
@@ -5273,8 +5273,8 @@ fn generate_sample_from_pattern(pattern: &str, index: u32, rng: &mut impl rand::
             r"\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}",
             &format!(
                 "192.168.{}.{}",
-                rng.gen_range(0..255),
-                rng.gen_range(1..255)
+                rng.random_range(0..255),
+                rng.random_range(1..255)
             ),
         )
         // UUID-like patterns
@@ -5282,11 +5282,11 @@ fn generate_sample_from_pattern(pattern: &str, index: u32, rng: &mut impl rand::
             r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
             &format!(
                 "{:08x}-{:04x}-{:04x}-{:04x}-{:012x}",
-                rng.gen_range(0u32..u32::MAX),
-                rng.gen_range(0u16..u16::MAX),
-                rng.gen_range(0u16..u16::MAX),
-                rng.gen_range(0u16..u16::MAX),
-                rng.gen_range(0u64..0xffffffffffff)
+                rng.random_range(0u32..u32::MAX),
+                rng.random_range(0u16..u16::MAX),
+                rng.random_range(0u16..u16::MAX),
+                rng.random_range(0u16..u16::MAX),
+                rng.random_range(0u64..0xffffffffffff)
             ),
         )
         // Quantifiers

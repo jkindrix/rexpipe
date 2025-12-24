@@ -3437,8 +3437,11 @@ impl StreamProcessor {
         let transformations = if processed != content { 1 } else { 0 };
 
         // Create result with basic stats
+        let lines_count = content.lines().count() as u64;
         let result = PipelineResult {
-            lines_processed: content.lines().count() as u64,
+            lines_processed: lines_count,
+            lines_output: lines_count,
+            lines_dropped: 0,
             matches_found: transformations, // Approximate: each transformation is a match
             transformations_applied: transformations,
             errors: Vec::new(),
