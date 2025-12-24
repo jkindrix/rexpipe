@@ -19,8 +19,8 @@ use rexpipe::json_schema;
 use rexpipe::library;
 use rexpipe::library::LibraryResolver;
 use rexpipe::pipeline::{
-    MaxLineAction, PipelineConfig, PipelineSettings, PipelineStep, RegexFlag, StepType,
-    TransformAction,
+    MaxLineAction, PipelineConfig, PipelineSettings, PipelineStep, RegexFlag, StepAction,
+    StepType, TransformAction,
 };
 use rexpipe::plugin::PluginRegistry;
 use rexpipe::processor::StreamProcessor;
@@ -742,6 +742,29 @@ fn build_cli() -> Command {
                 ),
         )
         .arg(
+            Arg::new("why-dropped")
+                .long("why-dropped")
+                .value_name("PATTERN")
+                .help("Trace why lines matching PATTERN were dropped from output")
+                .long_help(
+                    "Debug mode to trace why specific lines were dropped. Shows which \
+                     pipeline step caused the drop and what filter conditions were not met. \
+                     Useful for debugging filters that are too aggressive."
+                ),
+        )
+        .arg(
+            Arg::new("diff")
+                .long("diff")
+                .value_names(["CONFIG1", "CONFIG2"])
+                .num_args(2)
+                .help("Compare two pipeline configs and show behavioral differences")
+                .long_help(
+                    "Analyze two pipeline configurations and show how they differ in behavior. \
+                     Reports differences in steps, patterns, step order, and expected behavior. \
+                     Useful for understanding config changes or comparing different approaches."
+                ),
+        )
+        .arg(
             Arg::new("tips")
                 .long("tips")
                 .help("Show helpful tips about related features after processing")
@@ -824,6 +847,28 @@ fn build_cli() -> Command {
                 .long("list-builtins")
                 .help("List all built-in patterns available via ${builtin:name} syntax")
                 .action(ArgAction::SetTrue),
+        )
+        .arg(
+            Arg::new("library")
+                .long("library")
+                .value_name("COMMAND")
+                .help("Pattern library operations: list, search, info, install, init")
+                .long_help(
+                    "Pattern library ecosystem commands:\n\
+                     - list              List all available pattern libraries\n\
+                     - search QUERY      Search for patterns matching QUERY\n\
+                     - info PATTERN      Show detailed info about a pattern\n\
+                     - install URL       Install a pattern library from URL\n\
+                     - init              Create a new pattern library template\n\
+                     - registry          Show community pattern registry info"
+                ),
+        )
+        .arg(
+            Arg::new("library-arg")
+                .long("library-arg")
+                .value_name("ARG")
+                .help("Additional argument for --library commands (e.g., search query)")
+                .requires("library"),
         )
         .arg(
             Arg::new("help-topic")
@@ -1641,6 +1686,20 @@ fn run_application(matches: &clap::ArgMatches) -> Result<()> {
     // Handle config linting (--lint)
     if matches.get_flag("lint") {
         return lint_config_file(matches);
+    }
+
+    // Handle config diff (--diff)
+    if let Some(values) = matches.get_many::<String>("diff") {
+        let configs: Vec<&String> = values.collect();
+        if configs.len() == 2 {
+            return diff_configs(configs[0], configs[1]);
+        }
+    }
+
+    // Handle pattern library commands (--library)
+    if let Some(command) = matches.get_one::<String>("library") {
+        let arg = matches.get_one::<String>("library-arg");
+        return run_library_command(command, arg);
     }
 
     // Handle preset mode (--preset)
@@ -4237,6 +4296,11 @@ fn run_processing_mode(
         return run_why_mode(config, input, why_pattern, matches);
     }
 
+    // Handle --why-dropped trace mode
+    if let Some(why_pattern) = matches.get_one::<String>("why-dropped") {
+        return run_why_dropped_mode(config, input, why_pattern, matches);
+    }
+
     // Check if syntax-aware processing is needed (requires tree-sitter feature)
     #[cfg(feature = "tree-sitter")]
     let use_syntax_aware = processor.has_syntax_aware_steps();
@@ -5938,6 +6002,677 @@ fn run_why_mode(
     }
 
     Ok(())
+}
+
+/// Run --why-dropped trace mode: shows why lines matching a pattern were dropped.
+///
+/// This mode processes the input and traces each line that matches the given pattern
+/// but was dropped from the output, showing which step caused the drop.
+fn run_why_dropped_mode(
+    config: &PipelineConfig,
+    input: Box<dyn io::BufRead>,
+    why_pattern: &str,
+    _matches: &clap::ArgMatches,
+) -> Result<()> {
+    use regex::Regex;
+    use std::collections::HashMap;
+    use std::io::BufRead;
+
+    // Compile the why pattern
+    let why_regex = Regex::new(why_pattern)
+        .map_err(|e| anyhow::anyhow!("Invalid --why-dropped pattern '{}': {}", why_pattern, e))?;
+
+    // Read all input lines into memory (we need to track them)
+    let mut input_lines: Vec<(usize, String)> = Vec::new();
+    for (idx, line) in input.lines().enumerate() {
+        input_lines.push((idx + 1, line?));
+    }
+
+    // Create a new processor that tracks dropped lines
+    let mut processor = StreamProcessor::new(config.clone())?;
+    processor.set_show_dropped(false); // We'll handle this ourselves
+
+    // Track which lines were dropped and by which step
+    // We do this by processing each line individually and checking the result
+    let mut dropped_lines: Vec<(usize, String, usize, String)> = Vec::new(); // (line_num, content, step_idx, step_name)
+
+    for (line_num, line) in &input_lines {
+        // Check if this line matches the pattern
+        if why_regex.is_match(line) {
+            // Process this single line to see if it survives
+            let mut single_input = std::io::Cursor::new(format!("{}\n", line));
+            let mut output_buffer = Vec::new();
+
+            // Create a fresh processor for each line to isolate step tracking
+            let mut single_processor = StreamProcessor::new(config.clone())?;
+            let result = single_processor.process_stream(&mut single_input, &mut output_buffer)?;
+
+            // If line was dropped, find which step dropped it
+            if result.lines_output == 0 && result.lines_processed > 0 {
+                // Find the step that dropped this line (first step with lines_dropped > 0)
+                let mut dropped_by_step = None;
+                let mut dropped_by_name = String::from("unknown");
+
+                for step_result in &result.step_results {
+                    if step_result.lines_dropped > 0 {
+                        dropped_by_step = Some(step_result.step_index);
+                        // Get step name
+                        if let Some(step) = config.step.get(step_result.step_index) {
+                            dropped_by_name = step.name.clone().unwrap_or_else(|| {
+                                format!("step {} ({:?})", step_result.step_index + 1, step.step_type)
+                            });
+                        }
+                        break;
+                    }
+                }
+
+                if let Some(step_idx) = dropped_by_step {
+                    dropped_lines.push((*line_num, line.clone(), step_idx, dropped_by_name));
+                }
+            }
+        }
+    }
+
+    // Output results
+    if dropped_lines.is_empty() {
+        eprintln!(
+            "No lines matching pattern '{}' were dropped by the pipeline.",
+            why_pattern
+        );
+        eprintln!("Either all matching lines passed through, or no lines matched the pattern.");
+        return Ok(());
+    }
+
+    eprintln!("=== Dropped Lines Analysis ===");
+    eprintln!(
+        "Found {} lines matching '{}' that were dropped:\n",
+        dropped_lines.len(),
+        why_pattern
+    );
+
+    // Group by step for summary
+    let mut by_step: HashMap<usize, Vec<(usize, String)>> = HashMap::new();
+    for (line_num, content, step_idx, _) in &dropped_lines {
+        by_step
+            .entry(*step_idx)
+            .or_default()
+            .push((*line_num, content.clone()));
+    }
+
+    // Show per-step breakdown
+    for (step_idx, lines) in by_step.iter() {
+        let step = &config.step[*step_idx];
+        let step_name = step.name.as_deref().unwrap_or("unnamed");
+        let step_type = format!("{:?}", step.step_type);
+        let pattern_preview = if step.pattern.len() > 50 {
+            format!("{}...", &step.pattern[..47])
+        } else {
+            step.pattern.clone()
+        };
+
+        eprintln!(
+            "--- Step {} '{}' [{}] ---",
+            step_idx + 1,
+            step_name,
+            step_type
+        );
+        eprintln!("Pattern: {}", pattern_preview);
+        eprintln!("Dropped {} lines:", lines.len());
+
+        for (line_num, content) in lines.iter().take(10) {
+            let preview = if content.len() > 80 {
+                format!("{}...", &content[..77])
+            } else {
+                content.clone()
+            };
+            eprintln!("  Line {}: {}", line_num, preview);
+        }
+
+        if lines.len() > 10 {
+            eprintln!("  ... and {} more lines", lines.len() - 10);
+        }
+        eprintln!();
+    }
+
+    // Provide actionable suggestions
+    eprintln!("=== Suggestions ===");
+    for (step_idx, _) in by_step.iter() {
+        let step = &config.step[*step_idx];
+        match step.step_type {
+            StepType::Filter => {
+                if step.action == Some(StepAction::KeepLine) {
+                    eprintln!(
+                        "Step {}: Has action='keep_line'. Lines not matching '{}' are dropped.",
+                        step_idx + 1,
+                        step.pattern
+                    );
+                    eprintln!(
+                        "  → Consider adding the pattern for your desired lines to keep = [...]"
+                    );
+                } else if step.action == Some(StepAction::DropLine) {
+                    eprintln!(
+                        "Step {}: Has action='drop_line'. Lines matching '{}' are dropped.",
+                        step_idx + 1,
+                        step.pattern
+                    );
+                    eprintln!("  → Consider making the pattern more specific or removing this step");
+                } else if step.keep.is_some() {
+                    eprintln!(
+                        "Step {}: Uses keep=[...] patterns. Lines not matching any pattern are dropped.",
+                        step_idx + 1
+                    );
+                    eprintln!("  → Add more patterns to keep = [...] to preserve your lines");
+                } else if step.drop.is_some() {
+                    eprintln!(
+                        "Step {}: Uses drop=[...] patterns. Lines matching any pattern are dropped.",
+                        step_idx + 1
+                    );
+                    eprintln!("  → Narrow the drop patterns or add not_pattern exceptions");
+                }
+            }
+            _ => {
+                eprintln!(
+                    "Step {}: {:?} step may be transforming/dropping lines unexpectedly.",
+                    step_idx + 1,
+                    step.step_type
+                );
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Compare two pipeline configurations and show behavioral differences.
+fn diff_configs(config1_path: &str, config2_path: &str) -> Result<()> {
+    use std::collections::HashSet;
+    use std::fs;
+
+    let path1 = Path::new(config1_path);
+    let path2 = Path::new(config2_path);
+
+    if !path1.exists() {
+        return Err(anyhow!("Config file not found: {}", config1_path));
+    }
+    if !path2.exists() {
+        return Err(anyhow!("Config file not found: {}", config2_path));
+    }
+
+    let content1 = fs::read_to_string(path1)?;
+    let content2 = fs::read_to_string(path2)?;
+
+    let config1: PipelineConfig = toml::from_str(&content1)
+        .map_err(|e| anyhow!("Failed to parse {}: {}", config1_path, e))?;
+    let config2: PipelineConfig = toml::from_str(&content2)
+        .map_err(|e| anyhow!("Failed to parse {}: {}", config2_path, e))?;
+
+    // Normalize both configs
+    let config1 = config1.normalize();
+    let config2 = config2.normalize();
+
+    println!("=== Pipeline Configuration Diff ===");
+    println!("Config 1: {}", config1_path);
+    println!("Config 2: {}", config2_path);
+    println!();
+
+    let mut differences = 0;
+
+    // Compare metadata
+    if config1.name != config2.name {
+        differences += 1;
+        println!("📛 Name:");
+        println!(
+            "  - Config 1: {}",
+            config1.name.as_deref().unwrap_or("(unnamed)")
+        );
+        println!(
+            "  + Config 2: {}",
+            config2.name.as_deref().unwrap_or("(unnamed)")
+        );
+    }
+
+    if config1.description != config2.description {
+        differences += 1;
+        println!("📝 Description:");
+        println!(
+            "  - Config 1: {}",
+            config1.description.as_deref().unwrap_or("(none)")
+        );
+        println!(
+            "  + Config 2: {}",
+            config2.description.as_deref().unwrap_or("(none)")
+        );
+    }
+
+    // Compare step counts
+    if config1.step.len() != config2.step.len() {
+        differences += 1;
+        println!("📊 Step Count:");
+        println!("  - Config 1: {} steps", config1.step.len());
+        println!("  + Config 2: {} steps", config2.step.len());
+    }
+
+    // Compare steps
+    let max_steps = std::cmp::max(config1.step.len(), config2.step.len());
+    for i in 0..max_steps {
+        let step1 = config1.step.get(i);
+        let step2 = config2.step.get(i);
+
+        match (step1, step2) {
+            (Some(s1), Some(s2)) => {
+                let mut step_diffs: Vec<String> = Vec::new();
+
+                if s1.step_type != s2.step_type {
+                    step_diffs.push(format!(
+                        "type: {:?} → {:?}",
+                        s1.step_type, s2.step_type
+                    ));
+                }
+                if s1.pattern != s2.pattern {
+                    let p1 = if s1.pattern.len() > 30 {
+                        format!("{}...", &s1.pattern[..27])
+                    } else {
+                        s1.pattern.clone()
+                    };
+                    let p2 = if s2.pattern.len() > 30 {
+                        format!("{}...", &s2.pattern[..27])
+                    } else {
+                        s2.pattern.clone()
+                    };
+                    step_diffs.push(format!("pattern: '{}' → '{}'", p1, p2));
+                }
+                if s1.replacement != s2.replacement {
+                    step_diffs.push(format!(
+                        "replacement: {:?} → {:?}",
+                        s1.replacement, s2.replacement
+                    ));
+                }
+                if s1.action != s2.action {
+                    step_diffs.push(format!(
+                        "action: {:?} → {:?}",
+                        s1.action, s2.action
+                    ));
+                }
+                if s1.keep != s2.keep {
+                    step_diffs.push(format!("keep: {:?} → {:?}", s1.keep, s2.keep));
+                }
+                if s1.drop != s2.drop {
+                    step_diffs.push(format!("drop: {:?} → {:?}", s1.drop, s2.drop));
+                }
+                if s1.flags != s2.flags {
+                    step_diffs.push(format!("flags: {:?} → {:?}", s1.flags, s2.flags));
+                }
+
+                if !step_diffs.is_empty() {
+                    differences += 1;
+                    let name1 = s1.name.as_deref().unwrap_or("unnamed");
+                    let name2 = s2.name.as_deref().unwrap_or("unnamed");
+                    if name1 != name2 {
+                        println!("🔧 Step {} ('{}' → '{}'):", i + 1, name1, name2);
+                    } else {
+                        println!("🔧 Step {} '{}':", i + 1, name1);
+                    }
+                    for diff in step_diffs {
+                        println!("  {}", diff);
+                    }
+                }
+            }
+            (Some(s1), None) => {
+                differences += 1;
+                let name = s1.name.as_deref().unwrap_or("unnamed");
+                println!(
+                    "➖ Step {} '{}' [{}]: Only in Config 1",
+                    i + 1,
+                    name,
+                    format!("{:?}", s1.step_type)
+                );
+            }
+            (None, Some(s2)) => {
+                differences += 1;
+                let name = s2.name.as_deref().unwrap_or("unnamed");
+                println!(
+                    "➕ Step {} '{}' [{}]: Only in Config 2",
+                    i + 1,
+                    name,
+                    format!("{:?}", s2.step_type)
+                );
+            }
+            (None, None) => {}
+        }
+    }
+
+    // Compare included patterns
+    let includes1: HashSet<String> = config1
+        .patterns_include
+        .iter()
+        .cloned()
+        .collect();
+    let includes2: HashSet<String> = config2
+        .patterns_include
+        .iter()
+        .cloned()
+        .collect();
+
+    let only_in_1: Vec<_> = includes1.difference(&includes2).collect();
+    let only_in_2: Vec<_> = includes2.difference(&includes1).collect();
+
+    if !only_in_1.is_empty() || !only_in_2.is_empty() {
+        differences += 1;
+        println!("📚 Pattern Includes:");
+        for inc in only_in_1 {
+            println!("  - Only in Config 1: {}", inc);
+        }
+        for inc in only_in_2 {
+            println!("  + Only in Config 2: {}", inc);
+        }
+    }
+
+    // Summary
+    println!();
+    if differences == 0 {
+        println!("✅ Configurations are functionally equivalent.");
+    } else {
+        println!("📋 Found {} difference(s) between configurations.", differences);
+
+        // Behavioral impact analysis
+        println!();
+        println!("=== Behavioral Impact ===");
+
+        let filter_count_1 = config1
+            .step
+            .iter()
+            .filter(|s| s.step_type == StepType::Filter)
+            .count();
+        let filter_count_2 = config2
+            .step
+            .iter()
+            .filter(|s| s.step_type == StepType::Filter)
+            .count();
+
+        if filter_count_1 != filter_count_2 {
+            if filter_count_2 > filter_count_1 {
+                println!(
+                    "⚠️  Config 2 has {} more filter step(s) - may drop more lines",
+                    filter_count_2 - filter_count_1
+                );
+            } else {
+                println!(
+                    "⚠️  Config 1 has {} more filter step(s) - may drop more lines",
+                    filter_count_1 - filter_count_2
+                );
+            }
+        }
+
+        let transform_count_1 = config1
+            .step
+            .iter()
+            .filter(|s| s.step_type == StepType::Substitute)
+            .count();
+        let transform_count_2 = config2
+            .step
+            .iter()
+            .filter(|s| s.step_type == StepType::Substitute)
+            .count();
+
+        if transform_count_1 != transform_count_2 {
+            println!(
+                "⚠️  Transform steps differ: {} vs {} - output format may change",
+                transform_count_1, transform_count_2
+            );
+        }
+    }
+
+    Ok(())
+}
+
+/// Run pattern library commands.
+fn run_library_command(command: &str, arg: Option<&String>) -> Result<()> {
+    use std::fs;
+
+    match command {
+        "list" => {
+            println!("=== Available Pattern Libraries ===\n");
+
+            // Built-in patterns
+            println!("📦 Built-in Patterns (use with ${{builtin:name}}):");
+            let builtins = library::list_builtin_patterns();
+            for name in builtins {
+                if let Some(pattern) = library::get_builtin_pattern(name) {
+                    let preview = if pattern.len() > 50 {
+                        format!("{}...", &pattern[..47])
+                    } else {
+                        pattern.to_string()
+                    };
+                    println!("  {:<15} {}", name, preview);
+                }
+            }
+            println!();
+
+            // Check for user libraries in ~/.rexpipe/patterns/
+            let global_dir = dirs::home_dir()
+                .map(|h| h.join(".rexpipe").join("patterns"));
+
+            if let Some(ref dir) = global_dir {
+                if dir.exists() {
+                    println!("📁 User Libraries (~/.rexpipe/patterns/):");
+                    let entries = fs::read_dir(dir)?;
+                    let mut found = false;
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        if path.extension().map(|e| e == "toml").unwrap_or(false) {
+                            found = true;
+                            println!("  {}", path.file_name().unwrap().to_string_lossy());
+                        }
+                    }
+                    if !found {
+                        println!("  (no libraries found)");
+                    }
+                    println!();
+                }
+            }
+
+            println!("💡 Tips:");
+            println!("  --library search QUERY  Search for patterns");
+            println!("  --library info NAME     Show pattern details");
+            println!("  --library init          Create a new library template");
+            println!("  --library registry      Show community registry info");
+
+            Ok(())
+        }
+
+        "search" => {
+            let query = arg.ok_or_else(|| {
+                anyhow!("--library search requires a search query. Use --library-arg QUERY")
+            })?;
+
+            println!("=== Searching for '{}' ===\n", query);
+
+            let query_lower = query.to_lowercase();
+            let mut found = 0;
+
+            // Search built-in patterns
+            println!("📦 Built-in Patterns:");
+            for name in library::list_builtin_patterns() {
+                if name.contains(&query_lower) {
+                    if let Some(pattern) = library::get_builtin_pattern(name) {
+                        found += 1;
+                        println!("  ${{builtin:{}}} = {}", name, pattern);
+                    }
+                }
+            }
+
+            if found == 0 {
+                println!("  No matches found in built-in patterns.");
+            }
+
+            println!();
+            println!(
+                "💡 To search in pattern content, use: rexpipe --list-patterns FILE | grep '{}'",
+                query
+            );
+
+            Ok(())
+        }
+
+        "info" => {
+            let pattern_name = arg.ok_or_else(|| {
+                anyhow!("--library info requires a pattern name. Use --library-arg NAME")
+            })?;
+
+            // Check if it's a builtin
+            if let Some(pattern) = library::get_builtin_pattern(pattern_name) {
+                println!("=== Pattern: {} ===\n", pattern_name);
+                println!("Type: Built-in");
+                println!("Usage: ${{builtin:{}}}", pattern_name);
+                println!();
+                println!("Pattern:");
+                println!("  {}", pattern);
+                println!();
+
+                // Try to describe common patterns
+                let description = match pattern_name.as_str() {
+                    "email" => "Matches email addresses",
+                    "ipv4" => "Matches IPv4 addresses (e.g., 192.168.1.1)",
+                    "ipv6" => "Matches IPv6 addresses",
+                    "uuid" => "Matches UUIDs (e.g., 550e8400-e29b-41d4-a716-446655440000)",
+                    "url" => "Matches HTTP/HTTPS URLs",
+                    "date_iso" => "Matches ISO dates (YYYY-MM-DD)",
+                    "semver" => "Matches semantic versions (e.g., 1.2.3)",
+                    "log_level" => "Matches log levels (DEBUG, INFO, WARN, ERROR, FATAL)",
+                    "api_key" => "Matches API key-like strings (20+ alphanumeric chars)",
+                    _ => "A reusable regex pattern",
+                };
+                println!("Description: {}", description);
+                println!();
+                println!("Example config usage:");
+                println!("  [[step]]");
+                println!("  pattern = \"${{builtin:{}}}\"", pattern_name);
+                println!("  keep_line = true");
+            } else {
+                return Err(anyhow!(
+                    "Pattern '{}' not found. Use --library list to see available patterns.",
+                    pattern_name
+                ));
+            }
+
+            Ok(())
+        }
+
+        "init" => {
+            let template = r#"# My Pattern Library
+# Save this file to ~/.rexpipe/patterns/my-patterns.toml
+# Then use patterns with ${pattern_name} in your configs
+
+name = "My Pattern Library"
+version = "1.0.0"
+description = "Custom patterns for my projects"
+
+[patterns]
+# Simple patterns
+my_id = '\b[A-Z]{3}-\d{4}\b'
+my_date = '\d{4}/\d{2}/\d{2}'
+
+# Categorized patterns (use with ${category.name})
+[patterns.log]
+timestamp = '\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}'
+level = '\[(DEBUG|INFO|WARN|ERROR)\]'
+
+[patterns.security]
+token = '[A-Za-z0-9_-]{32,}'
+password_field = 'password\s*[:=]\s*\S+'
+
+# Usage in your pipeline config:
+# patterns_include = ["my-patterns.toml"]
+# [[step]]
+# pattern = '${my_id}'
+"#;
+
+            println!("{}", template);
+            println!();
+            println!("💡 Save this to a .toml file and reference it in your config with:");
+            println!("   patterns_include = [\"path/to/library.toml\"]");
+
+            Ok(())
+        }
+
+        "install" => {
+            let url = arg.ok_or_else(|| {
+                anyhow!("--library install requires a URL. Use --library-arg URL")
+            })?;
+
+            #[cfg(feature = "remote")]
+            {
+                println!("Installing pattern library from: {}", url);
+
+                let content = library::fetch_url(url)?;
+
+                // Validate it's a valid library
+                let _: library::PatternLibrary = toml::from_str(&content)
+                    .map_err(|e| anyhow!("Invalid pattern library: {}", e))?;
+
+                // Save to ~/.rexpipe/patterns/
+                let dest_dir = dirs::home_dir()
+                    .ok_or_else(|| anyhow!("Could not determine home directory"))?
+                    .join(".rexpipe")
+                    .join("patterns");
+
+                fs::create_dir_all(&dest_dir)?;
+
+                // Extract filename from URL or generate one
+                let filename = url
+                    .rsplit('/')
+                    .next()
+                    .filter(|s| s.ends_with(".toml"))
+                    .unwrap_or("downloaded-library.toml");
+
+                let dest_path = dest_dir.join(filename);
+                fs::write(&dest_path, content)?;
+
+                println!("✅ Installed to: {}", dest_path.display());
+                println!("💡 Use patterns from this library in your config.");
+                Ok(())
+            }
+
+            #[cfg(not(feature = "remote"))]
+            {
+                let _ = url; // Suppress unused warning
+                Err(anyhow!(
+                    "Remote library support requires the 'remote' feature.\n\
+                     Compile with: cargo build --features remote"
+                ))
+            }
+        }
+
+        "registry" => {
+            println!("=== Community Pattern Registry ===\n");
+            println!("The rexpipe community maintains pattern libraries for common use cases.");
+            println!();
+            println!("📦 Official Libraries:");
+            println!("  • logs       - Common log format patterns");
+            println!("  • security   - Security-related patterns (API keys, tokens, etc.)");
+            println!("  • web        - Web/HTTP patterns (URLs, headers, etc.)");
+            println!("  • devops     - CI/CD and infrastructure patterns");
+            println!();
+            println!("🌐 Community Libraries:");
+            println!("  Visit: https://github.com/jkindrix/rexpipe/wiki/Pattern-Libraries");
+            println!();
+            println!("📝 Contributing:");
+            println!("  Share your patterns! Submit PRs to the rexpipe repository.");
+            println!("  Guidelines: https://github.com/jkindrix/rexpipe/blob/main/CONTRIBUTING.md");
+            println!();
+            println!("💡 Install a community library:");
+            println!("  rexpipe --library install --library-arg URL_TO_LIBRARY");
+
+            Ok(())
+        }
+
+        _ => {
+            Err(anyhow!(
+                "Unknown library command: '{}'. Available: list, search, info, install, init, registry",
+                command
+            ))
+        }
+    }
 }
 
 #[cfg(test)]

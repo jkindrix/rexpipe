@@ -108,6 +108,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Why query mode (`--why PATTERN`)**: Debug mode to trace why specific lines appear
   in output. Shows which pipeline steps processed each matching line and what
   transformations were applied. Invaluable for understanding complex pipelines
+- **Why dropped mode (`--why-dropped PATTERN`)**: Debug mode to trace why specific lines
+  were dropped from output. Shows which pipeline step caused each drop and provides
+  actionable suggestions for modifying filter behavior. Complements `--why` for complete
+  pipeline debugging
+- **Config diff (`--diff CONFIG1 CONFIG2`)**: Compare two pipeline configurations and
+  show behavioral differences. Reports changes in steps, patterns, step order, and
+  provides behavioral impact analysis (e.g., more filter steps may drop more lines)
+- **Config linting (`--lint`)**: Analyze pipeline configuration and suggest improvements.
+  Provides actionable suggestions for using shorthand syntax, adding step names for
+  debugging, leveraging built-in patterns, and optimizing performance
+- **Pre-built presets (`--preset NAME`)**: Use built-in pipeline presets for common
+  use cases without writing configuration files:
+  - `cargo`/`rust` - Filter Rust/Cargo build errors and warnings
+  - `pytest`/`python` - Filter pytest failures and tracebacks
+  - `npm`/`node` - Filter npm/node errors and warnings
+  - `docker` - Filter Docker build errors
+  - `logs`/`log` - Generic log filtering (ERROR, WARN, etc.)
+  - `git` - Filter git output (errors, conflicts, changes)
+  - `ci` - CI/CD log filtering (failures, timeouts)
+  Use `--preset list` to show all available presets with descriptions
+- **Pattern library ecosystem (`--library COMMAND`)**: Comprehensive pattern library
+  management for reusable regex patterns:
+  - `--library list` - List all available pattern libraries (built-in and user)
+  - `--library search QUERY` - Search for patterns matching a query
+  - `--library info NAME` - Show detailed info about a pattern
+  - `--library init` - Create a new pattern library template
+  - `--library install URL` - Install a pattern library from URL (requires `remote` feature)
+  - `--library registry` - Show community pattern registry info and contribution guidelines
 
 ### Fixed
 
