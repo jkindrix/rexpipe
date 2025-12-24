@@ -511,6 +511,44 @@ fn build_cli() -> Command {
                 .action(ArgAction::SetTrue),
         )
         .arg(
+            Arg::new("lint")
+                .long("lint")
+                .help("Lint configuration and suggest improvements")
+                .long_help(
+                    "Analyze the pipeline configuration and provide suggestions for:\n\
+                     - Using shorthand syntax (e.g., [[filter]] instead of [[step]])\n\
+                     - Adding step names for better debugging\n\
+                     - Using ignore_case shorthand instead of flags\n\
+                     - Simplifying patterns with drop/keep shorthand\n\
+                     - Adding descriptions for documentation\n\
+                     - Potential redundant or overlapping patterns\n\n\
+                     Implies --validate-config. Exits with 0 if no issues, 1 if suggestions exist."
+                )
+                .action(ArgAction::SetTrue),
+        )
+        .arg(
+            Arg::new("preset")
+                .long("preset")
+                .value_name("NAME")
+                .help("Use a pre-built pipeline preset for common use cases")
+                .long_help(
+                    "Apply a pre-built pipeline for common filtering scenarios:\n\n\
+                     Available presets:\n\
+                       cargo    - Filter Rust/Cargo build output (errors, warnings)\n\
+                       pytest   - Filter pytest output (failures, errors)\n\
+                       npm      - Filter npm/node output (errors, warnings)\n\
+                       docker   - Filter Docker build/run output\n\
+                       logs     - Generic log filtering (errors, warnings)\n\
+                       git      - Filter git command output\n\
+                       ci       - CI/CD log filtering (failures, timeouts)\n\n\
+                     Examples:\n\
+                       cargo build 2>&1 | rexpipe --preset cargo\n\
+                       pytest 2>&1 | rexpipe --preset pytest\n\
+                       npm test 2>&1 | rexpipe --preset npm\n\n\
+                     Use --preset list to see all available presets with descriptions."
+                ),
+        )
+        .arg(
             Arg::new("apply")
                 .long("apply")
                 .help("Actually apply changes (required for in-place edits when piping/scripting)")
@@ -1598,6 +1636,16 @@ fn run_application(matches: &clap::ArgMatches) -> Result<()> {
     // Handle config validation (--validate-config)
     if matches.get_flag("validate-config") {
         return validate_config_file(matches);
+    }
+
+    // Handle config linting (--lint)
+    if matches.get_flag("lint") {
+        return lint_config_file(matches);
+    }
+
+    // Handle preset mode (--preset)
+    if let Some(preset_name) = matches.get_one::<String>("preset") {
+        return run_preset_mode(preset_name, matches);
     }
 
     // Handle checkpoint info display
@@ -3753,6 +3801,393 @@ fn validate_config_file(matches: &clap::ArgMatches) -> Result<()> {
             Err(anyhow!("Configuration validation failed: {}", e))
         }
     }
+}
+
+/// Lint a pipeline configuration file and provide suggestions.
+fn lint_config_file(matches: &clap::ArgMatches) -> Result<()> {
+    let config_path = matches
+        .get_one::<String>("config")
+        .ok_or_else(|| anyhow!("--lint requires a config file (-c/--config)"))?;
+
+    let path = Path::new(config_path);
+    if !path.exists() {
+        return Err(anyhow!("Config file not found: {}", config_path));
+    }
+
+    // Read raw content for analysis
+    let content =
+        std::fs::read_to_string(path).map_err(|e| anyhow!("Failed to read config file: {}", e))?;
+
+    // Parse and normalize shorthand sections
+    let config: PipelineConfig =
+        toml::from_str(&content).map_err(|e| anyhow!("TOML parsing error: {}", e))?;
+
+    // Normalize shorthand sections ([[filter]], [[substitute]], etc.) into [[step]]
+    let config = config.normalize();
+
+    config.validate().map_err(|errors| {
+        anyhow!(
+            "Configuration validation errors:\n  {}",
+            errors.join("\n  ")
+        )
+    })?;
+
+    // Try to compile to catch regex errors
+    StreamProcessor::new(config.clone())
+        .map_err(|e| anyhow!("Configuration compilation error: {}", e))?;
+
+    println!("Linting '{}'...\n", config_path);
+
+    let mut suggestions: Vec<(String, String, String)> = Vec::new(); // (category, issue, suggestion)
+
+    // Analyze each step for potential improvements
+    for (idx, step) in config.step.iter().enumerate() {
+        let step_num = idx + 1;
+        let step_id = step
+            .name
+            .as_ref()
+            .map(|n| format!("'{}' (step {})", n, step_num))
+            .unwrap_or_else(|| format!("Step {}", step_num));
+
+        // Suggestion: Add step name for debugging
+        if step.name.is_none() {
+            suggestions.push((
+                "Debugging".to_string(),
+                format!("{}: No name defined", step_id),
+                "Add name = \"descriptive-name\" for better --stats and trace output".to_string(),
+            ));
+        }
+
+        // Suggestion: Use ignore_case shorthand
+        if let Some(ref flags) = step.flags {
+            if flags
+                .iter()
+                .any(|f| matches!(f, rexpipe::pipeline::RegexFlag::CaseInsensitive))
+            {
+                suggestions.push((
+                    "Shorthand".to_string(),
+                    format!("{}: Uses flags = [\"i\"]", step_id),
+                    "Consider ignore_case = true for better readability".to_string(),
+                ));
+            }
+        }
+
+        // Suggestion: Use drop/keep shorthand for simple filters
+        if step.step_type == rexpipe::pipeline::StepType::Filter {
+            if let Some(ref action) = step.action {
+                match action {
+                    rexpipe::pipeline::StepAction::DropLine if step.not_pattern.is_none() => {
+                        suggestions.push((
+                            "Shorthand".to_string(),
+                            format!("{}: Uses pattern + action = \"drop_line\"", step_id),
+                            format!("Consider drop = \"{}\" for conciseness", step.pattern),
+                        ));
+                    }
+                    rexpipe::pipeline::StepAction::KeepLine if step.not_pattern.is_none() => {
+                        suggestions.push((
+                            "Shorthand".to_string(),
+                            format!("{}: Uses pattern + action = \"keep_line\"", step_id),
+                            format!("Consider keep = \"{}\" for conciseness", step.pattern),
+                        ));
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        // Suggestion: Add description for documentation
+        if step.description.is_none() && step.name.is_some() {
+            suggestions.push((
+                "Documentation".to_string(),
+                format!("{}: Has name but no description", step_id),
+                "Add description = \"...\" for self-documenting configs".to_string(),
+            ));
+        }
+
+        // Suggestion: Complex patterns might benefit from PCRE
+        if step.pattern.contains("(?") && !step.pattern.contains("(?:") {
+            // Contains group modifiers that might be lookahead/lookbehind
+            let has_pcre_flag = step
+                .flags
+                .as_ref()
+                .map(|f| f.iter().any(|flag| matches!(flag, rexpipe::pipeline::RegexFlag::Pcre)))
+                .unwrap_or(false);
+
+            if !has_pcre_flag
+                && (step.pattern.contains("(?=")
+                    || step.pattern.contains("(?!")
+                    || step.pattern.contains("(?<=")
+                    || step.pattern.contains("(?<!"))
+            {
+                suggestions.push((
+                    "Pattern".to_string(),
+                    format!("{}: Uses lookahead/lookbehind syntax", step_id),
+                    "Add flags = [\"pcre\"] to enable PCRE engine for this step".to_string(),
+                ));
+            }
+        }
+
+        // Suggestion: Very simple patterns could use fixed_strings
+        if !step.pattern.contains(|c: char| {
+            matches!(
+                c,
+                '.' | '*' | '+' | '?' | '[' | ']' | '(' | ')' | '{' | '}' | '|' | '^' | '$' | '\\'
+            )
+        }) && step.pattern.len() > 3
+        {
+            if !config.settings.fixed_strings {
+                suggestions.push((
+                    "Performance".to_string(),
+                    format!(
+                        "{}: Pattern '{}' contains no regex metacharacters",
+                        step_id, step.pattern
+                    ),
+                    "Consider using --fixed or [settings] fixed_strings = true for faster matching"
+                        .to_string(),
+                ));
+            }
+        }
+    }
+
+    // Check for missing global settings suggestions
+    if config.description.is_none() {
+        suggestions.push((
+            "Documentation".to_string(),
+            "Pipeline has no description".to_string(),
+            "Add description = \"...\" at the top level for documentation".to_string(),
+        ));
+    }
+
+    // Output results
+    if suggestions.is_empty() {
+        println!("✓ No suggestions - configuration looks good!");
+        println!("\n  Steps: {}", config.step.len());
+        if let Some(ref name) = config.name {
+            println!("  Name: {}", name);
+        }
+        Ok(())
+    } else {
+        println!("Found {} suggestions:\n", suggestions.len());
+
+        // Group by category
+        let mut by_category: std::collections::HashMap<&str, Vec<(&str, &str)>> =
+            std::collections::HashMap::new();
+        for (cat, issue, suggestion) in &suggestions {
+            by_category
+                .entry(cat.as_str())
+                .or_default()
+                .push((issue.as_str(), suggestion.as_str()));
+        }
+
+        for (category, items) in by_category {
+            println!("{}:", category);
+            for (issue, suggestion) in items {
+                println!("  • {}", issue);
+                println!("    → {}", suggestion);
+            }
+            println!();
+        }
+
+        println!(
+            "Tip: These are suggestions, not errors. The config is valid and will work correctly."
+        );
+
+        // Return success even with suggestions (they're not errors)
+        Ok(())
+    }
+}
+
+/// Get a pre-built pipeline preset configuration.
+///
+/// Presets use a single filter with OR'd patterns to keep lines matching ANY pattern.
+fn get_preset(name: &str) -> Option<PipelineConfig> {
+    let toml_str = match name.to_lowercase().as_str() {
+        "cargo" | "rust" => r#"
+name = "Cargo/Rust Build Filter"
+description = "Filter Rust/Cargo build output to show errors and warnings"
+
+[[filter]]
+name = "cargo-output"
+keep = [
+    "^error",
+    "^warning:",
+    "^\\s+-->",
+    "^\\s+\\|",
+    "^\\s+=",
+    "^\\s+\\d+\\s*\\|"
+]
+"#,
+        "pytest" | "python" => r#"
+name = "Pytest Output Filter"
+description = "Filter pytest output to show failures and errors"
+
+[[filter]]
+name = "pytest-output"
+keep = [
+    "FAILED",
+    "ERROR",
+    "^E\\s+",
+    "^>",
+    "^\\s+File \"",
+    "Traceback",
+    "AssertionError",
+    "^=+.*(FAILURES|ERRORS|short test summary)",
+    "\\d+ (failed|passed|error)"
+]
+"#,
+        "npm" | "node" => r#"
+name = "NPM/Node Output Filter"
+description = "Filter npm/node output to show errors and warnings"
+
+[[filter]]
+name = "npm-output"
+keep = [
+    "npm ERR!",
+    "^Error:",
+    "^error:",
+    "npm WARN",
+    "^Warning:",
+    "^\\s+at ",
+    "FAILED"
+]
+"#,
+        "docker" => r#"
+name = "Docker Output Filter"
+description = "Filter Docker build/run output for errors"
+
+[[filter]]
+name = "docker-output"
+keep = [
+    "^error",
+    "^ERROR",
+    "FAILED",
+    "failed to",
+    "cannot",
+    "unable to",
+    "^Step \\d+/\\d+",
+    "returned a non-zero code",
+    "exit code",
+    "exited with"
+]
+"#,
+        "logs" | "log" => r#"
+name = "Generic Log Filter"
+description = "Filter log output to show errors and warnings"
+
+[[filter]]
+name = "log-output"
+keep = [
+    "ERROR",
+    "FATAL",
+    "CRITICAL",
+    "PANIC",
+    "WARN",
+    "WARNING",
+    "Exception",
+    "Traceback",
+    "Stack trace"
+]
+"#,
+        "git" => r#"
+name = "Git Output Filter"
+description = "Filter git command output for important information"
+
+[[filter]]
+name = "git-output"
+keep = [
+    "^error:",
+    "^fatal:",
+    "^CONFLICT",
+    "^warning:",
+    "^hint:",
+    "^\\+\\+\\+",
+    "^---",
+    "^@@",
+    "^diff --git",
+    "^modified:",
+    "^deleted:",
+    "^new file:",
+    "^renamed:"
+]
+"#,
+        "ci" => r#"
+name = "CI/CD Log Filter"
+description = "Filter CI/CD output for failures and important events"
+
+[[filter]]
+name = "ci-output"
+keep = [
+    "FAILED",
+    "FAILURE",
+    "ERROR",
+    "Build failed",
+    "timeout",
+    "timed out",
+    "exceeded",
+    "exit code",
+    "exited with",
+    "returned \\d+",
+    "^(Step|Stage|Job|Pipeline).*:"
+]
+"#,
+        "list" => {
+            return None; // Special case - list presets
+        }
+        _ => {
+            return None;
+        }
+    };
+
+    toml::from_str(toml_str).ok().map(|c: PipelineConfig| c.normalize())
+}
+
+/// Run with a pre-built preset pipeline.
+fn run_preset_mode(preset_name: &str, matches: &clap::ArgMatches) -> Result<()> {
+    // Handle "list" to show available presets
+    if preset_name.to_lowercase() == "list" {
+        println!("Available presets:\n");
+        println!("  cargo, rust   Filter Rust/Cargo build output (errors, warnings, notes)");
+        println!("  pytest, python Filter pytest output (failures, tracebacks, assertions)");
+        println!("  npm, node     Filter npm/node output (errors, warnings, stack traces)");
+        println!("  docker        Filter Docker build/run output (errors, failed steps)");
+        println!("  logs, log     Generic log filtering (ERROR, WARN, exceptions)");
+        println!("  git           Filter git command output (errors, conflicts, changes)");
+        println!("  ci            CI/CD log filtering (failures, timeouts, exit codes)");
+        println!("\nUsage: command 2>&1 | rexpipe --preset <name>");
+        println!("\nExamples:");
+        println!("  cargo build 2>&1 | rexpipe --preset cargo");
+        println!("  pytest 2>&1 | rexpipe --preset pytest");
+        println!("  docker build . 2>&1 | rexpipe --preset docker");
+        return Ok(());
+    }
+
+    let config = get_preset(preset_name).ok_or_else(|| {
+        anyhow!(
+            "Unknown preset '{}'. Use --preset list to see available presets.",
+            preset_name
+        )
+    })?;
+
+    // Read from stdin
+    if io::stdin().is_terminal() && !matches.get_flag("quiet") {
+        eprintln!(
+            "Using preset '{}': {}",
+            preset_name,
+            config.description.as_deref().unwrap_or("")
+        );
+        eprintln!("Reading from stdin (press Ctrl+D when done)...");
+    }
+
+    let input: Box<dyn io::BufRead> = Box::new(io::stdin().lock());
+
+    // Process with the preset config
+    let settings = build_pipeline_settings(matches);
+    let config = PipelineConfig {
+        settings,
+        ..config
+    };
+
+    run_processing_mode(&config, input, matches)
 }
 
 fn run_inspection_mode(
