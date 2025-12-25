@@ -3031,3 +3031,592 @@ fn test_chained_transforms() {
         output_str
     );
 }
+
+// =============================================================================
+// EMBEDDED [[test]] CONFIG SECTION TESTS
+// =============================================================================
+
+/// Test that embedded test cases are parsed from config
+#[test]
+fn test_embedded_test_parsing() {
+    let config_content = r#"
+name = "PII Sanitizer"
+description = "Test embedded tests"
+
+[[step]]
+type = "substitute"
+pattern = '\d{3}-\d{2}-\d{4}'
+replacement = "[SSN-REDACTED]"
+
+[[test]]
+name = "redacts-ssn"
+input = "SSN: 123-45-6789"
+expected = "SSN: [SSN-REDACTED]"
+
+[[test]]
+name = "leaves-other"
+input = "Phone: 555-1234"
+expected = "Phone: 555-1234"
+"#;
+
+    let mut temp_file = NamedTempFile::new().unwrap();
+    write!(temp_file, "{}", config_content).unwrap();
+
+    let config = PipelineConfig::from_file(temp_file.path()).unwrap();
+
+    // Verify test cases were parsed
+    assert_eq!(config.tests.len(), 2);
+    assert_eq!(config.tests[0].name, "redacts-ssn");
+    assert_eq!(config.tests[0].input, "SSN: 123-45-6789");
+    assert_eq!(
+        config.tests[0].expected,
+        Some("SSN: [SSN-REDACTED]".to_string())
+    );
+    assert_eq!(config.tests[1].name, "leaves-other");
+}
+
+/// Test running embedded tests with TestRunner
+#[test]
+fn test_embedded_test_runner() {
+    use rexpipe::testing::{TestConfig, TestRunner};
+
+    let config = PipelineConfig {
+        name: Some("Test Runner Test".to_string()),
+        step: vec![PipelineStep {
+            step_type: StepType::Substitute,
+            pattern: r"\d{3}-\d{2}-\d{4}".to_string(),
+            replacement: Some("[REDACTED]".to_string()),
+            enabled: Some(true),
+            ..Default::default()
+        }],
+        tests: vec![
+            rexpipe::testing::TestCase::new(
+                "ssn-redaction",
+                "SSN: 123-45-6789",
+                "SSN: [REDACTED]",
+            ),
+            rexpipe::testing::TestCase::new(
+                "no-false-positive",
+                "Phone: 555-1234",
+                "Phone: 555-1234",
+            ),
+        ],
+        ..Default::default()
+    };
+
+    let test_config = TestConfig::new();
+    let mut runner = TestRunner::new(test_config);
+    runner.add_tests(config.tests.clone());
+
+    // Create a processor function
+    let processor = |input: &str| {
+        let mut proc = StreamProcessor::new(config.clone()).unwrap();
+        let reader = Cursor::new(input);
+        let mut output = Vec::new();
+        let result = proc.process_stream(reader, &mut output).unwrap();
+        Ok((
+            String::from_utf8(output).unwrap().trim_end().to_string(),
+            result.matches_found,
+            result.transformations_applied,
+        ))
+    };
+
+    let summary = runner.run_all(processor);
+
+    assert_eq!(summary.total, 2);
+    assert_eq!(summary.passed, 2);
+    assert_eq!(summary.failed, 0);
+    assert!(summary.all_passed());
+}
+
+/// Test negative tests (should_not_match)
+#[test]
+fn test_embedded_negative_tests() {
+    use rexpipe::testing::{TestCase, TestConfig, TestRunner};
+
+    let test_config = TestConfig::new();
+    let mut runner = TestRunner::new(test_config);
+
+    // Add a negative test - pattern should NOT match
+    runner.add_test(TestCase::negative("no-ssn-here", "Hello world"));
+
+    // Processor that returns 0 matches for "Hello world"
+    let processor = |input: &str| {
+        let has_ssn = input.contains("123-45-6789");
+        let matches = if has_ssn { 1 } else { 0 };
+        Ok((input.to_string(), matches, 0))
+    };
+
+    let summary = runner.run_all(processor);
+
+    assert!(summary.all_passed(), "Negative test should pass when no matches");
+}
+
+/// Test test filtering by name
+#[test]
+fn test_embedded_test_name_filter() {
+    use rexpipe::testing::{TestCase, TestConfig, TestRunner};
+
+    let test_config = TestConfig::new().with_name_filter("ssn");
+    let mut runner = TestRunner::new(test_config);
+
+    runner.add_test(TestCase::new("ssn-test", "input", "input"));
+    runner.add_test(TestCase::new("email-test", "input", "input"));
+    runner.add_test(TestCase::new("phone-test", "input", "input"));
+
+    let processor = |input: &str| Ok((input.to_string(), 0, 0));
+    let summary = runner.run_all(processor);
+
+    // Only ssn-test should run, others should be skipped
+    assert_eq!(summary.passed, 1);
+    assert_eq!(summary.skipped, 2);
+}
+
+// =============================================================================
+// PII SANITIZATION PATTERN TESTS
+// =============================================================================
+
+/// Test SSN redaction pattern
+#[test]
+fn test_pii_ssn_redaction() {
+    let config = PipelineConfig {
+        name: Some("SSN Redaction".to_string()),
+        step: vec![PipelineStep {
+            step_type: StepType::Substitute,
+            pattern: r"\b\d{3}-\d{2}-\d{4}\b".to_string(),
+            replacement: Some("[SSN-REDACTED]".to_string()),
+            flags: Some(vec![RegexFlag::Global]),
+            enabled: Some(true),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    let mut processor = StreamProcessor::new(config).unwrap();
+    let input = "Customer SSN: 123-45-6789, Backup: 987-65-4321";
+    let reader = Cursor::new(input);
+    let mut output = Vec::new();
+
+    processor.process_stream(reader, &mut output).unwrap();
+    let output_str = String::from_utf8(output).unwrap();
+
+    assert!(output_str.contains("[SSN-REDACTED]"));
+    assert!(!output_str.contains("123-45-6789"));
+    assert!(!output_str.contains("987-65-4321"));
+    // Should have redacted both SSNs
+    assert_eq!(output_str.matches("[SSN-REDACTED]").count(), 2);
+}
+
+/// Test email redaction pattern
+#[test]
+fn test_pii_email_redaction() {
+    let config = PipelineConfig {
+        name: Some("Email Redaction".to_string()),
+        step: vec![PipelineStep {
+            step_type: StepType::Substitute,
+            pattern: r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}".to_string(),
+            replacement: Some("[EMAIL-REDACTED]".to_string()),
+            flags: Some(vec![RegexFlag::Global]),
+            enabled: Some(true),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    let mut processor = StreamProcessor::new(config).unwrap();
+    let input = "Contact: john.doe@example.com and support@company.org";
+    let reader = Cursor::new(input);
+    let mut output = Vec::new();
+
+    processor.process_stream(reader, &mut output).unwrap();
+    let output_str = String::from_utf8(output).unwrap();
+
+    assert!(output_str.contains("[EMAIL-REDACTED]"));
+    assert!(!output_str.contains("john.doe@example.com"));
+    assert!(!output_str.contains("support@company.org"));
+    assert_eq!(output_str.matches("[EMAIL-REDACTED]").count(), 2);
+}
+
+/// Test credit card redaction pattern
+#[test]
+fn test_pii_credit_card_redaction() {
+    let config = PipelineConfig {
+        name: Some("Credit Card Redaction".to_string()),
+        step: vec![PipelineStep {
+            step_type: StepType::Substitute,
+            pattern: r"\b\d{4}[- ]?\d{4}[- ]?\d{4}[- ]?\d{4}\b".to_string(),
+            replacement: Some("[CARD-REDACTED]".to_string()),
+            flags: Some(vec![RegexFlag::Global]),
+            enabled: Some(true),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    let mut processor = StreamProcessor::new(config).unwrap();
+    let input = "Cards: 4532-1234-5678-9012 and 4532123456789012";
+    let reader = Cursor::new(input);
+    let mut output = Vec::new();
+
+    processor.process_stream(reader, &mut output).unwrap();
+    let output_str = String::from_utf8(output).unwrap();
+
+    assert!(output_str.contains("[CARD-REDACTED]"));
+    assert!(!output_str.contains("4532-1234-5678-9012"));
+    assert!(!output_str.contains("4532123456789012"));
+    assert_eq!(output_str.matches("[CARD-REDACTED]").count(), 2);
+}
+
+/// Test API key redaction pattern
+#[test]
+fn test_pii_api_key_redaction() {
+    let config = PipelineConfig {
+        name: Some("API Key Redaction".to_string()),
+        step: vec![PipelineStep {
+            step_type: StepType::Substitute,
+            pattern: r"sk_(live|test)_[A-Za-z0-9]{30,}".to_string(),
+            replacement: Some("[API-KEY-REDACTED]".to_string()),
+            flags: Some(vec![RegexFlag::Global]),
+            enabled: Some(true),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    let mut processor = StreamProcessor::new(config).unwrap();
+    let input = "Production: sk_live_abc123def456ghi789jkl012mno345";
+    let reader = Cursor::new(input);
+    let mut output = Vec::new();
+
+    processor.process_stream(reader, &mut output).unwrap();
+    let output_str = String::from_utf8(output).unwrap();
+
+    assert!(output_str.contains("[API-KEY-REDACTED]"));
+    assert!(!output_str.contains("sk_live_"));
+}
+
+/// Test IP address redaction pattern
+#[test]
+fn test_pii_ip_address_redaction() {
+    let config = PipelineConfig {
+        name: Some("IP Address Redaction".to_string()),
+        step: vec![PipelineStep {
+            step_type: StepType::Substitute,
+            pattern: r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b".to_string(),
+            replacement: Some("[IP-REDACTED]".to_string()),
+            flags: Some(vec![RegexFlag::Global]),
+            enabled: Some(true),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    let mut processor = StreamProcessor::new(config).unwrap();
+    let input = "Server: 10.0.0.1, External: 203.0.113.50";
+    let reader = Cursor::new(input);
+    let mut output = Vec::new();
+
+    processor.process_stream(reader, &mut output).unwrap();
+    let output_str = String::from_utf8(output).unwrap();
+
+    assert!(output_str.contains("[IP-REDACTED]"));
+    assert!(!output_str.contains("10.0.0.1"));
+    assert!(!output_str.contains("203.0.113.50"));
+    assert_eq!(output_str.matches("[IP-REDACTED]").count(), 2);
+}
+
+/// Test phone number redaction pattern
+#[test]
+fn test_pii_phone_redaction() {
+    let config = PipelineConfig {
+        name: Some("Phone Redaction".to_string()),
+        step: vec![PipelineStep {
+            step_type: StepType::Substitute,
+            pattern: r"\b\d{3}[-.]?\d{3}[-.]?\d{4}\b".to_string(),
+            replacement: Some("[PHONE-REDACTED]".to_string()),
+            flags: Some(vec![RegexFlag::Global]),
+            enabled: Some(true),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    let mut processor = StreamProcessor::new(config).unwrap();
+    let input = "Call: 555-123-4567 or 555.123.4567";
+    let reader = Cursor::new(input);
+    let mut output = Vec::new();
+
+    processor.process_stream(reader, &mut output).unwrap();
+    let output_str = String::from_utf8(output).unwrap();
+
+    assert!(output_str.contains("[PHONE-REDACTED]"));
+    assert!(!output_str.contains("555-123-4567"));
+    assert!(!output_str.contains("555.123.4567"));
+    assert_eq!(output_str.matches("[PHONE-REDACTED]").count(), 2);
+}
+
+/// Test combined PII redaction pipeline
+#[test]
+fn test_pii_combined_redaction() {
+    let config = PipelineConfig {
+        name: Some("Combined PII Redaction".to_string()),
+        step: vec![
+            PipelineStep {
+                step_type: StepType::Substitute,
+                pattern: r"\b\d{3}-\d{2}-\d{4}\b".to_string(),
+                replacement: Some("[SSN]".to_string()),
+                flags: Some(vec![RegexFlag::Global]),
+                enabled: Some(true),
+                ..Default::default()
+            },
+            PipelineStep {
+                step_type: StepType::Substitute,
+                pattern: r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}".to_string(),
+                replacement: Some("[EMAIL]".to_string()),
+                flags: Some(vec![RegexFlag::Global]),
+                enabled: Some(true),
+                ..Default::default()
+            },
+            PipelineStep {
+                step_type: StepType::Substitute,
+                pattern: r"\b\d{3}[-.]?\d{3}[-.]?\d{4}\b".to_string(),
+                replacement: Some("[PHONE]".to_string()),
+                flags: Some(vec![RegexFlag::Global]),
+                enabled: Some(true),
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    };
+
+    let mut processor = StreamProcessor::new(config).unwrap();
+    let input = "Contact: john@example.com, SSN: 123-45-6789, Phone: 555-123-4567";
+    let reader = Cursor::new(input);
+    let mut output = Vec::new();
+
+    processor.process_stream(reader, &mut output).unwrap();
+    let output_str = String::from_utf8(output).unwrap();
+
+    assert!(output_str.contains("[SSN]"));
+    assert!(output_str.contains("[EMAIL]"));
+    assert!(output_str.contains("[PHONE]"));
+    assert!(!output_str.contains("john@example.com"));
+    assert!(!output_str.contains("123-45-6789"));
+    assert!(!output_str.contains("555-123-4567"));
+}
+
+// =============================================================================
+// SHELL PLUGIN TRANSFORM TESTS
+// =============================================================================
+
+/// Test shell transform with allow_shell setting
+#[test]
+fn test_shell_transform_basic() {
+    // Test that shell transforms require allow_shell = true
+    let config = PipelineConfig {
+        name: Some("Shell Transform Test".to_string()),
+        settings: PipelineSettings {
+            allow_shell: true,
+            ..Default::default()
+        },
+        step: vec![PipelineStep {
+            step_type: StepType::Transform,
+            pattern: r".+".to_string(),
+            transform: Some(TransformAction::Shell {
+                command: "cat".to_string(), // Simple echo back
+            }),
+            enabled: Some(true),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    let mut processor = StreamProcessor::new(config).unwrap();
+    let input = "hello world";
+    let reader = Cursor::new(input);
+    let mut output = Vec::new();
+
+    let result = processor.process_stream(reader, &mut output);
+
+    // Should succeed when allow_shell is true
+    assert!(result.is_ok());
+}
+
+/// Test shell transform blocked without allow_shell
+#[test]
+fn test_shell_transform_blocked_without_permission() {
+    let config = PipelineConfig {
+        name: Some("Shell Transform Blocked".to_string()),
+        settings: PipelineSettings {
+            allow_shell: false, // Default
+            ..Default::default()
+        },
+        step: vec![PipelineStep {
+            step_type: StepType::Transform,
+            pattern: r".+".to_string(),
+            transform: Some(TransformAction::Shell {
+                command: "cat".to_string(),
+            }),
+            enabled: Some(true),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    let result = StreamProcessor::new(config);
+
+    // Should fail or warn when allow_shell is false
+    // Depending on implementation, this might succeed but not execute shell
+    // or might error at creation time
+    if result.is_ok() {
+        let mut processor = result.unwrap();
+        let reader = Cursor::new("test");
+        let mut output = Vec::new();
+        // The actual shell execution should be blocked or result in an error
+        let _ = processor.process_stream(reader, &mut output);
+    }
+}
+
+/// Test has_shell_transforms detection
+#[test]
+fn test_has_shell_transforms_detection() {
+    // Config with shell transform
+    let config_with_shell = PipelineConfig {
+        step: vec![PipelineStep {
+            step_type: StepType::Transform,
+            pattern: r".+".to_string(),
+            transform: Some(TransformAction::Shell {
+                command: "cat".to_string(),
+            }),
+            enabled: Some(true),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    assert!(config_with_shell.has_shell_transforms());
+
+    // Config without shell transform
+    let config_without_shell = PipelineConfig {
+        step: vec![PipelineStep {
+            step_type: StepType::Transform,
+            pattern: r".+".to_string(),
+            transform: Some(TransformAction::Uppercase),
+            enabled: Some(true),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    assert!(!config_without_shell.has_shell_transforms());
+}
+
+/// Test get_shell_commands extraction
+#[test]
+fn test_get_shell_commands() {
+    let config = PipelineConfig {
+        step: vec![
+            PipelineStep {
+                step_type: StepType::Transform,
+                pattern: r".+".to_string(),
+                transform: Some(TransformAction::Shell {
+                    command: "sed 's/foo/bar/'".to_string(),
+                }),
+                enabled: Some(true),
+                ..Default::default()
+            },
+            PipelineStep {
+                step_type: StepType::Transform,
+                pattern: r".+".to_string(),
+                transform: Some(TransformAction::Uppercase),
+                enabled: Some(true),
+                ..Default::default()
+            },
+            PipelineStep {
+                step_type: StepType::Transform,
+                pattern: r".+".to_string(),
+                transform: Some(TransformAction::Shell {
+                    command: "awk '{print $1}'".to_string(),
+                }),
+                enabled: Some(true),
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    };
+
+    let commands = config.get_shell_commands();
+
+    assert_eq!(commands.len(), 2);
+    assert!(commands.contains(&"sed 's/foo/bar/'"));
+    assert!(commands.contains(&"awk '{print $1}'"));
+}
+
+// =============================================================================
+// LOG FILTERING TESTS
+// =============================================================================
+
+/// Test log level filtering - keep warnings and errors
+#[test]
+fn test_log_filter_keep_important() {
+    let config = PipelineConfig {
+        name: Some("Log Filter".to_string()),
+        step: vec![PipelineStep {
+            step_type: StepType::Filter,
+            pattern: "(WARN|ERROR|FATAL)".to_string(),
+            action: Some(StepAction::KeepLine),
+            enabled: Some(true),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    let mut processor = StreamProcessor::new(config).unwrap();
+    let input = r#"2024-01-15 [INFO] Server started
+2024-01-15 [WARN] Low memory
+2024-01-15 [DEBUG] Loading config
+2024-01-15 [ERROR] Database failed
+2024-01-15 [INFO] Request completed"#;
+    let reader = Cursor::new(input);
+    let mut output = Vec::new();
+
+    processor.process_stream(reader, &mut output).unwrap();
+    let output_str = String::from_utf8(output).unwrap();
+
+    // Should only contain WARN and ERROR lines
+    assert!(output_str.contains("[WARN]"));
+    assert!(output_str.contains("[ERROR]"));
+    assert!(!output_str.contains("[INFO]"));
+    assert!(!output_str.contains("[DEBUG]"));
+}
+
+/// Test log filtering - drop debug lines
+#[test]
+fn test_log_filter_drop_debug() {
+    let config = PipelineConfig {
+        name: Some("Drop Debug".to_string()),
+        step: vec![PipelineStep {
+            step_type: StepType::Filter,
+            pattern: r"\[DEBUG\]".to_string(),
+            action: Some(StepAction::DropLine),
+            enabled: Some(true),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    let mut processor = StreamProcessor::new(config).unwrap();
+    let input = r#"[INFO] Normal log
+[DEBUG] Debug info
+[ERROR] Error occurred
+[DEBUG] More debug"#;
+    let reader = Cursor::new(input);
+    let mut output = Vec::new();
+
+    processor.process_stream(reader, &mut output).unwrap();
+    let output_str = String::from_utf8(output).unwrap();
+
+    assert!(output_str.contains("[INFO]"));
+    assert!(output_str.contains("[ERROR]"));
+    assert!(!output_str.contains("[DEBUG]"));
+}

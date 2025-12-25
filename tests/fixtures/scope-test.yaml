@@ -1,0 +1,25 @@
+# YAML file for testing tree-sitter scopes
+# hello in comment
+
+name: test-project
+version: "1.0.0"
+description: hello in description
+
+config:
+  setting: hello value
+  nested:
+    deep: hello nested
+
+items:
+  - id: 1
+    name: hello item 1
+  - id: 2
+    name: hello item 2
+  - id: 3
+    name: goodbye item 3
+
+# Another hello comment
+multi_line: |
+  This is a multi-line string
+  with hello in it
+  spanning multiple lines

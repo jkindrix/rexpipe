@@ -1,0 +1,17 @@
+{
+  "name": "test-project",
+  "version": "1.0.0",
+  "description": "hello in description",
+  "keywords": ["hello", "test", "json"],
+  "config": {
+    "setting": "hello value",
+    "nested": {
+      "deep": "hello nested"
+    }
+  },
+  "items": [
+    {"id": 1, "name": "hello item 1"},
+    {"id": 2, "name": "hello item 2"},
+    {"id": 3, "name": "goodbye item 3"}
+  ]
+}

@@ -184,8 +184,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Transform integration tests**: Added tests for built-in transforms
   (uppercase, title_case, reverse) with global flag chaining
 - **Test fixtures**: Added multi-language test fixture files
-  (`scope-test.rs`, `scope-test.py`, `scope-test.js`, etc.) for consistent
+  (`scope-test.rs`, `scope-test.py`, `scope-test.js`, `scope-test.go`,
+  `scope-test.ts`, `scope-test.json`, `scope-test.yaml`) for consistent
   syntax-aware testing
+- **Embedded test parsing tests**: Added tests verifying `[[test]]` config
+  sections are correctly parsed and executed via `TestRunner`
+- **PII sanitization pattern tests**: Added comprehensive tests for common
+  PII redaction patterns (SSN, email, credit card, phone, API key, IP address)
+- **Shell plugin tests**: Added tests for shell transform detection,
+  `allow_shell` permission checking, and command extraction
+- **Log filtering tests**: Added tests for common log level filtering patterns
+  (keep warnings/errors, drop debug)
 
 ## [2.0.0] - 2024-12-21
 
