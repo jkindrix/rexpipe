@@ -696,7 +696,13 @@ fn build_cli() -> Command {
         .arg(
             Arg::new("jsonl")
                 .long("jsonl")
-                .help("Output results as streaming JSON Lines (one JSON object per line)")
+                .help("Output results as streaming JSON Lines (one JSON object per file)")
+                .long_help(
+                    "Output results as streaming JSON Lines (one JSON object per line). \
+                     Each processed file produces one JSON object containing matches and stats.\n\n\
+                     NOTE: JSONL output requires file arguments to produce per-file objects. \
+                     For stdin input, use --json instead for a single JSON output."
+                )
                 .action(ArgAction::SetTrue)
                 .conflicts_with("json"),
         )
@@ -947,21 +953,25 @@ fn build_cli() -> Command {
             Arg::new("checkpoint")
                 .long("checkpoint")
                 .value_name("FILE")
-                .help("Enable incremental processing with checkpoint file")
+                .help("Enable incremental processing with checkpoint file (files only, not stdin)")
                 .long_help(
                     "Resume processing from saved position. Tracks file offsets and content hashes \
-                     to only process new or changed content. Useful for growing log files."
+                     to only process new or changed content. Useful for growing log files.\n\n\
+                     NOTE: Checkpointing requires file arguments to track byte positions. \
+                     It does not work with stdin input, which has no seekable position."
                 )
                 .value_hint(ValueHint::FilePath),
         )
         .arg(
             Arg::new("resume")
                 .long("resume")
-                .help("Resume processing from checkpoint (requires --checkpoint)")
+                .help("Resume processing from checkpoint (requires --checkpoint, files only)")
                 .long_help(
                     "Resume processing from the last saved checkpoint position. \
                      Must be used with --checkpoint to specify the checkpoint file. \
-                     Only processes new content since the last checkpoint was saved."
+                     Only processes new content since the last checkpoint was saved.\n\n\
+                     NOTE: Resume requires file arguments. Stdin input cannot be resumed \
+                     because it has no file position to track."
                 )
                 .action(ArgAction::SetTrue),
         )
@@ -1188,7 +1198,17 @@ fn build_cli() -> Command {
         .arg(
             Arg::new("strict")
                 .long("strict")
-                .help("Reject potentially dangerous ReDoS regex patterns")
+                .help("Reject patterns with ReDoS risk in PCRE mode")
+                .long_help(
+                    "Reject regex patterns that may cause catastrophic backtracking (ReDoS).\n\n\
+                     This flag is only relevant when using --pcre mode or flags = [\"pcre\"], \
+                     which enables the backtracking fancy-regex engine.\n\n\
+                     The default Rust regex engine is inherently safe from ReDoS because it \
+                     uses finite automata (no backtracking). This flag has no effect on \
+                     standard regex patterns.\n\n\
+                     Patterns flagged as risky include nested quantifiers like (a+)+ or \
+                     complex alternations with overlapping matches."
+                )
                 .action(ArgAction::SetTrue),
         )
         .arg(
@@ -3348,6 +3368,25 @@ fn show_help_topic(topic: &str) -> Result<()> {
             println!();
             println!("PCRE MODE (lookahead/lookbehind):");
             println!("  Enable with: --pcre (global) or flags = [\"pcre\"] (per-step)");
+            println!("  (?=...)     Positive lookahead");
+            println!("  (?!...)     Negative lookahead");
+            println!("  (?<=...)    Positive lookbehind");
+            println!("  (?<!...)    Negative lookbehind");
+            println!();
+            println!("SHELL ESCAPING (PCRE patterns on command line):");
+            println!("  The '!' character in negative lookahead (?!...) requires careful");
+            println!("  escaping in most shells. Options:");
+            println!();
+            println!("  1. Use single quotes (recommended):");
+            println!("     rexpipe --pcre -p 'foo(?!bar)'");
+            println!();
+            println!("  2. Escape the exclamation mark:");
+            println!("     rexpipe --pcre -p \"foo(?\\!bar)\"");
+            println!();
+            println!("  3. Use a config file (avoids shell escaping entirely):");
+            println!("     [[filter]]");
+            println!("     pattern = \"foo(?!bar)\"");
+            println!("     flags = [\"pcre\"]");
             println!();
             println!("ALIASES (define in config):");
             println!("  [aliases]");
@@ -3824,6 +3863,9 @@ fn validate_config_file(matches: &clap::ArgMatches) -> Result<()> {
 
     let config: PipelineConfig =
         toml::from_str(&content).map_err(|e| anyhow!("TOML parsing error: {}", e))?;
+
+    // Normalize shorthand sections ([[filter]], [[substitute]], etc.) into step vec
+    let config = config.normalize();
 
     // Validate the config
     config.validate().map_err(|errors| {
