@@ -90,11 +90,54 @@ set shell := ["bash", "-cu"]
 set export
 
 # ============================================================================
+# FEATURE FLAG CONFIGURATION
+# ============================================================================
+#
+# Available features:
+#   - tree-sitter : Syntax-aware scoping (Rust, Python, JS, TS, Go, JSON, YAML)
+#   - pcre        : PCRE regex engine with lookahead/lookbehind
+#   - async       : Async I/O support via tokio
+#   - watch       : File watching support via notify
+#   - remote      : Remote file fetching via ureq
+#   - fpe         : Format-preserving encryption
+#
+# Feature presets:
+#   - "all"      : All features (default for development)
+#   - "minimal"  : No optional features (smallest binary)
+#   - "standard" : tree-sitter,pcre (common use case)
+#
+# Usage:
+#   just build                    # Build with all features
+#   just build-with "pcre"        # Build with specific feature(s)
+#   just build-minimal            # Build with no optional features
+#   just install-with "tree-sitter,pcre"  # Install with specific features
+#
+# ----------------------------------------------------------------------------
+
+# Default features for builds (can override via FEATURES env var)
+default_features := env_var_or_default("FEATURES", "all")
+
+# Feature presets
+features_all := "tree-sitter,pcre,async,watch,remote,fpe"
+features_standard := "tree-sitter,pcre"
+features_minimal := ""
+
+# Helper to resolve feature preset or custom features
+_resolve_features features:
+    #!/usr/bin/env bash
+    case "{{features}}" in
+        "all")      echo "{{features_all}}" ;;
+        "standard") echo "{{features_standard}}" ;;
+        "minimal"|"none"|"") echo "" ;;
+        *)          echo "{{features}}" ;;
+    esac
+
+# ============================================================================
 # CORE BUILD RECIPES
 # ============================================================================
 
 [group('build')]
-[doc("Build in debug mode")]
+[doc("Build in debug mode (all features)")]
 build:
     #!/usr/bin/env bash
     printf '\n{{bold}}{{blue}}══════ Building (debug) ══════{{reset}}\n\n'
@@ -102,7 +145,32 @@ build:
     printf '{{green}}[OK]{{reset}}   Build complete\n'
 
 [group('build')]
-[doc("Build in release mode with optimizations")]
+[doc("Build with specific features: just build-with \"tree-sitter,pcre\"")]
+build-with features:
+    #!/usr/bin/env bash
+    RESOLVED=$(just _resolve_features "{{features}}")
+    printf '\n{{bold}}{{blue}}══════ Building (debug) ══════{{reset}}\n\n'
+    if [ -z "$RESOLVED" ]; then
+        printf '{{cyan}}[INFO]{{reset}} Features: (none - minimal build)\n'
+        {{cargo}} build --no-default-features -j {{jobs}}
+    else
+        printf '{{cyan}}[INFO]{{reset}} Features: %s\n' "$RESOLVED"
+        {{cargo}} build --no-default-features --features "$RESOLVED" -j {{jobs}}
+    fi
+    printf '{{green}}[OK]{{reset}}   Build complete\n'
+
+[group('build')]
+[doc("Build with minimal features (no optional deps)")]
+build-minimal:
+    @just build-with "minimal"
+
+[group('build')]
+[doc("Build with standard features (tree-sitter + pcre)")]
+build-standard:
+    @just build-with "standard"
+
+[group('build')]
+[doc("Build in release mode with optimizations (all features)")]
 release:
     #!/usr/bin/env bash
     printf '\n{{bold}}{{blue}}══════ Building (release) ══════{{reset}}\n\n'
@@ -110,11 +178,49 @@ release:
     printf '{{green}}[OK]{{reset}}   Release build complete\n'
 
 [group('build')]
+[doc("Release build with specific features: just release-with \"tree-sitter,pcre\"")]
+release-with features:
+    #!/usr/bin/env bash
+    RESOLVED=$(just _resolve_features "{{features}}")
+    printf '\n{{bold}}{{blue}}══════ Building (release) ══════{{reset}}\n\n'
+    if [ -z "$RESOLVED" ]; then
+        printf '{{cyan}}[INFO]{{reset}} Features: (none - minimal build)\n'
+        {{cargo}} build --no-default-features --release -j {{jobs}}
+    else
+        printf '{{cyan}}[INFO]{{reset}} Features: %s\n' "$RESOLVED"
+        {{cargo}} build --no-default-features --features "$RESOLVED" --release -j {{jobs}}
+    fi
+    printf '{{green}}[OK]{{reset}}   Release build complete\n'
+
+[group('build')]
+[doc("Release build with minimal features")]
+release-minimal:
+    @just release-with "minimal"
+
+[group('build')]
+[doc("Release build with standard features")]
+release-standard:
+    @just release-with "standard"
+
+[group('build')]
 [doc("Fast type check without code generation")]
 check:
     #!/usr/bin/env bash
     printf '{{cyan}}[INFO]{{reset}} Type checking...\n'
     {{cargo}} check --all-features -j {{jobs}}
+    printf '{{green}}[OK]{{reset}}   Type check passed\n'
+
+[group('build')]
+[doc("Type check with specific features")]
+check-with features:
+    #!/usr/bin/env bash
+    RESOLVED=$(just _resolve_features "{{features}}")
+    printf '{{cyan}}[INFO]{{reset}} Type checking...\n'
+    if [ -z "$RESOLVED" ]; then
+        {{cargo}} check --no-default-features -j {{jobs}}
+    else
+        {{cargo}} check --no-default-features --features "$RESOLVED" -j {{jobs}}
+    fi
     printf '{{green}}[OK]{{reset}}   Type check passed\n'
 
 [group('build')]
@@ -139,16 +245,61 @@ clean:
 [doc("Clean and rebuild from scratch")]
 rebuild: clean build
 
+[group('build')]
+[doc("List available features and presets")]
+features:
+    #!/usr/bin/env bash
+    printf '\n{{bold}}{{blue}}══════ Available Features ══════{{reset}}\n\n'
+    printf '{{bold}}Individual Features:{{reset}}\n'
+    printf '  {{cyan}}tree-sitter{{reset}}  Syntax-aware scoping (Rust, Python, JS, TS, Go, JSON, YAML)\n'
+    printf '  {{cyan}}pcre{{reset}}         PCRE regex engine with lookahead/lookbehind support\n'
+    printf '  {{cyan}}async{{reset}}        Async I/O support via tokio\n'
+    printf '  {{cyan}}watch{{reset}}        File watching support via notify\n'
+    printf '  {{cyan}}remote{{reset}}       Remote file fetching via ureq\n'
+    printf '  {{cyan}}fpe{{reset}}          Format-preserving encryption\n'
+    printf '\n{{bold}}Feature Presets:{{reset}}\n'
+    printf '  {{cyan}}all{{reset}}          All features: {{features_all}}\n'
+    printf '  {{cyan}}standard{{reset}}     Common features: {{features_standard}}\n'
+    printf '  {{cyan}}minimal{{reset}}      No optional features (smallest binary)\n'
+    printf '\n{{bold}}Usage Examples:{{reset}}\n'
+    printf '  just build                         # All features (default)\n'
+    printf '  just build-with "pcre"             # Single feature\n'
+    printf '  just build-with "tree-sitter,pcre" # Multiple features\n'
+    printf '  just build-minimal                 # No optional features\n'
+    printf '  just build-standard                # tree-sitter + pcre\n'
+    printf '  just release                       # Release (all features)\n'
+    printf '  just release-with "standard"       # Release with preset\n'
+    printf '  just install                       # Install (all features)\n'
+    printf '  just install-minimal               # Install minimal binary\n'
+    printf '\n{{bold}}Environment Variable:{{reset}}\n'
+    printf '  FEATURES="pcre,async" just build-with "$FEATURES"\n'
+    printf '\n'
+
 # ============================================================================
 # TESTING RECIPES
 # ============================================================================
 
 [group('test')]
-[doc("Run all tests")]
+[doc("Run all tests (all features)")]
 test:
     #!/usr/bin/env bash
     printf '\n{{bold}}{{blue}}══════ Running Tests ══════{{reset}}\n\n'
     {{cargo}} test --all-features -j {{jobs}}
+    printf '{{green}}[OK]{{reset}}   All tests passed\n'
+
+[group('test')]
+[doc("Run tests with specific features: just test-with \"tree-sitter,pcre\"")]
+test-with features:
+    #!/usr/bin/env bash
+    RESOLVED=$(just _resolve_features "{{features}}")
+    printf '\n{{bold}}{{blue}}══════ Running Tests ══════{{reset}}\n\n'
+    if [ -z "$RESOLVED" ]; then
+        printf '{{cyan}}[INFO]{{reset}} Features: (none - minimal build)\n'
+        {{cargo}} test --no-default-features -j {{jobs}}
+    else
+        printf '{{cyan}}[INFO]{{reset}} Features: %s\n' "$RESOLVED"
+        {{cargo}} test --no-default-features --features "$RESOLVED" -j {{jobs}}
+    fi
     printf '{{green}}[OK]{{reset}}   All tests passed\n'
 
 [group('test')]
@@ -740,12 +891,37 @@ run-example pattern="\\d+" input="Test 123 and 456":
     echo "{{input}}" | {{cargo}} run --release -- -p "{{pattern}}"
 
 [group('util')]
-[doc("Install rexpipe locally")]
+[doc("Install rexpipe locally (all features)")]
 install:
     #!/usr/bin/env bash
-    printf '{{cyan}}[INFO]{{reset}} Installing rexpipe...\n'
+    printf '{{cyan}}[INFO]{{reset}} Installing rexpipe (all features)...\n'
     {{cargo}} install --path . --all-features
     printf '{{green}}[OK]{{reset}}   rexpipe installed\n'
+
+[group('util')]
+[doc("Install with specific features: just install-with \"tree-sitter,pcre\"")]
+install-with features:
+    #!/usr/bin/env bash
+    RESOLVED=$(just _resolve_features "{{features}}")
+    printf '{{cyan}}[INFO]{{reset}} Installing rexpipe...\n'
+    if [ -z "$RESOLVED" ]; then
+        printf '{{cyan}}[INFO]{{reset}} Features: (none - minimal build)\n'
+        {{cargo}} install --path . --no-default-features
+    else
+        printf '{{cyan}}[INFO]{{reset}} Features: %s\n' "$RESOLVED"
+        {{cargo}} install --path . --no-default-features --features "$RESOLVED"
+    fi
+    printf '{{green}}[OK]{{reset}}   rexpipe installed\n'
+
+[group('util')]
+[doc("Install with minimal features")]
+install-minimal:
+    @just install-with "minimal"
+
+[group('util')]
+[doc("Install with standard features (tree-sitter + pcre)")]
+install-standard:
+    @just install-with "standard"
 
 [group('util')]
 [doc("Uninstall rexpipe")]
