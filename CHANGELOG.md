@@ -159,6 +159,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   by content when both `start_pattern` and `pattern` are specified. For example,
   `action = "keep_block"` with `pattern = "MAGIC"` now only keeps blocks containing
   "MAGIC".
+- **Tree-sitter scope filtering**: The `--scope code|string|comment` flag with
+  `--language` now correctly filters lines. Previously, scoped filtering only logged
+  matches without actually filtering, resulting in 0 matches being reported.
 - **Benchmark CI configuration**: Fixed `cargo bench` to specify benchmark target
   explicitly, preventing false failures from lib/bin targets
 

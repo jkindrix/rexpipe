@@ -3510,18 +3510,56 @@ impl StreamProcessor {
                 StepType::Filter => {
                     // Filter step with syntax-aware scope: remove lines containing
                     // matches that are within scope (or keep only those lines)
-                    // This is a best-effort adaptation of line-level filtering to AST context
                     log::debug!(
                         "Filter step with syntax-aware scope: filtering based on in-scope matches"
                     );
-                    // For now, we find matches in scope and log them
-                    // Full line-level filtering doesn't map cleanly to AST model
-                    let matches = analyzer.scoped_match(&result, &regex, scope);
-                    if !matches.is_empty() {
-                        log::debug!(
-                            "Filter found {} in-scope matches (line filtering not applied in file mode)",
-                            matches.len()
-                        );
+
+                    // Find all scoped matches
+                    let scoped_matches = analyzer.scoped_match(&result, &regex, scope);
+                    log::debug!(
+                        "Filter found {} in-scope matches",
+                        scoped_matches.len()
+                    );
+
+                    // Determine which lines contain scoped matches
+                    let mut lines_with_matches = std::collections::HashSet::new();
+                    let line_starts: Vec<usize> = std::iter::once(0)
+                        .chain(result.match_indices('\n').map(|(i, _)| i + 1))
+                        .collect();
+
+                    for m in &scoped_matches {
+                        // Find which line this match is on
+                        for (line_idx, &start) in line_starts.iter().enumerate() {
+                            let end = line_starts.get(line_idx + 1).copied().unwrap_or(result.len());
+                            if m.start >= start && m.start < end {
+                                lines_with_matches.insert(line_idx);
+                                break;
+                            }
+                        }
+                    }
+
+                    // Determine action: keep lines with matches or drop them
+                    let keep_matches = match step.action {
+                        Some(crate::pipeline::StepAction::KeepLine) => true,
+                        Some(crate::pipeline::StepAction::DropLine) => false,
+                        _ => true, // Default to keep behavior
+                    };
+
+                    // Filter lines based on action
+                    let filtered_lines: Vec<&str> = result
+                        .lines()
+                        .enumerate()
+                        .filter(|(idx, _)| {
+                            let has_match = lines_with_matches.contains(idx);
+                            if keep_matches { has_match } else { !has_match }
+                        })
+                        .map(|(_, line)| line)
+                        .collect();
+
+                    result = filtered_lines.join("\n");
+                    // Preserve trailing newline if original had one
+                    if result.lines().count() > 0 && !result.ends_with('\n') {
+                        result.push('\n');
                     }
                 }
                 StepType::Block => {
@@ -3558,17 +3596,28 @@ impl StreamProcessor {
         // This only processes steps that have BOTH languages AND scope_filter defined
         let processed = self.process_file_syntax_aware(content, file_language)?;
 
-        // Count transformations
-        let transformations = if processed != content { 1 } else { 0 };
+        // Count actual changes
+        let input_lines = content.lines().count() as u64;
+        let output_lines = processed.lines().count() as u64;
+        let content_changed = processed != content;
 
-        // Create result with basic stats
-        let lines_count = content.lines().count() as u64;
+        // For filters, matches_found = lines that were filtered (kept or dropped based on match)
+        // For substitutions, matches_found = 1 if content changed
+        let matches_found = if input_lines != output_lines {
+            // Filtering occurred - count the difference or the output lines
+            output_lines.max(1)
+        } else if content_changed {
+            1 // Substitution/transform occurred
+        } else {
+            0
+        };
+
         let result = PipelineResult {
-            lines_processed: lines_count,
-            lines_output: lines_count,
-            lines_dropped: 0,
-            matches_found: transformations, // Approximate: each transformation is a match
-            transformations_applied: transformations,
+            lines_processed: input_lines,
+            lines_output: output_lines,
+            lines_dropped: input_lines.saturating_sub(output_lines),
+            matches_found,
+            transformations_applied: if content_changed { 1 } else { 0 },
             errors: Vec::new(),
             step_results: Vec::new(),
         };
