@@ -430,11 +430,48 @@ impl SyntaxAnalyzer {
                 let types_vec: Vec<&str> = types.iter().map(|s| s.as_str()).collect();
                 self.find_node_type_ranges(&tree, &types_vec)
             }
-            ScopeFilter::Exclude(types) => {
-                let exclude_ranges = {
-                    let types_vec: Vec<&str> = types.iter().map(|s| s.as_str()).collect();
-                    self.find_node_type_ranges(&tree, &types_vec)
-                };
+            ScopeFilter::Exclude(scope_names) => {
+                // Convert high-level scope names to actual node types
+                let mut exclude_types: Vec<&'static str> = Vec::new();
+                for name in scope_names {
+                    match name.to_lowercase().as_str() {
+                        "strings" | "string" => {
+                            exclude_types.extend(self.language.string_node_types());
+                        }
+                        "comments" | "comment" => {
+                            exclude_types.extend(self.language.comment_node_types());
+                        }
+                        "functions" | "function" | "fn" => {
+                            exclude_types.extend(self.language.function_node_types());
+                        }
+                        "function_calls" | "calls" => {
+                            exclude_types.extend(self.language.function_call_node_types());
+                        }
+                        "imports" | "import" | "use" => {
+                            exclude_types.extend(self.language.import_node_types());
+                        }
+                        "types" | "type" => {
+                            exclude_types.extend(self.language.type_node_types());
+                        }
+                        "identifiers" | "identifier" | "ident" => {
+                            exclude_types.extend(self.language.identifier_node_types());
+                        }
+                        "macros" | "macro" => {
+                            exclude_types.extend(self.language.macro_node_types());
+                        }
+                        "control_flow" | "control" | "flow" => {
+                            exclude_types.extend(self.language.control_flow_node_types());
+                        }
+                        _ => {
+                            // Treat as raw node type name for advanced users
+                            log::debug!(
+                                "Unknown scope name '{}', treating as raw node type",
+                                name
+                            );
+                        }
+                    }
+                }
+                let exclude_ranges = self.find_node_type_ranges(&tree, &exclude_types);
                 self.invert_ranges(&exclude_ranges, source.len())
             }
         }
