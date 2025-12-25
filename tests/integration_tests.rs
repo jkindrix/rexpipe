@@ -2576,3 +2576,458 @@ fn test_crlf_global_replacement() {
     // Verify no digits remain
     assert!(!output_str.chars().any(|c| c.is_ascii_digit()));
 }
+
+// =============================================================================
+// Block Content Filtering Tests (Issue #6 fix verification)
+// =============================================================================
+
+/// Test that block steps filter by content when pattern is specified
+/// This verifies the fix for Issue #6: Block pattern filter not working
+#[test]
+fn test_block_content_filtering_keep() {
+    // Block step with keep_block and content pattern - only keep blocks containing ERROR
+    let config = PipelineConfig {
+        name: Some("Block Content Filter Test".to_string()),
+        description: None,
+        version: None,
+        patterns_include: Vec::new(),
+        settings: PipelineSettings::default(),
+        step: vec![PipelineStep {
+            step_type: StepType::Block,
+            pattern: "ERROR".to_string(), // Content pattern - only keep blocks with ERROR
+            start_pattern: Some(r"^--- START".to_string()),
+            end_pattern: Some(r"^--- END".to_string()),
+            action: Some(StepAction::KeepBlock),
+            enabled: Some(true),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    let input = r#"--- START BLOCK 1 ---
+This block has no errors
+Just normal content
+--- END BLOCK 1 ---
+
+Some text between
+
+--- START BLOCK 2 ---
+This block has ERROR in it
+Should be kept
+--- END BLOCK 2 ---
+
+--- START BLOCK 3 ---
+Another clean block
+No issues here
+--- END BLOCK 3 ---
+"#;
+
+    let mut processor = StreamProcessor::new(config).unwrap();
+    let reader = Cursor::new(input);
+    let mut output = Vec::new();
+
+    processor.process_stream(reader, &mut output).unwrap();
+    let output_str = String::from_utf8(output).unwrap();
+
+    // Block 2 (with ERROR) should be kept
+    assert!(
+        output_str.contains("--- START BLOCK 2"),
+        "Block 2 with ERROR should be kept"
+    );
+    assert!(
+        output_str.contains("This block has ERROR in it"),
+        "ERROR line should be present"
+    );
+
+    // Blocks 1 and 3 (without ERROR) should be dropped
+    assert!(
+        !output_str.contains("--- START BLOCK 1"),
+        "Block 1 without ERROR should be dropped"
+    );
+    assert!(
+        !output_str.contains("--- START BLOCK 3"),
+        "Block 3 without ERROR should be dropped"
+    );
+}
+
+/// Test block content filtering with drop_block action
+#[test]
+fn test_block_content_filtering_drop() {
+    // Block step with drop_block and content pattern - drop blocks containing SECRET
+    let config = PipelineConfig {
+        name: Some("Block Content Drop Test".to_string()),
+        description: None,
+        version: None,
+        patterns_include: Vec::new(),
+        settings: PipelineSettings::default(),
+        step: vec![PipelineStep {
+            step_type: StepType::Block,
+            pattern: "SECRET".to_string(), // Content pattern - drop blocks with SECRET
+            start_pattern: Some(r"^\[BEGIN\]".to_string()),
+            end_pattern: Some(r"^\[END\]".to_string()),
+            action: Some(StepAction::DropBlock),
+            enabled: Some(true),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    let input = r#"[BEGIN]
+Public information
+Safe content
+[END]
+
+Between blocks text
+
+[BEGIN]
+SECRET password here
+Should be redacted
+[END]
+
+[BEGIN]
+More public info
+[END]
+"#;
+
+    let mut processor = StreamProcessor::new(config).unwrap();
+    let reader = Cursor::new(input);
+    let mut output = Vec::new();
+
+    processor.process_stream(reader, &mut output).unwrap();
+    let output_str = String::from_utf8(output).unwrap();
+
+    // Block with SECRET should be dropped
+    assert!(
+        !output_str.contains("SECRET password"),
+        "Block with SECRET should be dropped"
+    );
+
+    // Blocks without SECRET should be kept
+    assert!(
+        output_str.contains("Public information"),
+        "Public block should be kept"
+    );
+    assert!(
+        output_str.contains("More public info"),
+        "Last public block should be kept"
+    );
+
+    // Text between blocks should be kept
+    assert!(
+        output_str.contains("Between blocks text"),
+        "Text between blocks should be kept"
+    );
+}
+
+// =============================================================================
+// Multi-Step Pipeline Ordering Tests
+// =============================================================================
+
+/// Test that multiple steps are applied in order
+#[test]
+fn test_multi_step_ordering() {
+    // Step 1: Replace "foo" with "bar"
+    // Step 2: Replace "bar" with "baz"
+    // If ordering is correct: foo -> bar -> baz
+    let config = PipelineConfig {
+        name: Some("Multi-Step Order Test".to_string()),
+        description: None,
+        version: None,
+        patterns_include: Vec::new(),
+        settings: PipelineSettings::default(),
+        step: vec![
+            PipelineStep {
+                step_type: StepType::Substitute,
+                pattern: "foo".to_string(),
+                replacement: Some("bar".to_string()),
+                enabled: Some(true),
+                ..Default::default()
+            },
+            PipelineStep {
+                step_type: StepType::Substitute,
+                pattern: "bar".to_string(),
+                replacement: Some("baz".to_string()),
+                enabled: Some(true),
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    };
+
+    let mut processor = StreamProcessor::new(config).unwrap();
+    let reader = Cursor::new("foo is here");
+    let mut output = Vec::new();
+
+    processor.process_stream(reader, &mut output).unwrap();
+    let output_str = String::from_utf8(output).unwrap();
+
+    // If ordering is correct, "foo" should become "baz" (foo -> bar -> baz)
+    assert!(
+        output_str.contains("baz"),
+        "foo should be transformed to baz through both steps"
+    );
+    assert!(
+        !output_str.contains("foo"),
+        "foo should not remain"
+    );
+}
+
+/// Test filter then substitute ordering
+#[test]
+fn test_filter_then_substitute_ordering() {
+    // Step 1: Keep only lines with "IMPORTANT"
+    // Step 2: Replace "old" with "new"
+    let config = PipelineConfig {
+        name: Some("Filter Then Substitute Test".to_string()),
+        description: None,
+        version: None,
+        patterns_include: Vec::new(),
+        settings: PipelineSettings::default(),
+        step: vec![
+            PipelineStep {
+                step_type: StepType::Filter,
+                pattern: "IMPORTANT".to_string(),
+                action: Some(StepAction::KeepLine),
+                enabled: Some(true),
+                ..Default::default()
+            },
+            PipelineStep {
+                step_type: StepType::Substitute,
+                pattern: "old".to_string(),
+                replacement: Some("new".to_string()),
+                enabled: Some(true),
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    };
+
+    let input = "IMPORTANT: old value\nnot important: old value\nIMPORTANT: another old one";
+    let mut processor = StreamProcessor::new(config).unwrap();
+    let reader = Cursor::new(input);
+    let mut output = Vec::new();
+
+    processor.process_stream(reader, &mut output).unwrap();
+    let output_str = String::from_utf8(output).unwrap();
+
+    // Only IMPORTANT lines should remain, and "old" should be "new"
+    assert!(
+        output_str.contains("IMPORTANT: new value"),
+        "IMPORTANT line should have 'old' replaced with 'new'"
+    );
+    assert!(
+        !output_str.contains("not important"),
+        "Non-IMPORTANT lines should be filtered out"
+    );
+    assert!(
+        output_str.lines().count() == 2,
+        "Should have exactly 2 lines (the IMPORTANT ones)"
+    );
+}
+
+/// Test substitute then filter ordering
+#[test]
+fn test_substitute_then_filter_ordering() {
+    // Step 1: Replace "secret" with "REDACTED"
+    // Step 2: Drop lines containing "REDACTED"
+    let config = PipelineConfig {
+        name: Some("Substitute Then Filter Test".to_string()),
+        description: None,
+        version: None,
+        patterns_include: Vec::new(),
+        settings: PipelineSettings::default(),
+        step: vec![
+            PipelineStep {
+                step_type: StepType::Substitute,
+                pattern: "secret".to_string(),
+                replacement: Some("REDACTED".to_string()),
+                enabled: Some(true),
+                ..Default::default()
+            },
+            PipelineStep {
+                step_type: StepType::Filter,
+                pattern: "REDACTED".to_string(),
+                action: Some(StepAction::DropLine),
+                enabled: Some(true),
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    };
+
+    let input = "public info\nsecret password\nanother public line";
+    let mut processor = StreamProcessor::new(config).unwrap();
+    let reader = Cursor::new(input);
+    let mut output = Vec::new();
+
+    processor.process_stream(reader, &mut output).unwrap();
+    let output_str = String::from_utf8(output).unwrap();
+
+    // Lines with "secret" should be redacted then dropped
+    assert!(
+        !output_str.contains("secret"),
+        "Original secret should not appear"
+    );
+    assert!(
+        !output_str.contains("REDACTED"),
+        "REDACTED should be filtered out"
+    );
+    assert!(
+        output_str.contains("public info"),
+        "Public lines should remain"
+    );
+    assert!(
+        output_str.lines().filter(|l| !l.is_empty()).count() == 2,
+        "Should have 2 public lines remaining"
+    );
+}
+
+// =============================================================================
+// Plugin/Transform Integration Tests
+// =============================================================================
+
+/// Test built-in transform: uppercase (integration with global flag)
+#[test]
+fn test_transform_uppercase_integration() {
+    let config = PipelineConfig {
+        name: Some("Uppercase Transform Test".to_string()),
+        description: None,
+        version: None,
+        patterns_include: Vec::new(),
+        settings: PipelineSettings::default(),
+        step: vec![PipelineStep {
+            step_type: StepType::Transform,
+            pattern: r"[a-z]+".to_string(),
+            transform: Some(TransformAction::Uppercase),
+            flags: Some(vec![RegexFlag::Global]), // Global flag for all matches
+            enabled: Some(true),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    let mut processor = StreamProcessor::new(config).unwrap();
+    let reader = Cursor::new("hello world");
+    let mut output = Vec::new();
+
+    processor.process_stream(reader, &mut output).unwrap();
+    let output_str = String::from_utf8(output).unwrap();
+
+    assert!(
+        output_str.contains("HELLO") && output_str.contains("WORLD"),
+        "Words should be uppercased: {}",
+        output_str
+    );
+}
+
+/// Test built-in transform: title_case
+#[test]
+fn test_transform_title_case_integration() {
+    let config = PipelineConfig {
+        name: Some("Title Case Transform Test".to_string()),
+        description: None,
+        version: None,
+        patterns_include: Vec::new(),
+        settings: PipelineSettings::default(),
+        step: vec![PipelineStep {
+            step_type: StepType::Transform,
+            pattern: r"[a-z]+".to_string(),
+            transform: Some(TransformAction::TitleCase),
+            flags: Some(vec![RegexFlag::Global]), // Global flag for all matches
+            enabled: Some(true),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    let mut processor = StreamProcessor::new(config).unwrap();
+    let reader = Cursor::new("hello world");
+    let mut output = Vec::new();
+
+    processor.process_stream(reader, &mut output).unwrap();
+    let output_str = String::from_utf8(output).unwrap();
+
+    // hello world should become Hello World
+    assert!(
+        output_str.contains("Hello") && output_str.contains("World"),
+        "Should convert to title case: {}",
+        output_str
+    );
+}
+
+/// Test built-in transform: reverse
+#[test]
+fn test_transform_reverse_integration() {
+    let config = PipelineConfig {
+        name: Some("Reverse Transform Test".to_string()),
+        description: None,
+        version: None,
+        patterns_include: Vec::new(),
+        settings: PipelineSettings::default(),
+        step: vec![PipelineStep {
+            step_type: StepType::Transform,
+            pattern: r"\w+".to_string(),
+            transform: Some(TransformAction::Reverse),
+            enabled: Some(true),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    let mut processor = StreamProcessor::new(config).unwrap();
+    let reader = Cursor::new("hello");
+    let mut output = Vec::new();
+
+    processor.process_stream(reader, &mut output).unwrap();
+    let output_str = String::from_utf8(output).unwrap();
+
+    assert!(
+        output_str.contains("olleh"),
+        "hello should be reversed to olleh"
+    );
+}
+
+/// Test chained transforms
+#[test]
+fn test_chained_transforms() {
+    // Step 1: Convert to uppercase
+    // Step 2: Reverse the result
+    let config = PipelineConfig {
+        name: Some("Chained Transforms Test".to_string()),
+        description: None,
+        version: None,
+        patterns_include: Vec::new(),
+        settings: PipelineSettings::default(),
+        step: vec![
+            PipelineStep {
+                step_type: StepType::Transform,
+                pattern: r"[a-z]+".to_string(),
+                transform: Some(TransformAction::Uppercase),
+                enabled: Some(true),
+                ..Default::default()
+            },
+            PipelineStep {
+                step_type: StepType::Transform,
+                pattern: r"[A-Z]+".to_string(),
+                transform: Some(TransformAction::Reverse),
+                enabled: Some(true),
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    };
+
+    let mut processor = StreamProcessor::new(config).unwrap();
+    let reader = Cursor::new("abc");
+    let mut output = Vec::new();
+
+    processor.process_stream(reader, &mut output).unwrap();
+    let output_str = String::from_utf8(output).unwrap();
+
+    // abc -> ABC -> CBA
+    assert!(
+        output_str.contains("CBA"),
+        "abc should become ABC then CBA: {}",
+        output_str
+    );
+}

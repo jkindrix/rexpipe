@@ -169,6 +169,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Benchmark CI configuration**: Fixed `cargo bench` to specify benchmark target
   explicitly, preventing false failures from lib/bin targets
 
+### Testing
+
+- **Tree-sitter integration tests**: Added comprehensive tests for syntax-aware
+  scoping across all supported scopes (code, strings, comments, functions,
+  imports, types, identifiers, macros, control_flow, tests) and languages
+  (Rust, Python, JavaScript, TypeScript, Go)
+- **exclude_scopes tests**: Added tests verifying the exclude_scopes config
+  option correctly filters out specified scopes
+- **Block content filtering tests**: Added integration tests for block steps
+  that filter by content pattern (Issue #6 regression prevention)
+- **Multi-step ordering tests**: Added tests verifying step execution order
+  and chaining behavior (filter-then-substitute, substitute-then-filter)
+- **Transform integration tests**: Added tests for built-in transforms
+  (uppercase, title_case, reverse) with global flag chaining
+- **Test fixtures**: Added multi-language test fixture files
+  (`scope-test.rs`, `scope-test.py`, `scope-test.js`, etc.) for consistent
+  syntax-aware testing
+
 ## [2.0.0] - 2024-12-21
 
 ### Changed

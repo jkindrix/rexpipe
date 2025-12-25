@@ -1,0 +1,45 @@
+--- START BLOCK 1 ---
+This is content inside block 1
+More content here
+--- END BLOCK 1 ---
+
+Some text between blocks
+
+--- START BLOCK 2 ---
+Block 2 has ERROR in it
+This should be caught
+--- END BLOCK 2 ---
+
+Normal line here
+
+--- START BLOCK 3 ---
+Clean block with no issues
+All good here
+--- END BLOCK 3 ---
+
+function processData() {
+    // Start of function
+    let x = 10;
+    let y = 20;
+    return x + y;
+}
+
+function handleError() {
+    // This function has problems
+    throw new Error("Something went wrong");
+    // unreachable code
+}
+
+class UserService {
+    constructor() {
+        this.users = [];
+    }
+
+    addUser(user) {
+        this.users.push(user);
+    }
+
+    getUser(id) {
+        return this.users.find(u => u.id === id);
+    }
+}
