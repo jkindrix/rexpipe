@@ -72,8 +72,9 @@
 //! | `transform` | Transform matched text | `pattern`, `transform` |
 //! | `block` | Multi-line processing | `pattern`, `end_pattern`, `action` |
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 
@@ -1119,8 +1120,35 @@ impl PipelineConfig {
 
     /// Load a pipeline config, resolving `extends` relative to the given base directory.
     fn from_file_with_base_dir(path: &Path, base_dir: Option<&Path>) -> Result<Self> {
+        let mut visited = HashSet::new();
+        Self::from_file_with_cycle_detection(path, base_dir, &mut visited)
+    }
+
+    /// Internal helper that tracks visited paths to detect circular extends.
+    fn from_file_with_cycle_detection(
+        path: &Path,
+        base_dir: Option<&Path>,
+        visited: &mut HashSet<std::path::PathBuf>,
+    ) -> Result<Self> {
+        // Canonicalize path for consistent cycle detection
+        let canonical_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+
+        // Check for circular extends (Issue #9)
+        if visited.contains(&canonical_path) {
+            return Err(anyhow!(
+                "Circular config extends detected: '{}' has already been loaded in this chain",
+                path.display()
+            ));
+        }
+        visited.insert(canonical_path.clone());
+
         let content = fs::read_to_string(path)?;
         let mut config: PipelineConfig = toml::from_str(&content)?;
+
+        // IMPORTANT: Normalize shorthand sections BEFORE merge (Issue #10)
+        // This ensures [[filter]], [[substitute]], etc. are converted to steps
+        // before merging with the base config
+        config = config.normalize_shorthand_sections();
 
         // Handle extends: merge base configuration
         if let Some(ref extends_path) = config.extends {
@@ -1132,13 +1160,11 @@ impl PipelineConfig {
                 std::path::PathBuf::from(extends_path)
             };
 
-            // Prevent infinite recursion by limiting depth
-            let base_config = Self::from_file_with_base_dir(&base_path, base_path.parent())?;
+            // Recursively load base with cycle detection
+            let base_config =
+                Self::from_file_with_cycle_detection(&base_path, base_path.parent(), visited)?;
             config = config.merge_with_base(base_config);
         }
-
-        // Normalize shorthand sections into step vec
-        config = config.normalize_shorthand_sections();
 
         Ok(config)
     }
@@ -2808,5 +2834,133 @@ mod tests {
         // Should pass validation since the alias is defined
         let result = config.validate();
         assert!(result.is_ok(), "Expected validation to pass: {:?}", result);
+    }
+
+    #[test]
+    fn test_circular_extends_detection() {
+        // Test Issue #9: Circular config extends should be detected
+        use std::io::Write;
+
+        // Create temp directory
+        let temp_dir = std::env::temp_dir().join("rexpipe_test_circular");
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        // Create circular config A -> B -> A
+        let config_a_path = temp_dir.join("config_a.toml");
+        let config_b_path = temp_dir.join("config_b.toml");
+
+        let mut file_a = std::fs::File::create(&config_a_path).unwrap();
+        writeln!(file_a, "extends = \"config_b.toml\"").unwrap();
+        writeln!(file_a, "[[filter]]").unwrap();
+        writeln!(file_a, "pattern = \"A\"").unwrap();
+        writeln!(file_a, "action = \"keep_line\"").unwrap();
+
+        let mut file_b = std::fs::File::create(&config_b_path).unwrap();
+        writeln!(file_b, "extends = \"config_a.toml\"").unwrap();
+        writeln!(file_b, "[[filter]]").unwrap();
+        writeln!(file_b, "pattern = \"B\"").unwrap();
+        writeln!(file_b, "action = \"keep_line\"").unwrap();
+
+        // Loading should fail with circular extends error
+        let result = PipelineConfig::from_file(&config_a_path);
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("Circular config extends detected"),
+            "Expected circular extends error, got: {}",
+            err_msg
+        );
+
+        // Cleanup
+        std::fs::remove_file(&config_a_path).ok();
+        std::fs::remove_file(&config_b_path).ok();
+        std::fs::remove_dir(&temp_dir).ok();
+    }
+
+    #[test]
+    fn test_extends_preserves_child_shorthand_steps() {
+        // Test Issue #10: Child config's shorthand sections should be preserved during extends
+        use std::io::Write;
+
+        // Create temp directory
+        let temp_dir = std::env::temp_dir().join("rexpipe_test_extends");
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        // Create base config with a filter step
+        let base_path = temp_dir.join("base.toml");
+        let mut base_file = std::fs::File::create(&base_path).unwrap();
+        writeln!(base_file, "[[filter]]").unwrap();
+        writeln!(base_file, "pattern = \"^DEBUG\"").unwrap();
+        writeln!(base_file, "action = \"drop_line\"").unwrap();
+
+        // Create child config that extends base and adds its own filter
+        let child_path = temp_dir.join("child.toml");
+        let mut child_file = std::fs::File::create(&child_path).unwrap();
+        writeln!(child_file, "extends = \"base.toml\"").unwrap();
+        writeln!(child_file, "[[filter]]").unwrap();
+        writeln!(child_file, "pattern = \"^ERROR\"").unwrap();
+        writeln!(child_file, "action = \"keep_line\"").unwrap();
+
+        // Load the child config
+        let config = PipelineConfig::from_file(&child_path).unwrap();
+
+        // Should have 2 steps: base step + child step
+        assert_eq!(
+            config.step.len(),
+            2,
+            "Expected 2 steps (base + child), got {}",
+            config.step.len()
+        );
+
+        // Verify the steps are in the correct order (base first, then child)
+        assert_eq!(config.step[0].pattern, "^DEBUG");
+        assert_eq!(config.step[0].action, Some(StepAction::DropLine));
+        assert_eq!(config.step[1].pattern, "^ERROR");
+        assert_eq!(config.step[1].action, Some(StepAction::KeepLine));
+
+        // Cleanup
+        std::fs::remove_file(&base_path).ok();
+        std::fs::remove_file(&child_path).ok();
+        std::fs::remove_dir(&temp_dir).ok();
+    }
+
+    #[test]
+    fn test_extends_child_substitute_shorthand() {
+        // Test Issue #10: Child config's [[substitute]] shorthand should be preserved
+        use std::io::Write;
+
+        // Create temp directory
+        let temp_dir = std::env::temp_dir().join("rexpipe_test_sub");
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        // Create base config with a substitute step
+        let base_path = temp_dir.join("base_sub.toml");
+        let mut base_file = std::fs::File::create(&base_path).unwrap();
+        writeln!(base_file, "[[substitute]]").unwrap();
+        writeln!(base_file, "pattern = \"foo\"").unwrap();
+        writeln!(base_file, "replacement = \"bar\"").unwrap();
+
+        // Create child config that extends base and adds its own substitute
+        let child_path = temp_dir.join("child_sub.toml");
+        let mut child_file = std::fs::File::create(&child_path).unwrap();
+        writeln!(child_file, "extends = \"base_sub.toml\"").unwrap();
+        writeln!(child_file, "[[substitute]]").unwrap();
+        writeln!(child_file, "pattern = \"baz\"").unwrap();
+        writeln!(child_file, "replacement = \"qux\"").unwrap();
+
+        // Load the child config
+        let config = PipelineConfig::from_file(&child_path).unwrap();
+
+        // Should have 2 steps
+        assert_eq!(config.step.len(), 2);
+        assert_eq!(config.step[0].pattern, "foo");
+        assert_eq!(config.step[0].replacement, Some("bar".to_string()));
+        assert_eq!(config.step[1].pattern, "baz");
+        assert_eq!(config.step[1].replacement, Some("qux".to_string()));
+
+        // Cleanup
+        std::fs::remove_file(&base_path).ok();
+        std::fs::remove_file(&child_path).ok();
+        std::fs::remove_dir(&temp_dir).ok();
     }
 }

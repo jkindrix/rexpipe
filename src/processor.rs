@@ -1225,11 +1225,14 @@ impl StreamProcessor {
         let settings = &config.settings;
 
         for (index, step) in config.enabled_steps().enumerate() {
+            // Default to global replacement for consistency with CLI behavior (Issue #11)
+            // When flags is None (not specified), default to global=true
+            // When flags is Some([...]), respect whether Global is in the list
             let is_global = step
                 .flags
                 .as_ref()
                 .map(|f| f.iter().any(|flag| matches!(flag, RegexFlag::Global)))
-                .unwrap_or(false);
+                .unwrap_or(true);
 
             // For Block steps, use start_pattern; for others, use pattern
             let pattern_str = if matches!(step.step_type, StepType::Block) {
