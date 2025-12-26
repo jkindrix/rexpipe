@@ -4055,18 +4055,17 @@ fn lint_config_file(matches: &clap::ArgMatches) -> Result<()> {
                 '.' | '*' | '+' | '?' | '[' | ']' | '(' | ')' | '{' | '}' | '|' | '^' | '$' | '\\'
             )
         }) && step.pattern.len() > 3
+            && !config.settings.fixed_strings
         {
-            if !config.settings.fixed_strings {
-                suggestions.push((
-                    "Performance".to_string(),
-                    format!(
-                        "{}: Pattern '{}' contains no regex metacharacters",
-                        step_id, step.pattern
-                    ),
-                    "Consider using --fixed or [settings] fixed_strings = true for faster matching"
-                        .to_string(),
-                ));
-            }
+            suggestions.push((
+                "Performance".to_string(),
+                format!(
+                    "{}: Pattern '{}' contains no regex metacharacters",
+                    step_id, step.pattern
+                ),
+                "Consider using --fixed or [settings] fixed_strings = true for faster matching"
+                    .to_string(),
+            ));
         }
     }
 
@@ -4204,15 +4203,13 @@ fn determine_fix(category: &str, issue: &str, _suggestion: &str, content: &str) 
         "Shorthand" if issue.contains("Uses flags = [\"i\"]") => {
             // Find the step section and replace flags = ["i"] with ignore_case = true
             // This is a simple text replacement within the step
-            if let Some(flags_match) = find_in_step(content, step_num, r#"flags = ["i"]"#) {
-                Some((
+            find_in_step(content, step_num, r#"flags = ["i"]"#).map(|flags_match| {
+                (
                     flags_match,
                     "ignore_case = true".to_string(),
                     "Replace flags = [\"i\"] with ignore_case = true".to_string(),
-                ))
-            } else {
-                None
-            }
+                )
+            })
         }
         "Shorthand" if issue.contains("pattern + action = \"drop_line\"") => {
             // This requires restructuring the step - more complex
@@ -5710,8 +5707,8 @@ fn run_conventional_commits_validation(matches: &clap::ArgMatches) -> Result<()>
         "revert",
     ];
 
-    // Parse type - use explicit closure to find first delimiter
-    let type_end = first_line.find(|c: char| c == '(' || c == ':' || c == '!');
+    // Parse type - find first delimiter
+    let type_end = first_line.find(['(', ':', '!']);
     let commit_type = match type_end {
         Some(idx) => &first_line[..idx],
         None => {
@@ -6534,20 +6531,20 @@ fn diff_configs(config1_path: &str, config2_path: &str) -> Result<()> {
                 differences += 1;
                 let name = s1.name.as_deref().unwrap_or("unnamed");
                 println!(
-                    "➖ Step {} '{}' [{}]: Only in Config 1",
+                    "➖ Step {} '{}' [{:?}]: Only in Config 1",
                     i + 1,
                     name,
-                    format!("{:?}", s1.step_type)
+                    s1.step_type
                 );
             }
             (None, Some(s2)) => {
                 differences += 1;
                 let name = s2.name.as_deref().unwrap_or("unnamed");
                 println!(
-                    "➕ Step {} '{}' [{}]: Only in Config 2",
+                    "➕ Step {} '{}' [{:?}]: Only in Config 2",
                     i + 1,
                     name,
-                    format!("{:?}", s2.step_type)
+                    s2.step_type
                 );
             }
             (None, None) => {}

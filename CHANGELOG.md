@@ -5,7 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.0.0] - 2025-12-25
+
+### Changed
+
+**Automation-First Redesign**
+
+This release redesigns rexpipe as an automation-first text processor optimized for
+scripting, pipelines, and programmatic use.
+
+#### Behavior Changes
+- **JSON output as default for pipes**: When stdout is not a terminal (piped output),
+  JSON is now the default format. Use `--text` to force plain text output.
+- **Safer in-place editing**: In non-interactive mode (piped/scripted), in-place
+  editing (`-i`) now requires explicit `--apply` flag. Without it, a dry-run preview
+  is shown instead. This prevents accidental file modifications by scripts.
+- **Structured error output**: `--error-format json` provides machine-parseable
+  errors with categories, exit codes, and suggestions.
+- **Security**: Shell transforms now disabled by default
+  - Requires `--allow-shell` flag to enable shell command execution
+  - Prevents accidental command injection from untrusted configs
+- **Global replacement by default**: Config files now default to global replacement
+  (all matches) consistent with CLI behavior. Use `flags = []` for first-match-only.
+- Version now dynamically read from Cargo.toml
+
+#### New Features
+- `--explain`: Describe what a pipeline will do without processing data
+- `--verify`: Output verification summary after processing
+- `--apply`: Explicitly confirm in-place modifications
+- `--text`: Force plain text output when piping
+- `--validate-config`: Validate pipeline configuration without processing
+- `--man`: Generate man page to stdout
 
 ### Added
 
@@ -144,90 +174,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Streaming `--why-dropped` output**: Now streams dropped lines as they are
   processed for real-time feedback on large files, rather than waiting until
   the end to display results
-
-### Fixed
-
-- **Extract mode now filters non-matching lines**: `--extract` now correctly drops
-  lines that don't match the pattern, outputting only the extracted content
-- **Conventional commits `feat!:` syntax**: The `--conventional-commits` validator
-  now correctly parses breaking change syntax like `feat!:`, `fix!:`, and `feat(scope)!:`
-- **Bidirectional `--mapping-file` with CLI flags**: The `--mapping-file` flag now
-  correctly creates mapping files when used with `-p` (inline patterns). Previously,
-  `auto_save` defaulted to `false` for CLI-created configs, preventing mappings from
-  being saved.
-- **Block content pattern filtering**: `[[block]]` steps now correctly filter blocks
-  by content when both `start_pattern` and `pattern` are specified. For example,
-  `action = "keep_block"` with `pattern = "MAGIC"` now only keeps blocks containing
-  "MAGIC".
-- **Tree-sitter scope filtering**: The `--scope code|string|comment` flag with
-  `--language` now correctly filters lines. Previously, scoped filtering only logged
-  matches without actually filtering, resulting in 0 matches being reported.
-- **`exclude_scopes` config option**: The `exclude_scopes = ["strings", "comments"]`
-  config option now correctly converts scope names to tree-sitter node types.
-  Previously, high-level names like "strings" were passed directly to the AST
-  matcher which expected low-level node type names like "string_literal".
-- **Benchmark CI configuration**: Fixed `cargo bench` to specify benchmark target
-  explicitly, preventing false failures from lib/bin targets
-
-### Testing
-
-- **Tree-sitter integration tests**: Added comprehensive tests for syntax-aware
-  scoping across all supported scopes (code, strings, comments, functions,
-  imports, types, identifiers, macros, control_flow, tests) and languages
-  (Rust, Python, JavaScript, TypeScript, Go)
-- **exclude_scopes tests**: Added tests verifying the exclude_scopes config
-  option correctly filters out specified scopes
-- **Block content filtering tests**: Added integration tests for block steps
-  that filter by content pattern (Issue #6 regression prevention)
-- **Multi-step ordering tests**: Added tests verifying step execution order
-  and chaining behavior (filter-then-substitute, substitute-then-filter)
-- **Transform integration tests**: Added tests for built-in transforms
-  (uppercase, title_case, reverse) with global flag chaining
-- **Test fixtures**: Added multi-language test fixture files
-  (`scope-test.rs`, `scope-test.py`, `scope-test.js`, `scope-test.go`,
-  `scope-test.ts`, `scope-test.json`, `scope-test.yaml`) for consistent
-  syntax-aware testing
-- **Embedded test parsing tests**: Added tests verifying `[[test]]` config
-  sections are correctly parsed and executed via `TestRunner`
-- **PII sanitization pattern tests**: Added comprehensive tests for common
-  PII redaction patterns (SSN, email, credit card, phone, API key, IP address)
-- **Shell plugin tests**: Added tests for shell transform detection,
-  `allow_shell` permission checking, and command extraction
-- **Log filtering tests**: Added tests for common log level filtering patterns
-  (keep warnings/errors, drop debug)
-
-## [2.0.0] - 2024-12-21
-
-### Changed
-
-**Automation-First Redesign**
-
-This release redesigns rexpipe as an automation-first text processor optimized for
-scripting, pipelines, and programmatic use.
-
-#### Behavior Changes
-- **JSON output as default for pipes**: When stdout is not a terminal (piped output),
-  JSON is now the default format. Use `--text` to force plain text output.
-- **Safer in-place editing**: In non-interactive mode (piped/scripted), in-place
-  editing (`-i`) now requires explicit `--apply` flag. Without it, a dry-run preview
-  is shown instead. This prevents accidental file modifications by scripts.
-- **Structured error output**: `--error-format json` provides machine-parseable
-  errors with categories, exit codes, and suggestions.
-- **Security**: Shell transforms now disabled by default
-  - Requires `--allow-shell` flag to enable shell command execution
-  - Prevents accidental command injection from untrusted configs
-- Version now dynamically read from Cargo.toml
-
-#### New Features
-- `--explain`: Describe what a pipeline will do without processing data
-- `--verify`: Output verification summary after processing
-- `--apply`: Explicitly confirm in-place modifications
-- `--text`: Force plain text output when piping
-- `--validate-config`: Validate pipeline configuration without processing
-- `--man`: Generate man page to stdout
-
-### Added
-
 - **CLI Integration Tests**: Comprehensive test suite for binary behavior
   - 37 tests covering substitution, filtering, JSON output, exit codes, file processing
   - Tests for shell completions, config validation, dry-run, context lines, man page
@@ -276,6 +222,87 @@ scripting, pipelines, and programmatic use.
   - Scopes: `code`, `strings`, `comments`, `functions`, `tests`
   - 7 languages: Rust, Python, JavaScript, TypeScript, Go, JSON, YAML
 
+### Fixed
+
+- **Circular config extends detection**: Loading configs with circular `extends`
+  references now returns a clear error message instead of causing a stack overflow
+- **Config extends preserves child steps**: Child config's shorthand sections
+  (`[[filter]]`, `[[substitute]]`, etc.) are now correctly preserved when extending
+  a base config. Previously, only base config steps were included
+- **Global replacement consistency**: Config files now default to global replacement
+  matching CLI behavior. Previously, CLI used global replacement while config files
+  defaulted to first-match-only
+- **`--validate-config` accepts shorthand syntax**: The config validator now properly
+  normalizes shorthand sections before validation, allowing `[[filter]]` syntax
+- **PCRE shell escaping documentation**: Added comprehensive guidance for escaping
+  `!` in negative lookahead patterns on the command line
+- **`--checkpoint` and `--resume` documentation**: Clarified that these features
+  require file input (not stdin) due to seeking requirements
+- **`--jsonl` documentation**: Clarified per-file streaming behavior and recommended
+  `--json` for stdin processing
+- **`--strict` documentation**: Clarified that strict mode only applies to PCRE
+  patterns (which use backtracking) since Rust regex is ReDoS-safe by design
+- **Extract mode now filters non-matching lines**: `--extract` now correctly drops
+  lines that don't match the pattern, outputting only the extracted content
+- **Conventional commits `feat!:` syntax**: The `--conventional-commits` validator
+  now correctly parses breaking change syntax like `feat!:`, `fix!:`, and `feat(scope)!:`
+- **Bidirectional `--mapping-file` with CLI flags**: The `--mapping-file` flag now
+  correctly creates mapping files when used with `-p` (inline patterns). Previously,
+  `auto_save` defaulted to `false` for CLI-created configs, preventing mappings from
+  being saved
+- **Block content pattern filtering**: `[[block]]` steps now correctly filter blocks
+  by content when both `start_pattern` and `pattern` are specified. For example,
+  `action = "keep_block"` with `pattern = "MAGIC"` now only keeps blocks containing
+  "MAGIC"
+- **Tree-sitter scope filtering**: The `--scope code|string|comment` flag with
+  `--language` now correctly filters lines. Previously, scoped filtering only logged
+  matches without actually filtering, resulting in 0 matches being reported
+- **`exclude_scopes` config option**: The `exclude_scopes = ["strings", "comments"]`
+  config option now correctly converts scope names to tree-sitter node types.
+  Previously, high-level names like "strings" were passed directly to the AST
+  matcher which expected low-level node type names like "string_literal"
+- **Benchmark CI configuration**: Fixed `cargo bench` to specify benchmark target
+  explicitly, preventing false failures from lib/bin targets
+
+### Testing
+
+- **Comprehensive test coverage**: 529 tests across 7 test suites
+  - 283 unit tests
+  - 106 integration tests
+  - 34 CLI tests
+  - 27 property-based tests
+  - 18 tree-sitter tests
+  - 15 library tests
+  - 45 doc tests
+- **Tree-sitter integration tests**: Added comprehensive tests for syntax-aware
+  scoping across all supported scopes (code, strings, comments, functions,
+  imports, types, identifiers, macros, control_flow, tests) and languages
+  (Rust, Python, JavaScript, TypeScript, Go)
+- **exclude_scopes tests**: Added tests verifying the exclude_scopes config
+  option correctly filters out specified scopes
+- **Block content filtering tests**: Added integration tests for block steps
+  that filter by content pattern (Issue #6 regression prevention)
+- **Multi-step ordering tests**: Added tests verifying step execution order
+  and chaining behavior (filter-then-substitute, substitute-then-filter)
+- **Transform integration tests**: Added tests for built-in transforms
+  (uppercase, title_case, reverse) with global flag chaining
+- **Test fixtures**: Added multi-language test fixture files
+  (`scope-test.rs`, `scope-test.py`, `scope-test.js`, `scope-test.go`,
+  `scope-test.ts`, `scope-test.json`, `scope-test.yaml`) for consistent
+  syntax-aware testing
+- **Embedded test parsing tests**: Added tests verifying `[[test]]` config
+  sections are correctly parsed and executed via `TestRunner`
+- **PII sanitization pattern tests**: Added comprehensive tests for common
+  PII redaction patterns (SSN, email, credit card, phone, API key, IP address)
+- **Shell plugin tests**: Added tests for shell transform detection,
+  `allow_shell` permission checking, and command extraction
+- **Log filtering tests**: Added tests for common log level filtering patterns
+  (keep warnings/errors, drop debug)
+- **Circular extends detection tests**: Added tests verifying circular config
+  extends returns error instead of stack overflow
+- **Config extends child step tests**: Added tests verifying child shorthand
+  sections are preserved during extends merge
+
 ### Removed
 
 **Focus on Core Primitives** - Removed ~2,500 lines of non-essential code:
@@ -287,10 +314,11 @@ scripting, pipelines, and programmatic use.
 - **TUI Feature**: Removed ratatui and crossterm dependencies
 
 ### Technical Notes
-- 421 tests passing (250 unit + 66 integration + 27 property + 37 CLI + 41 doc tests)
+- 529 tests passing (283 unit + 106 integration + 34 CLI + 27 property + 18 tree-sitter + 15 library + 45 doc tests)
 - Zero clippy warnings
 - Schema version 1.0 included in all JSON responses for forward compatibility
 - Release profile optimized (LTO, strip, single codegen unit)
+- 7 rounds of comprehensive testing with 300+ features validated
 
 ## [1.1.0] - 2024-12-15
 
@@ -346,8 +374,7 @@ scripting, pipelines, and programmatic use.
 - **Inspection Mode**: Interactive debugging with match visualization
 - **Performance Metrics**: Processing statistics and throughput reporting
 
-[Unreleased]: https://github.com/jkindrix/rexpipe/compare/v2.0.0...HEAD
-[2.0.0]: https://github.com/jkindrix/rexpipe/compare/v1.1.0...v2.0.0
+[2.0.0]: https://github.com/jkindrix/rexpipe/releases/tag/v2.0.0
 [1.1.0]: https://github.com/jkindrix/rexpipe/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/jkindrix/rexpipe/compare/v0.1.0...v1.0.0
 [0.1.0]: https://github.com/jkindrix/rexpipe/releases/tag/v0.1.0

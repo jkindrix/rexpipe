@@ -3468,8 +3468,7 @@ fn test_shell_transform_blocked_without_permission() {
     // Should fail or warn when allow_shell is false
     // Depending on implementation, this might succeed but not execute shell
     // or might error at creation time
-    if result.is_ok() {
-        let mut processor = result.unwrap();
+    if let Ok(mut processor) = result {
         let reader = Cursor::new("test");
         let mut output = Vec::new();
         // The actual shell execution should be blocked or result in an error
