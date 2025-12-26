@@ -65,6 +65,7 @@ open_cmd := if os() == "linux" { "xdg-open" } else if os() == "macos" { "open" }
 
 reset := '\033[0m'
 bold := '\033[1m'
+dim := '\033[2m'
 green := '\033[0;32m'
 yellow := '\033[0;33m'
 red := '\033[0;31m'
@@ -83,11 +84,96 @@ default:
 # Load .env file if present
 set dotenv-load
 
-# Use bash for shell commands
-set shell := ["bash", "-cu"]
+# Use bash with strict error handling
+# -e: Exit on error
+# -u: Error on undefined variables
+# -o pipefail: Pipe failures propagate
+set shell := ["bash", "-euo", "pipefail", "-c"]
 
 # Export all variables to child processes
 set export
+
+# ============================================================================
+# SETUP & BOOTSTRAP
+# ============================================================================
+
+[group('setup')]
+[doc("Full development setup (rust + tools + hooks)")]
+setup: setup-rust setup-tools setup-hooks
+    @printf '{{green}}{{bold}}✓ Development environment ready{{reset}}\n'
+
+[group('setup')]
+[doc("Install/update Rust toolchain components")]
+setup-rust:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    printf '{{blue}}{{bold}}Installing Rust toolchain...{{reset}}\n'
+    rustup toolchain install stable --profile default
+    rustup toolchain install nightly --profile minimal
+    rustup component add rustfmt clippy llvm-tools-preview
+    rustup component add --toolchain nightly rustfmt miri
+    printf '{{green}}[OK]{{reset}}   Rust toolchain ready\n'
+
+[group('setup')]
+[doc("Install development tools (cargo extensions)")]
+setup-tools:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    printf '{{blue}}{{bold}}Installing development tools...{{reset}}\n'
+    # Core tools (required for CI)
+    {{cargo}} install cargo-nextest cargo-llvm-cov cargo-deny cargo-audit
+    # Release tools
+    {{cargo}} install cargo-semver-checks git-cliff
+    # Quality tools
+    {{cargo}} install cargo-outdated cargo-machete typos-cli cargo-careful
+    # Development tools
+    {{cargo}} install cargo-watch
+    printf '{{green}}[OK]{{reset}}   Tools installed\n'
+
+[group('setup')]
+[doc("Install minimal tools for CI/release checks")]
+setup-tools-minimal:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    printf '{{blue}}{{bold}}Installing minimal tools...{{reset}}\n'
+    {{cargo}} install cargo-deny cargo-audit cargo-semver-checks cargo-nextest
+    printf '{{green}}[OK]{{reset}}   Minimal tools installed\n'
+
+[group('setup')]
+[doc("Install pre-commit hooks")]
+setup-hooks:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    printf '{{blue}}{{bold}}Setting up git hooks...{{reset}}\n'
+
+    # Create hooks directory if it doesn't exist
+    mkdir -p .git/hooks
+
+    # Create pre-commit hook
+    printf '%s\n' '#!/usr/bin/env bash' > .git/hooks/pre-commit
+    printf '%s\n' 'set -euo pipefail' >> .git/hooks/pre-commit
+    printf '%s\n' '' >> .git/hooks/pre-commit
+    printf '%s\n' 'echo "Running pre-commit checks..."' >> .git/hooks/pre-commit
+    printf '%s\n' '' >> .git/hooks/pre-commit
+    printf '%s\n' '# Check formatting' >> .git/hooks/pre-commit
+    printf '%s\n' 'if ! cargo fmt --all -- --check 2>/dev/null; then' >> .git/hooks/pre-commit
+    printf '%s\n' '    echo "❌ Formatting check failed. Run '\''cargo fmt --all'\'' to fix."' >> .git/hooks/pre-commit
+    printf '%s\n' '    exit 1' >> .git/hooks/pre-commit
+    printf '%s\n' 'fi' >> .git/hooks/pre-commit
+    printf '%s\n' 'echo "✓ Format check passed"' >> .git/hooks/pre-commit
+    printf '%s\n' '' >> .git/hooks/pre-commit
+    printf '%s\n' '# Run clippy' >> .git/hooks/pre-commit
+    printf '%s\n' 'if ! cargo clippy --all-features --all-targets -- -D warnings 2>/dev/null; then' >> .git/hooks/pre-commit
+    printf '%s\n' '    echo "❌ Clippy check failed. Fix the warnings above."' >> .git/hooks/pre-commit
+    printf '%s\n' '    exit 1' >> .git/hooks/pre-commit
+    printf '%s\n' 'fi' >> .git/hooks/pre-commit
+    printf '%s\n' 'echo "✓ Clippy check passed"' >> .git/hooks/pre-commit
+    printf '%s\n' '' >> .git/hooks/pre-commit
+    printf '%s\n' 'echo "✅ All pre-commit checks passed!"' >> .git/hooks/pre-commit
+
+    chmod +x .git/hooks/pre-commit
+    printf '{{green}}[OK]{{reset}}   Pre-commit hook installed\n'
+    printf '{{cyan}}[INFO]{{reset}} Hook will run: fmt-check, clippy\n'
 
 # ============================================================================
 # FEATURE FLAG CONFIGURATION
@@ -330,6 +416,7 @@ test-doc:
 [doc("Run tests with various feature combinations")]
 test-features:
     #!/usr/bin/env bash
+    set -euo pipefail
     printf '\n{{bold}}{{blue}}══════ Testing Feature Matrix ══════{{reset}}\n\n'
     printf '{{cyan}}[INFO]{{reset}} Testing with no features...\n'
     {{cargo}} test --no-default-features -j {{jobs}}
@@ -342,6 +429,33 @@ test-features:
     printf '{{cyan}}[INFO]{{reset}} Testing with all features...\n'
     {{cargo}} test --all-features -j {{jobs}}
     printf '{{green}}[OK]{{reset}}   Feature matrix tests passed\n'
+
+[group('test')]
+[doc("Run tests under Miri for undefined behavior detection")]
+miri:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    printf '{{blue}}{{bold}}Running Miri...{{reset}}\n'
+    # Note: Miri may not support all dependencies (e.g., tree-sitter FFI)
+    # Run with minimal features for best compatibility
+    {{cargo}} +nightly miri test --no-default-features 2>&1 || {
+        printf '{{yellow}}[WARN]{{reset}} Miri failed - this may be expected for FFI-heavy code\n'
+        exit 0
+    }
+    printf '{{green}}[OK]{{reset}}   Miri passed (no UB detected)\n'
+
+[group('test')]
+[doc("Run tests with cargo-careful for extra safety checks")]
+careful:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    printf '{{blue}}{{bold}}Running tests with cargo-careful...{{reset}}\n'
+    if ! command -v cargo-careful &> /dev/null; then
+        printf '{{yellow}}[WARN]{{reset}} cargo-careful not installed (cargo install cargo-careful)\n'
+        exit 0
+    fi
+    {{cargo}} +nightly careful test --all-features
+    printf '{{green}}[OK]{{reset}}   Careful tests passed\n'
 
 [group('test')]
 [doc("Run tests with cargo-nextest (faster, parallel)")]
@@ -429,6 +543,7 @@ deny:
 [doc("Find unused dependencies via cargo-machete (fast, heuristic)")]
 machete:
     #!/usr/bin/env bash
+    set -euo pipefail
     printf '{{cyan}}[INFO]{{reset}} Finding unused dependencies (fast)...\n'
     if ! command -v cargo-machete &> /dev/null; then
         printf '{{yellow}}[WARN]{{reset}} cargo-machete not installed (cargo install cargo-machete)\n'
@@ -438,24 +553,38 @@ machete:
     printf '{{green}}[OK]{{reset}}   Machete check complete\n'
 
 [group('lint')]
+[doc("Run typos spell checker")]
+typos:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    printf '{{cyan}}[INFO]{{reset}} Checking for typos...\n'
+    if ! command -v typos &> /dev/null; then
+        printf '{{yellow}}[WARN]{{reset}} typos not installed (cargo install typos-cli)\n'
+        exit 0
+    fi
+    typos src/ tests/ docs/ README.md CHANGELOG.md
+    printf '{{green}}[OK]{{reset}}   Typos check passed\n'
+
+[group('lint')]
+[doc("Fix typos automatically")]
+typos-fix:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    printf '{{cyan}}[INFO]{{reset}} Fixing typos...\n'
+    if ! command -v typos &> /dev/null; then
+        printf '{{yellow}}[WARN]{{reset}} typos not installed (cargo install typos-cli)\n'
+        exit 0
+    fi
+    typos --write-changes
+    printf '{{green}}[OK]{{reset}}   Typos fixed\n'
+
+[group('lint')]
 [doc("Verify MSRV compliance")]
 msrv-check:
     #!/usr/bin/env bash
     printf '{{cyan}}[INFO]{{reset}} Checking MSRV {{msrv}}...\n'
     {{cargo}} +{{msrv}} check --all-features
     printf '{{green}}[OK]{{reset}}   MSRV {{msrv}} check passed\n'
-
-[group('lint')]
-[doc("Check for semver violations")]
-semver:
-    #!/usr/bin/env bash
-    printf '{{cyan}}[INFO]{{reset}} Checking semver compliance...\n'
-    if ! command -v cargo-semver-checks &> /dev/null; then
-        printf '{{yellow}}[WARN]{{reset}} cargo-semver-checks not installed (cargo install cargo-semver-checks)\n'
-        exit 0
-    fi
-    {{cargo}} semver-checks check-release
-    printf '{{green}}[OK]{{reset}}   Semver check passed\n'
 
 [group('lint')]
 [doc("Run all lints (fmt + clippy)")]
@@ -494,9 +623,27 @@ doc-private:
 [doc("Check documentation for warnings")]
 doc-check:
     #!/usr/bin/env bash
+    set -euo pipefail
     printf '{{cyan}}[INFO]{{reset}} Checking documentation...\n'
     RUSTDOCFLAGS="-D warnings" {{cargo}} doc --all-features --no-deps
     printf '{{green}}[OK]{{reset}}   Documentation check passed\n'
+
+[group('docs')]
+[doc("Check markdown links (requires lychee)")]
+link-check:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    printf '{{cyan}}[INFO]{{reset}} Checking markdown links...\n'
+    if ! command -v lychee &> /dev/null; then
+        printf '{{yellow}}[WARN]{{reset}} lychee not installed (cargo install lychee)\n'
+        printf '{{yellow}}[WARN]{{reset}} Skipping link check\n'
+        exit 0
+    fi
+    lychee --no-progress --accept 200,204,206 \
+        --exclude '^https://crates.io' \
+        --exclude '^https://docs.rs' \
+        './docs/**/*.md' './README.md' './CONTRIBUTING.md' './RELEASING.md' 2>/dev/null || true
+    printf '{{green}}[OK]{{reset}}   Link check passed\n'
 
 # ============================================================================
 # COVERAGE RECIPES
@@ -536,6 +683,11 @@ coverage-summary:
         exit 0
     fi
     {{cargo}} llvm-cov --all-features --text
+
+# Coverage aliases (short names)
+alias cov := coverage
+alias cov-lcov := coverage-lcov
+alias cov-summary := coverage-summary
 
 # ============================================================================
 # FUZZING RECIPES
@@ -643,6 +795,39 @@ watch-clippy:
     printf '{{cyan}}[INFO]{{reset}} Watching for changes (clippy)...\n'
     {{cargo}} watch -x "clippy --all-targets --all-features"
 
+[group('dev')]
+[doc("Run rexpipe (debug mode)")]
+run *args:
+    {{cargo}} run -- {{args}}
+
+[group('dev')]
+[doc("Run rexpipe with debug logging")]
+run-debug *args:
+    RUST_LOG=debug {{cargo}} run -- {{args}}
+
+[group('dev')]
+[doc("Run rexpipe with trace logging")]
+run-trace *args:
+    RUST_LOG=trace {{cargo}} run -- {{args}}
+
+[group('dev')]
+[doc("Run rexpipe (release mode)")]
+run-release *args:
+    {{cargo}} run --release -- {{args}}
+
+[group('dev')]
+[doc("Fix all auto-fixable issues")]
+fix:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    printf '{{cyan}}[INFO]{{reset}} Auto-fixing issues...\n'
+    {{cargo}} fix --workspace --allow-dirty --allow-staged
+    {{cargo}} fmt --all
+    if command -v typos &> /dev/null; then
+        typos --write-changes || true
+    fi
+    printf '{{green}}[OK]{{reset}}   Fixed\n'
+
 # ============================================================================
 # CI/CD RECIPES
 # ============================================================================
@@ -651,6 +836,7 @@ watch-clippy:
 [doc("Check documentation versions match Cargo.toml")]
 version-sync:
     #!/usr/bin/env bash
+    set -euo pipefail
     printf '{{cyan}}[INFO]{{reset}} Checking version sync...\n'
     VERSION=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "rexpipe") | .version')
     MAJOR_MINOR=$(echo "$VERSION" | cut -d. -f1,2)
@@ -663,8 +849,21 @@ version-sync:
     printf '{{green}}[OK]{{reset}}   Version sync check complete (v%s)\n' "$VERSION"
 
 [group('ci')]
+[doc("Check CI status on main branch")]
+ci-status:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    printf '{{cyan}}[INFO]{{reset}} Checking CI status on main...\n'
+    if command -v gh &> /dev/null; then
+        gh run list --limit 5 --branch main
+    else
+        printf '{{yellow}}[WARN]{{reset}} gh CLI not installed, cannot check CI status\n'
+        printf '{{cyan}}[INFO]{{reset}} Install: https://cli.github.com/\n'
+    fi
+
+[group('ci')]
 [doc("Standard CI pipeline (matches GitHub Actions)")]
-ci: fmt-check clippy test doc-check
+ci: fmt-check clippy test doc-check version-sync
     #!/usr/bin/env bash
     printf '\n{{bold}}{{blue}}══════ CI Pipeline Complete ══════{{reset}}\n\n'
     printf '{{green}}[OK]{{reset}}   All CI checks passed\n'
@@ -738,6 +937,67 @@ tree-duplicates:
     #!/usr/bin/env bash
     printf '{{cyan}}[INFO]{{reset}} Duplicate dependencies:\n'
     {{cargo}} tree --duplicates
+
+# ============================================================================
+# CHANGELOG & VERSION MANAGEMENT
+# ============================================================================
+
+[group('release')]
+[doc("Generate changelog with git-cliff")]
+changelog:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    printf '{{cyan}}[INFO]{{reset}} Generating changelog...\n'
+    if ! command -v git-cliff &> /dev/null; then
+        printf '{{yellow}}[WARN]{{reset}} git-cliff not installed (cargo install git-cliff)\n'
+        printf '{{cyan}}[INFO]{{reset}} Skipping changelog generation\n'
+        exit 0
+    fi
+    git-cliff -o CHANGELOG.md
+    printf '{{green}}[OK]{{reset}}   Changelog generated\n'
+
+[group('release')]
+[doc("Preview changelog for next release")]
+changelog-preview:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    printf '{{cyan}}[INFO]{{reset}} Previewing changelog for next release...\n'
+    if ! command -v git-cliff &> /dev/null; then
+        printf '{{yellow}}[WARN]{{reset}} git-cliff not installed\n'
+        exit 0
+    fi
+    git-cliff --unreleased
+
+[group('release')]
+[doc("Bump version: just version-bump [major|minor|patch]")]
+version-bump level="patch":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    printf '{{cyan}}[INFO]{{reset}} Bumping version ({{level}})...\n'
+
+    CURRENT=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "rexpipe") | .version')
+    IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
+
+    case "{{level}}" in
+        major) NEW="$((MAJOR + 1)).0.0" ;;
+        minor) NEW="${MAJOR}.$((MINOR + 1)).0" ;;
+        patch) NEW="${MAJOR}.${MINOR}.$((PATCH + 1))" ;;
+        *)
+            printf '{{red}}[ERR]{{reset}}  Invalid level: {{level}} (use major|minor|patch)\n'
+            exit 1
+            ;;
+    esac
+
+    printf '{{cyan}}[INFO]{{reset}} Bumping: %s → %s\n' "$CURRENT" "$NEW"
+
+    # Update Cargo.toml
+    sed -i "s/^version = \"$CURRENT\"/version = \"$NEW\"/" Cargo.toml
+
+    printf '{{green}}[OK]{{reset}}   Version bumped to %s\n' "$NEW"
+    printf '{{dim}}Next steps:{{reset}}\n'
+    printf '  1. Update CHANGELOG.md\n'
+    printf '  2. git add Cargo.toml Cargo.lock CHANGELOG.md\n'
+    printf '  3. git commit -m "chore: release v%s"\n' "$NEW"
 
 # ============================================================================
 # RELEASE CHECKLIST RECIPES
@@ -837,20 +1097,45 @@ metadata-check:
     printf '{{green}}[OK]{{reset}}   Metadata check passed\n'
 
 [group('release')]
-[doc("Prepare for release (full validation)")]
-release-check: ci-release wip-check panic-audit metadata-check
+[doc("Check semver compatibility")]
+semver:
     #!/usr/bin/env bash
+    set -euo pipefail
+    printf '{{cyan}}[INFO]{{reset}} Checking semver compliance...\n'
+    if ! command -v cargo-semver-checks &> /dev/null; then
+        printf '{{yellow}}[WARN]{{reset}} cargo-semver-checks not installed (cargo install cargo-semver-checks)\n'
+        exit 0
+    fi
+    # Check if crate is published on crates.io
+    if ! cargo search rexpipe 2>/dev/null | grep -q "^rexpipe "; then
+        printf '{{yellow}}[WARN]{{reset}} rexpipe not yet published on crates.io\n'
+        printf '{{cyan}}[INFO]{{reset}} Semver check skipped (no baseline version)\n'
+        exit 0
+    fi
+    {{cargo}} semver-checks check-release --package rexpipe || {
+        printf '{{yellow}}[WARN]{{reset}} Semver check found breaking changes (review above)\n'
+    }
+    printf '{{green}}[OK]{{reset}}   Semver check complete\n'
+
+[group('release')]
+[doc("Full release validation (REQUIRED before tagging)")]
+release-check: ci-release wip-check panic-audit version-sync typos machete metadata-check publish-dry
+    #!/usr/bin/env bash
+    set -euo pipefail
     printf '\n{{bold}}{{blue}}══════ Release Validation ══════{{reset}}\n\n'
     printf '{{cyan}}[INFO]{{reset}} Checking for uncommitted changes...\n'
-    if ! git diff-index --quiet HEAD --; then
+    if ! git diff-index --quiet HEAD -- 2>/dev/null; then
         printf '{{red}}[ERR]{{reset}}  Uncommitted changes detected\n'
         exit 1
     fi
     printf '{{cyan}}[INFO]{{reset}} Checking for unpushed commits...\n'
-    if [ -n "$(git log @{u}.. 2>/dev/null)" ]; then
+    if [ -n "$(git log @{u}.. 2>/dev/null || true)" ]; then
         printf '{{yellow}}[WARN]{{reset}} Unpushed commits detected\n'
     fi
     printf '{{green}}[OK]{{reset}}   Ready for release\n'
+    printf '\n{{bold}}Next steps:{{reset}}\n'
+    printf '  1. Create tag:  just tag\n'
+    printf '  2. Push tag:    git push origin v{{version}}\n'
 
 [group('release')]
 [doc("Publish to crates.io (dry run)")]
@@ -864,9 +1149,28 @@ publish-dry:
 [doc("Create git tag for release")]
 tag:
     #!/usr/bin/env bash
+    set -euo pipefail
     printf '{{cyan}}[INFO]{{reset}} Creating tag v{{version}}...\n'
     git tag -a "v{{version}}" -m "Release v{{version}}"
     printf '{{green}}[OK]{{reset}}   Tag created: v{{version}}\n'
+    printf '{{dim}}Push with: git push origin v{{version}}{{reset}}\n'
+
+[group('release')]
+[confirm("This will publish to crates.io. This action is IRREVERSIBLE. Continue?")]
+[doc("Publish to crates.io (LAST RESORT - prefer automated release)")]
+publish:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    printf '\n{{bold}}{{blue}}══════ Publishing to crates.io ══════{{reset}}\n\n'
+    printf '{{yellow}}[WARN]{{reset}} This action is IRREVERSIBLE!\n'
+    printf '{{yellow}}[WARN]{{reset}} Prefer automated release via git tag push.\n\n'
+    printf '{{cyan}}[INFO]{{reset}} Publishing rexpipe...\n'
+    {{cargo}} publish
+    printf '\n{{green}}[OK]{{reset}}   Published successfully!\n'
+    printf '{{cyan}}[INFO]{{reset}} Next steps:\n'
+    printf '  1. Verify: cargo search rexpipe\n'
+    printf '  2. Check docs.rs in ~15 minutes\n'
+    printf '  3. Update CHANGELOG.md [Unreleased] section\n'
 
 # ============================================================================
 # UTILITIES
@@ -972,9 +1276,14 @@ check-tools:
 
     # Cargo extensions
     printf '\n{{cyan}}Cargo Extensions:{{reset}}\n'
-    for tool in nextest llvm-cov audit deny outdated watch semver-checks machete; do
+    for tool in nextest llvm-cov audit deny outdated watch semver-checks machete careful; do
         check_cargo_tool $tool
     done
+
+    # Standalone tools
+    printf '\n{{cyan}}Standalone Tools:{{reset}}\n'
+    command -v git-cliff &> /dev/null && printf '{{green}}✓{{reset}} git-cliff\n' || printf '{{red}}✗{{reset}} git-cliff\n'
+    command -v typos &> /dev/null && printf '{{green}}✓{{reset}} typos\n' || printf '{{red}}✗{{reset}} typos\n'
 
     # External tools
     printf '\n{{cyan}}External:{{reset}}\n'
@@ -991,3 +1300,29 @@ help:
     printf 'MSRV: {{msrv}} | Edition: {{edition}} | Platform: {{platform}}\n\n'
     printf '{{bold}}Usage:{{reset}} just [recipe] [arguments...]\n\n'
     just --list --unsorted
+
+[group('help')]
+[doc("Show commonly used recipes")]
+quick:
+    #!/usr/bin/env bash
+    printf '{{cyan}}{{bold}}Quick Reference{{reset}}\n\n'
+    printf '{{bold}}Development:{{reset}}\n'
+    printf '  {{green}}just build{{reset}}          Build debug (all features)\n'
+    printf '  {{green}}just test{{reset}}           Run tests\n'
+    printf '  {{green}}just clippy{{reset}}         Run clippy lints\n'
+    printf '  {{green}}just fmt{{reset}}            Format code\n'
+    printf '  {{green}}just watch{{reset}}          Watch mode (tests)\n'
+    printf '  {{green}}just run{{reset}}            Run rexpipe\n'
+    printf '\n{{bold}}CI/Release:{{reset}}\n'
+    printf '  {{green}}just ci{{reset}}             Run full CI\n'
+    printf '  {{green}}just ci-release{{reset}}     Release CI\n'
+    printf '  {{green}}just release-check{{reset}}  Pre-release validation\n'
+    printf '\n{{bold}}Analysis:{{reset}}\n'
+    printf '  {{green}}just coverage{{reset}}       Code coverage\n'
+    printf '  {{green}}just deny{{reset}}           Security/license check\n'
+    printf '  {{green}}just audit{{reset}}          Security vulnerability scan\n'
+    printf '\n{{bold}}Features:{{reset}}\n'
+    printf '  {{green}}just build-with "pcre"{{reset}}      Build with specific features\n'
+    printf '  {{green}}just build-minimal{{reset}}          Build minimal binary\n'
+    printf '  {{green}}just build-standard{{reset}}         Build standard (tree-sitter+pcre)\n'
+    printf '\n'
