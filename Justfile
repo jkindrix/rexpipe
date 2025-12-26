@@ -125,7 +125,7 @@ setup-tools:
     # Release tools
     {{cargo}} install cargo-semver-checks git-cliff
     # Quality tools
-    {{cargo}} install cargo-outdated cargo-machete typos-cli cargo-careful
+    {{cargo}} install cargo-outdated cargo-machete typos-cli cargo-careful cargo-bloat
     # Development tools
     {{cargo}} install cargo-watch
     printf '{{green}}[OK]{{reset}}   Tools installed\n'
@@ -762,6 +762,107 @@ bench-compare name="baseline":
     {{cargo}} bench -- --baseline {{name}}
     printf '{{green}}[OK]{{reset}}   Comparison complete\n'
 
+[group('bench')]
+[doc("Analyze binary size with cargo-bloat")]
+bloat:
+    #!/usr/bin/env bash
+    printf '{{cyan}}[INFO]{{reset}} Analyzing binary size...\n'
+    if ! command -v cargo-bloat &> /dev/null; then
+        printf '{{yellow}}[WARN]{{reset}} cargo-bloat not installed (cargo install cargo-bloat)\n'
+        exit 0
+    fi
+    {{cargo}} bloat --release --all-features -n 20
+    printf '{{green}}[OK]{{reset}}   Size analysis complete\n'
+
+[group('bench')]
+[doc("Analyze binary size by crate")]
+bloat-crates:
+    #!/usr/bin/env bash
+    printf '{{cyan}}[INFO]{{reset}} Analyzing binary size by crate...\n'
+    if ! command -v cargo-bloat &> /dev/null; then
+        printf '{{yellow}}[WARN]{{reset}} cargo-bloat not installed\n'
+        exit 0
+    fi
+    {{cargo}} bloat --release --all-features --crates
+    printf '{{green}}[OK]{{reset}}   Crate size analysis complete\n'
+
+# ============================================================================
+# CROSS-COMPILATION RECIPES
+# ============================================================================
+
+[group('cross')]
+[doc("Build for Linux (musl, static)")]
+cross-linux-musl:
+    #!/usr/bin/env bash
+    printf '{{cyan}}[INFO]{{reset}} Building for x86_64-unknown-linux-musl...\n'
+    if command -v cross &> /dev/null; then
+        cross build --release --all-features --target x86_64-unknown-linux-musl
+    else
+        {{cargo}} build --release --all-features --target x86_64-unknown-linux-musl
+    fi
+    printf '{{green}}[OK]{{reset}}   Linux musl build complete\n'
+
+[group('cross')]
+[doc("Build for Linux ARM64")]
+cross-linux-arm64:
+    #!/usr/bin/env bash
+    printf '{{cyan}}[INFO]{{reset}} Building for aarch64-unknown-linux-gnu...\n'
+    if command -v cross &> /dev/null; then
+        cross build --release --all-features --target aarch64-unknown-linux-gnu
+    else
+        {{cargo}} build --release --all-features --target aarch64-unknown-linux-gnu
+    fi
+    printf '{{green}}[OK]{{reset}}   Linux ARM64 build complete\n'
+
+[group('cross')]
+[doc("Build for macOS ARM64 (Apple Silicon)")]
+cross-macos-arm64:
+    #!/usr/bin/env bash
+    printf '{{cyan}}[INFO]{{reset}} Building for aarch64-apple-darwin...\n'
+    {{cargo}} build --release --all-features --target aarch64-apple-darwin
+    printf '{{green}}[OK]{{reset}}   macOS ARM64 build complete\n'
+
+[group('cross')]
+[doc("Build for macOS x86_64 (Intel)")]
+cross-macos-x64:
+    #!/usr/bin/env bash
+    printf '{{cyan}}[INFO]{{reset}} Building for x86_64-apple-darwin...\n'
+    {{cargo}} build --release --all-features --target x86_64-apple-darwin
+    printf '{{green}}[OK]{{reset}}   macOS x64 build complete\n'
+
+[group('cross')]
+[doc("Build for Windows x86_64")]
+cross-windows:
+    #!/usr/bin/env bash
+    printf '{{cyan}}[INFO]{{reset}} Building for x86_64-pc-windows-msvc...\n'
+    if command -v cross &> /dev/null; then
+        cross build --release --all-features --target x86_64-pc-windows-msvc
+    else
+        {{cargo}} build --release --all-features --target x86_64-pc-windows-msvc
+    fi
+    printf '{{green}}[OK]{{reset}}   Windows build complete\n'
+
+[group('cross')]
+[doc("List installed cross-compilation targets")]
+cross-targets:
+    #!/usr/bin/env bash
+    printf '{{cyan}}[INFO]{{reset}} Installed targets:\n'
+    rustup target list --installed
+
+[group('cross')]
+[doc("Install common cross-compilation targets")]
+cross-setup:
+    #!/usr/bin/env bash
+    printf '{{blue}}{{bold}}Installing cross-compilation targets...{{reset}}\n'
+    rustup target add x86_64-unknown-linux-musl
+    rustup target add aarch64-unknown-linux-gnu
+    rustup target add x86_64-apple-darwin
+    rustup target add aarch64-apple-darwin
+    rustup target add x86_64-pc-windows-msvc
+    printf '{{green}}[OK]{{reset}}   Targets installed\n'
+    printf '{{cyan}}[INFO]{{reset}} For full cross-compilation support, install cross:\n'
+    printf '         cargo install cross\n'
+
 # ============================================================================
 # DEVELOPMENT WORKFLOW RECIPES
 # ============================================================================
@@ -1276,7 +1377,7 @@ check-tools:
 
     # Cargo extensions
     printf '\n{{cyan}}Cargo Extensions:{{reset}}\n'
-    for tool in nextest llvm-cov audit deny outdated watch semver-checks machete careful; do
+    for tool in nextest llvm-cov audit deny outdated watch semver-checks machete careful bloat; do
         check_cargo_tool $tool
     done
 
@@ -1284,11 +1385,13 @@ check-tools:
     printf '\n{{cyan}}Standalone Tools:{{reset}}\n'
     command -v git-cliff &> /dev/null && printf '{{green}}✓{{reset}} git-cliff\n' || printf '{{red}}✗{{reset}} git-cliff\n'
     command -v typos &> /dev/null && printf '{{green}}✓{{reset}} typos\n' || printf '{{red}}✗{{reset}} typos\n'
+    command -v cross &> /dev/null && printf '{{green}}✓{{reset}} cross\n' || printf '{{dim}}○{{reset}} cross (optional, for cross-compilation)\n'
 
     # External tools
     printf '\n{{cyan}}External:{{reset}}\n'
     command -v tokei &> /dev/null && printf '{{green}}✓{{reset}} tokei\n' || printf '{{red}}✗{{reset}} tokei\n'
     command -v jq &> /dev/null && printf '{{green}}✓{{reset}} jq\n' || printf '{{red}}✗{{reset}} jq\n'
+    command -v lychee &> /dev/null && printf '{{green}}✓{{reset}} lychee\n' || printf '{{dim}}○{{reset}} lychee (optional, for link checking)\n'
 
     printf '\n'
 

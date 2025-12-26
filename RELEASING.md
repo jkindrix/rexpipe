@@ -2,6 +2,8 @@
 
 Comprehensive guide for releasing new versions of rexpipe to crates.io.
 
+**Version:** 0.1.0 | **MSRV:** 1.85 | **Edition:** 2024
+
 ---
 
 ## Critical: Read Before Any Release
@@ -64,15 +66,19 @@ git push origin vX.Y.Z      # Triggers automated publish
 1. [CI Parity](#ci-parity)
 2. [Version Numbering](#version-numbering)
 3. [Pre-Release Checklist](#pre-release-checklist)
-4. [Changelog Generation](#changelog-generation)
-5. [Release Workflow](#release-workflow)
-6. [Automated vs Manual Release](#automated-vs-manual-release)
-7. [Post-Release Verification](#post-release-verification)
-8. [CI Automation Coverage](#ci-automation-coverage)
-9. [Manual Recovery Procedures](#manual-recovery-procedures)
-10. [Justfile Recipe Reference](#justfile-recipe-reference)
-11. [Troubleshooting](#troubleshooting)
-12. [Release Checklist Template](#release-checklist-template)
+4. [Feature-Specific Testing](#feature-specific-testing)
+5. [Changelog Generation](#changelog-generation)
+6. [Release Workflow](#release-workflow)
+7. [Automated vs Manual Release](#automated-vs-manual-release)
+8. [Post-Release Verification](#post-release-verification)
+9. [CI Automation Coverage](#ci-automation-coverage)
+10. [Manual Recovery Procedures](#manual-recovery-procedures)
+11. [Justfile Recipe Reference](#justfile-recipe-reference)
+12. [Troubleshooting](#troubleshooting)
+13. [Platform-Specific Notes](#platform-specific-notes)
+14. [Security Incident Response](#security-incident-response)
+15. [Lessons Learned](#lessons-learned)
+16. [Release Checklist Template](#release-checklist-template)
 
 ---
 
@@ -289,6 +295,61 @@ just publish-dry      # Dry-run publish
 - [ ] Required metadata present (description, license, repository)
 - [ ] Keywords and categories appropriate
 - [ ] Dry-run publish succeeds
+
+---
+
+## Feature-Specific Testing
+
+rexpipe has several optional features that must be tested before release.
+
+### Feature Matrix
+
+| Feature | Description | Test Command | Dependencies | Notes |
+|---------|-------------|--------------|--------------|-------|
+| `default` | Base functionality (regex engine only) | `cargo test` | regex | Core transforms |
+| `async` | Async I/O via Tokio | `cargo test --features async` | tokio | For streaming |
+| `pcre` | PCRE regex engine | `cargo test --features pcre` | fancy-regex | Advanced patterns |
+| `fpe` | Format-preserving encryption | `cargo test --features fpe` | fpe, aes | Data masking |
+| `tree-sitter` | Syntax-aware scoping | `cargo test --features tree-sitter` | tree-sitter-* | Multi-language |
+| `remote` | Remote file fetching | `cargo test --features remote` | ureq | HTTP/HTTPS |
+| `watch` | File watching | `cargo test --features watch` | notify | Live reload |
+| `all` | All features combined | `cargo test --all-features` | All above | Comprehensive |
+
+### Tree-sitter Language Support
+
+The `tree-sitter` feature includes parsers for multiple languages:
+
+| Language | Parser Crate | Test |
+|----------|-------------|------|
+| Rust | tree-sitter-rust | `cargo test --features tree-sitter -- rust` |
+| Python | tree-sitter-python | `cargo test --features tree-sitter -- python` |
+| JavaScript | tree-sitter-javascript | `cargo test --features tree-sitter -- javascript` |
+| TypeScript | tree-sitter-typescript | `cargo test --features tree-sitter -- typescript` |
+| Go | tree-sitter-go | `cargo test --features tree-sitter -- go` |
+| JSON | tree-sitter-json | `cargo test --features tree-sitter -- json` |
+| YAML | tree-sitter-yaml | `cargo test --features tree-sitter -- yaml` |
+
+### Feature Combination Testing
+
+```bash
+# Test no-default-features compiles (minimal build)
+cargo check --no-default-features
+
+# Test each feature in isolation
+for feature in async pcre fpe tree-sitter remote watch; do
+    cargo test --no-default-features --features "$feature"
+done
+
+# Test common feature combinations
+cargo test --features "async,remote"       # Async remote fetching
+cargo test --features "pcre,tree-sitter"   # Advanced regex + AST
+cargo test --features "fpe,tree-sitter"    # Encryption with AST scoping
+
+# Test full feature set (pre-release requirement)
+cargo test --all-features
+```
+
+The `just test-features` recipe runs all combinations automatically.
 
 ---
 
@@ -684,6 +745,213 @@ cargo publish
 2. Use `just test-locked` instead of `just test`
 3. Run `just setup` to install same tool versions
 4. Check for platform-specific issues
+
+---
+
+## Platform-Specific Notes
+
+### Linux
+
+- **Primary platform**: Full functionality, all features supported
+- **Tree-sitter**: Requires C compiler for building parsers
+- **PCRE**: Uses fancy-regex (pure Rust), no system PCRE needed
+- **Static builds**: Use musl target for fully static binaries
+
+```bash
+# Build static Linux binary
+cargo build --release --target x86_64-unknown-linux-musl
+
+# Install C compiler for tree-sitter (Debian/Ubuntu)
+sudo apt install build-essential
+```
+
+### macOS
+
+- **Fully supported**: All features work on macOS
+- **Universal binaries**: Build for both x86_64 and aarch64
+- **File watching**: Uses FSEvents via notify crate
+
+```bash
+# Build for Apple Silicon
+cargo build --release --target aarch64-apple-darwin
+
+# Build for Intel
+cargo build --release --target x86_64-apple-darwin
+```
+
+### Windows
+
+- **Fully supported**: All features work on Windows
+- **File watching**: Uses ReadDirectoryChangesW via notify crate
+- **MSVC recommended**: Use the MSVC toolchain for best compatibility
+
+```bash
+# Build with MSVC toolchain
+cargo build --release --target x86_64-pc-windows-msvc
+```
+
+### Cross-Compilation
+
+```bash
+# Install cross for cross-compilation
+cargo install cross
+
+# Build for different targets
+cross build --release --target x86_64-unknown-linux-musl
+cross build --release --target aarch64-unknown-linux-gnu
+```
+
+---
+
+## Security Incident Response
+
+This section documents procedures for handling security vulnerabilities in released versions.
+
+### Severity Assessment
+
+| Severity | CVSS Score | Response Time | Examples |
+|----------|------------|---------------|----------|
+| **Critical** | 9.0-10.0 | Immediate (same day) | Code injection via regex, encryption bypass |
+| **High** | 7.0-8.9 | 24-48 hours | Path traversal, sensitive data exposure |
+| **Medium** | 4.0-6.9 | 1 week | DoS via regex, information disclosure |
+| **Low** | 0.1-3.9 | Next release | Minor information disclosure |
+
+### Security Release Process
+
+1. **Assess and Confirm**
+   - Verify the vulnerability is real and reproducible
+   - Determine affected versions and severity
+   - Check if actively exploited
+
+2. **Develop Fix**
+   - Create fix on private branch
+   - Ensure fix doesn't introduce new issues
+   - Prepare minimal, targeted patch
+
+3. **Coordinate Disclosure** (for Critical/High)
+   - Notify affected downstream users privately if known
+   - Coordinate with security researchers if externally reported
+   - Prepare security advisory
+
+4. **Release Security Patch**
+   - Follow standard release process with expedited timeline
+   - Use PATCH version bump (e.g., 0.1.0 → 0.1.1)
+   - Document as security fix in CHANGELOG
+
+5. **Post-Release**
+   - Publish GitHub Security Advisory
+   - Request CVE if applicable
+   - Update RustSec advisory database
+
+### Security Advisory Template
+
+```markdown
+## Security Advisory: [Brief Description]
+
+**Severity**: [Critical/High/Medium/Low]
+**CVE**: [CVE-YYYY-NNNNN or "Pending"]
+**Affected Versions**: [e.g., < 0.1.1]
+**Fixed Versions**: [e.g., >= 0.1.1]
+
+### Description
+
+[Detailed description of the vulnerability]
+
+### Impact
+
+[What can an attacker do with this vulnerability]
+
+### Mitigation
+
+[Immediate steps users can take before updating]
+
+### Resolution
+
+Update to version X.Y.Z or later:
+\`\`\`bash
+cargo update -p rexpipe
+\`\`\`
+
+### Credits
+
+[Acknowledge reporters if they consent]
+```
+
+### Yanking Considerations
+
+For severe security issues, yank affected versions:
+
+```bash
+cargo yank --version 0.X.Y rexpipe
+```
+
+**Note:** Yanking prevents new installations but doesn't break existing `Cargo.lock` files.
+
+---
+
+## Lessons Learned
+
+This section documents issues encountered in past releases and patterns to avoid.
+
+### 1. CI Parity is Non-Negotiable
+
+**Issue**: Local tests pass but CI fails due to environment differences.
+
+**Solution**: Always run `just ci` before pushing. Use `just test-locked` to match CI behavior exactly.
+
+### 2. Feature Isolation Testing
+
+**Issue**: Code compiles with `--all-features` but fails with specific feature combinations.
+
+**Solution**: Run `just test-features` which tests each feature in isolation and common combinations.
+
+### 3. Tree-sitter Build Dependencies
+
+**Issue**: Tree-sitter feature fails to build on systems without a C compiler.
+
+**Solution**: Document the C compiler requirement. Consider adding a CI job that tests without build tools to catch this.
+
+### 4. Regex Catastrophic Backtracking
+
+**Issue**: Certain user-provided regex patterns can cause exponential time complexity.
+
+**Solution**: The regex crate has built-in protections. When using `pcre` feature with fancy-regex, patterns are still protected by timeouts.
+
+### 5. MSRV Compliance
+
+**Issue**: Accidentally using newer Rust features breaks MSRV compatibility.
+
+**Solution**: Run `just msrv-check` before every release. CI enforces this automatically.
+
+### 6. Tag Format Consistency
+
+**Issue**: Tags without `v` prefix don't trigger release workflow.
+
+**Solution**: Always use `just tag` which enforces the `vX.Y.Z` format.
+
+### 7. Changelog Generation Order
+
+**Issue**: Generating changelog after version bump includes the bump commit incorrectly.
+
+**Solution**: Generate changelog first with `just changelog`, then bump version, then commit both together.
+
+### 8. Binary Size Regression
+
+**Issue**: New features unexpectedly increased binary size.
+
+**Solution**: Use `just bloat` to analyze binary size before release. Tree-sitter adds significant size due to parser grammars.
+
+### 9. File Watching Platform Differences
+
+**Issue**: The `watch` feature behaves differently on macOS (FSEvents) vs Linux (inotify).
+
+**Solution**: Test file watching on multiple platforms. CI includes cross-platform matrix testing.
+
+### 10. FPE Key Material Handling
+
+**Issue**: Format-preserving encryption requires careful key handling.
+
+**Solution**: Document that keys should never be logged. The `fpe` feature uses secure memory handling from the aes crate.
 
 ---
 
