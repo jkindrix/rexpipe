@@ -334,6 +334,8 @@ pub struct FileResult {
     pub modified: bool,
     /// Error message if processing failed, None on success
     pub error: Option<String>,
+    /// Buffered transformed output (when not editing in-place)
+    pub output: Option<Vec<u8>>,
 }
 
 /// Aggregated results from processing multiple files.
@@ -948,6 +950,7 @@ impl MultiFileProcessor {
                     lines_processed: 0,
                     modified: false,
                     error: Some(e.to_string()),
+                    output: None,
                 },
             };
 
@@ -1048,6 +1051,7 @@ impl MultiFileProcessor {
                         lines_processed: 0,
                         modified: false,
                         error: Some(e.to_string()),
+                        output: None,
                     });
                 }
             }
@@ -1141,6 +1145,7 @@ impl MultiFileProcessor {
                         lines_processed: 0,
                         modified: false,
                         error: Some(e.to_string()),
+                        output: None,
                     },
                 };
 
@@ -1254,11 +1259,12 @@ impl MultiFileProcessor {
                 lines_processed: pipeline_result.lines_processed,
                 modified: pipeline_result.transformations_applied > 0,
                 error: None,
+                output: None,
             })
         } else {
-            // Just process and count matches
+            // Process file and capture transformed output
             // Use process_file which handles syntax-aware processing automatically
-            let mut output = std::io::sink();
+            let mut output = Vec::new();
             let pipeline_result = processor.process_file(path, &mut output)?;
 
             Ok(FileResult {
@@ -1267,6 +1273,7 @@ impl MultiFileProcessor {
                 lines_processed: pipeline_result.lines_processed,
                 modified: false,
                 error: None,
+                output: Some(output),
             })
         }
     }
@@ -1294,6 +1301,7 @@ impl MultiFileProcessor {
                         lines_processed: lines,
                         modified: false,
                         error: None,
+                        output: None,
                     },
                     Err(e) => FileResult {
                         path: path.clone(),
@@ -1301,6 +1309,7 @@ impl MultiFileProcessor {
                         lines_processed: 0,
                         modified: false,
                         error: Some(e.to_string()),
+                        output: None,
                     },
                 })
                 .collect()
@@ -1314,6 +1323,7 @@ impl MultiFileProcessor {
                         lines_processed: lines,
                         modified: false,
                         error: None,
+                        output: None,
                     },
                     Err(e) => FileResult {
                         path: path.clone(),
@@ -1321,6 +1331,7 @@ impl MultiFileProcessor {
                         lines_processed: 0,
                         modified: false,
                         error: Some(e.to_string()),
+                        output: None,
                     },
                 })
                 .collect()
@@ -1628,6 +1639,7 @@ pub mod async_processing {
                             lines_processed: 0,
                             modified: false,
                             error: Some(e),
+                            output: None,
                         });
                     }
                     Err(e) => {
@@ -1640,6 +1652,7 @@ pub mod async_processing {
                             lines_processed: 0,
                             modified: false,
                             error: Some(format!("task panicked: {}", e)),
+                            output: None,
                         });
                     }
                 }
@@ -1684,6 +1697,7 @@ pub mod async_processing {
                             lines_processed: lines,
                             modified: false,
                             error: None,
+                            output: None,
                         });
                     }
                     Ok(Err(e)) => {
@@ -1694,6 +1708,7 @@ pub mod async_processing {
                             lines_processed: 0,
                             modified: false,
                             error: Some(e),
+                            output: None,
                         });
                     }
                     Err(e) => {
@@ -1704,6 +1719,7 @@ pub mod async_processing {
                             lines_processed: 0,
                             modified: false,
                             error: Some(e.to_string()),
+                            output: None,
                         });
                     }
                 }
@@ -1792,6 +1808,7 @@ pub mod async_processing {
                 lines_processed: pipeline_result.lines_processed,
                 modified: pipeline_result.transformations_applied > 0,
                 error: None,
+                output: None,
             })
         } else {
             Ok(FileResult {
@@ -1800,6 +1817,7 @@ pub mod async_processing {
                 lines_processed: pipeline_result.lines_processed,
                 modified: false,
                 error: None,
+                output: None,
             })
         }
     }

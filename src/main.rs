@@ -6,7 +6,7 @@ use log::{debug, info};
 use std::fs::File;
 #[cfg(feature = "tree-sitter")]
 use std::io::Read;
-use std::io::{self, BufReader, IsTerminal};
+use std::io::{self, BufReader, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 
 // Import from the library crate
@@ -2509,9 +2509,40 @@ fn run_multi_file_mode(
             .map_err(|e| anyhow!("Failed to save checkpoint: {}", e))?;
     }
 
-    // Output results
+    // Write transformed content to stdout when not editing in-place
+    // Skip if --json was explicitly requested (JSON format is the desired output)
+    let explicit_json = matches.get_flag("json");
+    let has_content_output = if !options.in_place && !explicit_json {
+        let stdout = io::stdout();
+        let mut stdout_lock = stdout.lock();
+        let mut wrote = false;
+        for file_result in &result.file_results {
+            if let Some(ref output) = file_result.output {
+                if !output.is_empty() {
+                    stdout_lock.write_all(output)?;
+                    wrote = true;
+                }
+            }
+        }
+        wrote
+    } else {
+        false
+    };
+
+    // Output results summary
+    // When content was written to stdout, show summary on stderr to avoid mixing
+    // When editing in-place or --json requested (no content output), show on stdout
     if !quiet {
-        if json_output {
+        if has_content_output {
+            // Content went to stdout — summary goes to stderr
+            eprintln!("{}", result.summary());
+            if !result.errors.is_empty() {
+                eprintln!("\nErrors:");
+                for error in &result.errors {
+                    eprintln!("  {}", error);
+                }
+            }
+        } else if json_output {
             output_multi_file_json(&result)?;
         } else {
             output_multi_file_summary(&result)?;

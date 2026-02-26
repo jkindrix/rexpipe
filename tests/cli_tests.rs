@@ -164,7 +164,7 @@ fn test_exit_code_invalid_regex() {
 
 #[test]
 fn test_file_input() {
-    // File processing outputs JSON format with stats
+    // File processing outputs transformed content to stdout
     let mut temp_file = NamedTempFile::new().unwrap();
     writeln!(temp_file, "hello 123 world").unwrap();
 
@@ -173,7 +173,7 @@ fn test_file_input() {
         .arg(temp_file.path())
         .assert()
         .success()
-        .stdout(predicate::str::contains("\"matches_found\": 1"));
+        .stdout(predicate::str::contains("hello NUM world"));
 }
 
 #[test]
@@ -529,7 +529,7 @@ fn test_path_with_spaces() {
         .arg(&file_path)
         .assert()
         .success()
-        .stdout(predicate::str::contains("matches_found"));
+        .stdout(predicate::str::contains("test NUM"));
 }
 
 #[test]
