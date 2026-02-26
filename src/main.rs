@@ -362,6 +362,7 @@ fn build_cli() -> Command {
                 .short('p')
                 .long("pattern")
                 .value_name("REGEX")
+                .allow_hyphen_values(true)
                 .help("Inline regex pattern"),
         )
         .arg(
@@ -369,6 +370,7 @@ fn build_cli() -> Command {
                 .short('r')
                 .long("replacement")
                 .value_name("TEXT")
+                .allow_hyphen_values(true)
                 .help("Replacement text for substitution"),
         )
         // === Regex Engine Options ===
@@ -2530,19 +2532,10 @@ fn run_multi_file_mode(
     };
 
     // Output results summary
-    // When content was written to stdout, show summary on stderr to avoid mixing
+    // When content was written to stdout, suppress the summary (like grep/sed)
     // When editing in-place or --json requested (no content output), show on stdout
-    if !quiet {
-        if has_content_output {
-            // Content went to stdout — summary goes to stderr
-            eprintln!("{}", result.summary());
-            if !result.errors.is_empty() {
-                eprintln!("\nErrors:");
-                for error in &result.errors {
-                    eprintln!("  {}", error);
-                }
-            }
-        } else if json_output {
+    if !quiet && !has_content_output {
+        if json_output {
             output_multi_file_json(&result)?;
         } else {
             output_multi_file_summary(&result)?;
