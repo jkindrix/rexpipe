@@ -1,7 +1,7 @@
 use rexpipe::inspector::{Inspector, InspectorOptions};
 use rexpipe::pipeline::{
-    PipelineConfig, PipelineSettings, PipelineStep, RegexFlag, StepAction, StepType,
-    TransformAction,
+    PipelineConfig, PipelineSettings, PipelineStep, ProcessingMode, RegexFlag, StepAction,
+    StepType, TransformAction,
 };
 use rexpipe::processor::StreamProcessor;
 use std::io::Cursor;
@@ -413,7 +413,6 @@ fn test_transform_lowercase() {
 // =====================================================
 
 /// Test positive lookahead pattern (match word followed by specific text)
-#[cfg(feature = "pcre")]
 #[test]
 fn test_pcre_positive_lookahead() {
     let input_data = "foo bar foo baz foo qux";
@@ -456,7 +455,6 @@ fn test_pcre_positive_lookahead() {
 }
 
 /// Test negative lookahead pattern (match word NOT followed by specific text)
-#[cfg(feature = "pcre")]
 #[test]
 fn test_pcre_negative_lookahead() {
     let input_data = "foo bar foo baz foo qux";
@@ -498,7 +496,6 @@ fn test_pcre_negative_lookahead() {
 }
 
 /// Test positive lookbehind pattern (match word preceded by specific text)
-#[cfg(feature = "pcre")]
 #[test]
 fn test_pcre_positive_lookbehind() {
     let input_data = "price: $100, discount: $50, total: 150";
@@ -540,7 +537,6 @@ fn test_pcre_positive_lookbehind() {
 }
 
 /// Test negative lookbehind pattern (match word NOT preceded by specific text)
-#[cfg(feature = "pcre")]
 #[test]
 fn test_pcre_negative_lookbehind() {
     let input_data = "price: $100, discount: $50, total: 150";
@@ -582,7 +578,6 @@ fn test_pcre_negative_lookbehind() {
 }
 
 /// Test combined lookahead and lookbehind
-#[cfg(feature = "pcre")]
 #[test]
 fn test_pcre_combined_lookaround() {
     // Input has "user" in different positions:
@@ -638,7 +633,6 @@ fn test_pcre_combined_lookaround() {
 }
 
 /// Test PCRE mode with filter step
-#[cfg(feature = "pcre")]
 #[test]
 fn test_pcre_filter_with_lookahead() {
     let input_data = r#"DEBUG: Starting process
@@ -1355,43 +1349,6 @@ enabled = true
     }
 }
 
-/// Test PCRE mode disabled when pcre feature not compiled
-/// This test runs without the pcre feature to verify proper error handling
-#[cfg(not(feature = "pcre"))]
-#[test]
-fn test_pcre_mode_disabled_error() {
-    let settings = PipelineSettings {
-        pcre_mode: true,
-        ..Default::default()
-    };
-
-    let config = PipelineConfig {
-        name: Some("PCRE Disabled Test".to_string()),
-        description: None,
-        version: None,
-        patterns_include: Vec::new(),
-        settings,
-        step: vec![PipelineStep {
-            step_type: StepType::Substitute,
-            pattern: r"test".to_string(),
-            replacement: Some("TEST".to_string()),
-            action: None,
-            transform: None,
-            flags: None,
-            description: None,
-            enabled: Some(true),
-            ..Default::default()
-        }],
-        ..Default::default()
-    };
-
-    // Should fail because pcre_mode is true but feature is not enabled
-    let result = StreamProcessor::new(config);
-    assert!(result.is_err());
-    let err = result.err().unwrap();
-    let err_msg = err.to_string();
-    assert!(err_msg.contains("pcre") || err_msg.contains("feature"));
-}
 
 // =====================================================
 // Multi-File Processing & In-Place Editing Tests
@@ -3618,4 +3575,284 @@ fn test_log_filter_drop_debug() {
     assert!(output_str.contains("[INFO]"));
     assert!(output_str.contains("[ERROR]"));
     assert!(!output_str.contains("[DEBUG]"));
+}
+
+// =====================================================
+// Processing Mode Tests (line, slurp, paragraph)
+// =====================================================
+
+/// Test slurp mode enables cross-line substitution
+#[test]
+fn test_slurp_mode_cross_line_substitution() {
+    let config = PipelineConfig {
+        step: vec![PipelineStep {
+            step_type: StepType::Substitute,
+            mode: Some(ProcessingMode::Slurp),
+            pattern: r"hello\nworld".to_string(),
+            replacement: Some("JOINED".to_string()),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    let mut processor = StreamProcessor::new(config).unwrap();
+    let input = Cursor::new("hello\nworld\n");
+    let mut output = Vec::new();
+    processor.process_stream(input, &mut output).unwrap();
+    let output_str = String::from_utf8(output).unwrap();
+
+    assert_eq!(output_str.trim(), "JOINED");
+}
+
+/// Test slurp mode with the original unwrap use case:
+/// strip leading indent, then rejoin soft-wrapped lines
+#[test]
+fn test_slurp_mode_unwrap_lines() {
+    let config = PipelineConfig {
+        step: vec![
+            // Step 1: strip 2-space indent (line mode)
+            PipelineStep {
+                step_type: StepType::Substitute,
+                pattern: "^  ".to_string(),
+                replacement: Some(String::new()),
+                ..Default::default()
+            },
+            // Step 2: rejoin wrapped lines (slurp mode)
+            PipelineStep {
+                step_type: StepType::Substitute,
+                mode: Some(ProcessingMode::Slurp),
+                pattern: r"(\w)\n(\w)".to_string(),
+                replacement: Some("$1 $2".to_string()),
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    };
+
+    let mut processor = StreamProcessor::new(config).unwrap();
+    let input = Cursor::new("  This is a long line that\n  wraps here\n");
+    let mut output = Vec::new();
+    processor.process_stream(input, &mut output).unwrap();
+    let output_str = String::from_utf8(output).unwrap();
+
+    assert_eq!(output_str.trim(), "This is a long line that wraps here");
+}
+
+/// Test paragraph mode processes each paragraph independently
+#[test]
+fn test_paragraph_mode() {
+    let config = PipelineConfig {
+        step: vec![PipelineStep {
+            step_type: StepType::Substitute,
+            mode: Some(ProcessingMode::Paragraph),
+            pattern: r"(\w)\n(\w)".to_string(),
+            replacement: Some("$1 $2".to_string()),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    let mut processor = StreamProcessor::new(config).unwrap();
+    let input = Cursor::new("line one\nline two\n\npara two\nline four\n");
+    let mut output = Vec::new();
+    processor.process_stream(input, &mut output).unwrap();
+    let output_str = String::from_utf8(output).unwrap();
+
+    // Each paragraph should have lines joined, but paragraphs remain separate
+    assert!(output_str.contains("line one line two"));
+    assert!(output_str.contains("para two line four"));
+    // Paragraph break preserved
+    assert!(output_str.contains("\n\n"));
+}
+
+/// Test mixed-mode pipeline: line steps then slurp step
+#[test]
+fn test_mixed_mode_pipeline() {
+    let config = PipelineConfig {
+        step: vec![
+            // Line mode: uppercase substitution
+            PipelineStep {
+                step_type: StepType::Substitute,
+                pattern: "foo".to_string(),
+                replacement: Some("FOO".to_string()),
+                ..Default::default()
+            },
+            // Slurp mode: join lines
+            PipelineStep {
+                step_type: StepType::Substitute,
+                mode: Some(ProcessingMode::Slurp),
+                pattern: r"\n".to_string(),
+                replacement: Some(" ".to_string()),
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    };
+
+    let mut processor = StreamProcessor::new(config).unwrap();
+    let input = Cursor::new("foo bar\nbaz foo\n");
+    let mut output = Vec::new();
+    processor.process_stream(input, &mut output).unwrap();
+    let output_str = String::from_utf8(output).unwrap();
+
+    // foo replaced first (line mode), then lines joined (slurp mode)
+    assert_eq!(output_str.trim(), "FOO bar baz FOO");
+}
+
+/// Test PCRE auto-detection (no explicit pcre flag needed)
+#[test]
+fn test_pcre_auto_detection() {
+    let config = PipelineConfig {
+        step: vec![PipelineStep {
+            step_type: StepType::Substitute,
+            pattern: r"(?<=foo)bar".to_string(),
+            replacement: Some("BAZ".to_string()),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    let mut processor = StreamProcessor::new(config).unwrap();
+    let input = Cursor::new("foobar baz\n");
+    let mut output = Vec::new();
+    processor.process_stream(input, &mut output).unwrap();
+    let output_str = String::from_utf8(output).unwrap();
+
+    assert_eq!(output_str.trim(), "fooBAZ baz");
+}
+
+/// Test slurp memory limit
+#[test]
+fn test_slurp_mode_memory_limit() {
+    let config = PipelineConfig {
+        settings: PipelineSettings {
+            max_slurp_size: 10, // 10 bytes - very small
+            ..Default::default()
+        },
+        step: vec![PipelineStep {
+            step_type: StepType::Substitute,
+            mode: Some(ProcessingMode::Slurp),
+            pattern: "x".to_string(),
+            replacement: Some("y".to_string()),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    let mut processor = StreamProcessor::new(config).unwrap();
+    let input = Cursor::new("this input is longer than 10 bytes\n");
+    let mut output = Vec::new();
+    let result = processor.process_stream(input, &mut output);
+
+    assert!(result.is_err());
+    assert!(result.unwrap_err().to_string().contains("max_slurp_size"));
+}
+
+/// Test block steps with non-line mode rejected at validation
+#[test]
+fn test_block_with_slurp_mode_rejected() {
+    let config = PipelineConfig {
+        step: vec![PipelineStep {
+            step_type: StepType::Block,
+            mode: Some(ProcessingMode::Slurp),
+            pattern: "start".to_string(),
+            start_pattern: Some("start".to_string()),
+            end_pattern: Some("end".to_string()),
+            action: Some(StepAction::KeepBlock),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    let result = StreamProcessor::new(config);
+    assert!(result.is_err(), "Expected Block+Slurp to be rejected");
+    let err = format!("{:#}", result.err().unwrap());
+    assert!(
+        err.contains("Block") || err.contains("block") || err.contains("slurp"),
+        "Expected error about Block+slurp incompatibility, got: {}",
+        err
+    );
+}
+
+/// Test filter in slurp mode: keep entire content if pattern matches
+#[test]
+fn test_filter_slurp_mode_keep() {
+    let config = PipelineConfig {
+        step: vec![PipelineStep {
+            step_type: StepType::Filter,
+            mode: Some(ProcessingMode::Slurp),
+            pattern: "needle".to_string(),
+            action: Some(StepAction::KeepLine),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    let mut processor = StreamProcessor::new(config).unwrap();
+    let input = Cursor::new("line one\nthe needle is here\nline three\n");
+    let mut output = Vec::new();
+    processor.process_stream(input, &mut output).unwrap();
+    let output_str = String::from_utf8(output).unwrap();
+
+    // Entire content kept because "needle" matches somewhere
+    assert!(output_str.contains("line one"));
+    assert!(output_str.contains("needle"));
+    assert!(output_str.contains("line three"));
+}
+
+/// Test filter in slurp mode: drop entire content if pattern matches
+#[test]
+fn test_filter_slurp_mode_drop() {
+    let config = PipelineConfig {
+        step: vec![PipelineStep {
+            step_type: StepType::Filter,
+            mode: Some(ProcessingMode::Slurp),
+            pattern: "needle".to_string(),
+            action: Some(StepAction::DropLine),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    let mut processor = StreamProcessor::new(config).unwrap();
+    let input = Cursor::new("line one\nthe needle is here\nline three\n");
+    let mut output = Vec::new();
+    processor.process_stream(input, &mut output).unwrap();
+    let output_str = String::from_utf8(output).unwrap();
+
+    // Entire content dropped because "needle" matches
+    assert!(output_str.trim().is_empty());
+}
+
+/// Test pure line-mode pipeline unchanged (regression)
+#[test]
+fn test_pure_line_mode_regression() {
+    let config = PipelineConfig {
+        step: vec![
+            PipelineStep {
+                step_type: StepType::Substitute,
+                pattern: "old".to_string(),
+                replacement: Some("new".to_string()),
+                ..Default::default()
+            },
+            PipelineStep {
+                step_type: StepType::Filter,
+                pattern: "skip".to_string(),
+                action: Some(StepAction::DropLine),
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    };
+
+    let mut processor = StreamProcessor::new(config).unwrap();
+    let input = Cursor::new("old text\nskip this\nold value\n");
+    let mut output = Vec::new();
+    processor.process_stream(input, &mut output).unwrap();
+    let output_str = String::from_utf8(output).unwrap();
+
+    assert!(output_str.contains("new text"));
+    assert!(output_str.contains("new value"));
+    assert!(!output_str.contains("skip"));
+    assert!(!output_str.contains("old"));
 }

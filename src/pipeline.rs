@@ -168,7 +168,7 @@ pub struct PipelineConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PipelineSettings {
-    /// Use PCRE-compatible regex engine via fancy-regex (requires pcre feature)
+    /// Force PCRE engine for all patterns (auto-detected when needed)
     #[serde(default)]
     pub pcre_mode: bool,
     /// Treat patterns as fixed strings (no regex interpretation)
@@ -194,10 +194,17 @@ pub struct PipelineSettings {
     /// Strict mode - reject patterns with potential ReDoS vulnerabilities
     #[serde(default)]
     pub strict_mode: bool,
-    /// Enable block processing mode.
-    /// When true, the pipeline operates on multi-line blocks rather than individual lines.
+    /// Default processing mode for all steps. Per-step `mode` overrides this.
+    /// - "line" (default): process one line at a time
+    /// - "slurp": buffer all input, apply patterns to entire content
+    /// - "paragraph": split on blank lines, process each paragraph
     #[serde(default)]
-    pub block_mode: bool,
+    pub mode: ProcessingMode,
+    /// Maximum bytes to buffer for slurp/paragraph mode (0 = no limit).
+    /// Prevents OOM when processing very large inputs in non-line mode.
+    /// Default: 256MB (268435456 bytes).
+    #[serde(default = "default_max_slurp_size")]
+    pub max_slurp_size: usize,
     /// Preserve CRLF line endings in in-place editing mode
     ///
     /// When true, the processor detects and preserves the original line ending
@@ -268,7 +275,8 @@ impl Default for PipelineSettings {
             timeout_ms: 0,
             allow_shell: default_allow_shell(),
             strict_mode: false,
-            block_mode: false,
+            mode: ProcessingMode::default(),
+            max_slurp_size: default_max_slurp_size(),
             preserve_line_endings: false,
             max_line_length: 0,
             max_line_action: MaxLineAction::default(),
@@ -321,10 +329,15 @@ impl PipelineSettings {
             } else {
                 base.strict_mode
             },
-            block_mode: if self.block_mode != default.block_mode {
-                self.block_mode
+            mode: if self.mode != default.mode {
+                self.mode
             } else {
-                base.block_mode
+                base.mode
+            },
+            max_slurp_size: if self.max_slurp_size != default.max_slurp_size {
+                self.max_slurp_size
+            } else {
+                base.max_slurp_size
             },
             preserve_line_endings: if self.preserve_line_endings != default.preserve_line_endings {
                 self.preserve_line_endings
@@ -382,6 +395,10 @@ fn default_allow_shell() -> bool {
     // Security: Shell transforms are disabled by default to prevent command injection
     // when processing untrusted input. Enable explicitly with allow_shell = true in config.
     false
+}
+
+fn default_max_slurp_size() -> usize {
+    256 * 1024 * 1024 // 256MB
 }
 
 // =============================================================================
@@ -561,6 +578,12 @@ impl PatternOrPatterns {
 pub struct PipelineStep {
     #[serde(rename = "type", default)]
     pub step_type: StepType,
+    /// Processing mode for this step. Overrides the global `settings.mode` default.
+    /// - "line" (default): process one line at a time
+    /// - "slurp": buffer all input, apply pattern to entire content (enables cross-line matching)
+    /// - "paragraph": split on blank lines, process each paragraph independently
+    #[serde(default)]
+    pub mode: Option<ProcessingMode>,
     /// Pattern to match (for non-block steps: substitute, filter, extract, validate, transform)
     #[serde(default)]
     pub pattern: String,
@@ -671,6 +694,26 @@ pub struct PipelineStep {
     /// Equivalent to `flags = ["i"]`
     #[serde(default)]
     pub ignore_case: Option<bool>,
+}
+
+/// Processing mode controls how input is chunked before pattern matching.
+///
+/// - `Line` (default): Process one line at a time with constant memory.
+/// - `Slurp`: Buffer the entire input and apply the pattern to the whole content.
+///   Enables cross-line substitutions (e.g., joining soft-wrapped lines).
+///   `DotAll` and `Multiline` flags are auto-enabled in slurp mode.
+/// - `Paragraph`: Split input on blank lines, process each paragraph independently.
+///   Useful for structured text with paragraph boundaries.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ProcessingMode {
+    /// Process input line-by-line (default, O(1) memory)
+    #[default]
+    Line,
+    /// Buffer entire input, apply pattern to whole content (O(n) memory)
+    Slurp,
+    /// Split on blank lines, process each paragraph (O(paragraph) memory)
+    Paragraph,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -1379,6 +1422,7 @@ impl PipelineConfig {
 
         let step = PipelineStep {
             step_type,
+            mode: None,
             pattern: pattern.to_string(),
             not_pattern: None,
             replacement: replacement.map(|s| s.to_string()),
@@ -1508,6 +1552,23 @@ impl PipelineConfig {
                     }
                 }
                 _ => {}
+            }
+
+            // Block steps have their own multi-line state machine and are incompatible
+            // with slurp/paragraph processing modes
+            let effective_mode = step.mode.as_ref().unwrap_or(&self.settings.mode);
+            if matches!(step.step_type, StepType::Block)
+                && !matches!(effective_mode, ProcessingMode::Line)
+            {
+                errors.push(format!(
+                    "Step {}: Block steps cannot use '{}' mode (blocks have their own multi-line processing)",
+                    i + 1,
+                    match effective_mode {
+                        ProcessingMode::Slurp => "slurp",
+                        ProcessingMode::Paragraph => "paragraph",
+                        ProcessingMode::Line => unreachable!(),
+                    }
+                ));
             }
 
             if !step.enabled.unwrap_or(true) {
@@ -2528,7 +2589,7 @@ mod tests {
             description: None, // Should inherit from base
             version: None,     // Should inherit from base
             settings: PipelineSettings {
-                block_mode: true, // Explicitly set (differs from default false)
+                mode: ProcessingMode::Slurp, // Explicitly set (differs from default Line)
                 timeout_ms: 5000, // Explicitly set (differs from default 0)
                 ..Default::default()
             },
@@ -2551,8 +2612,8 @@ mod tests {
         assert!(merged.settings.pcre_mode);
         // Base strict_mode should be inherited (child used default)
         assert!(merged.settings.strict_mode);
-        // Child block_mode should be set (explicitly differs from default)
-        assert!(merged.settings.block_mode);
+        // Child mode should be set (explicitly differs from default)
+        assert_eq!(merged.settings.mode, ProcessingMode::Slurp);
         // Child timeout should be set
         assert_eq!(merged.settings.timeout_ms, 5000);
         // Steps are merged: base steps first, then child steps

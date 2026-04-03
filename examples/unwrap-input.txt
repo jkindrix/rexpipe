@@ -1,0 +1,17 @@
+  My understanding of "done":
+  A web interface where a user makes selections across audit dimensions, and the system generates a tailored LLM prompt that effectively conducts that specific audit against a codebase.
+
+  The riskiest assumption isn't the UI or the data model — it's whether dimension selections can actually produce good prompts. If the mapping from selections → prompt is weak, everything built on top of
+   it is wasted. So I'd de-risk that first.
+
+  Proposed sequence:
+
+  1. Validate the dimension model — Review audit_dimensions.yaml for gaps, overlaps, and structural issues. Get it solid enough to build on (not perfect — we'll learn more as we go).
+  2. Prove prompt generation works — Manually author 3-4 prompt templates from different archetypes. Test them against a real codebase. Do the generated prompts actually produce useful audit results?
+  This is the make-or-break validation.
+  3. Define constraint relationships — Which dimension combinations are invalid, which imply others, which are synergistic. This becomes the "intelligence" layer.
+  4. Build the prompt template engine — A system that assembles prompt fragments based on selections. This is the core logic.
+  5. Build the web UI last — The UI is just a projection of the data model. Once steps 1-4 are solid, the UI is straightforward.
+
+  Is reverse-engineering the right approach? Partly. It's good for identifying the sequence above. But I'd combine it with a thin vertical slice early — after step 2, build a minimal end-to-end prototype
+   (even if it's a CLI or a single HTML page) so we see the full pipeline working before investing heavily in any one layer.

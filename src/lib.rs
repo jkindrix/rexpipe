@@ -10,8 +10,8 @@
 //! - **Pattern Libraries**: Reusable regex pattern definitions in TOML format
 //! - **Multi-file Processing**: Recursive directory traversal with parallel processing
 //! - **VCS Awareness**: Respects `.gitignore` files by default
-//! - **Multiple Regex Engines**: Standard Rust regex (fast, ReDoS-safe) and optional PCRE
-//!   via `fancy-regex` for advanced patterns
+//! - **Multiple Regex Engines**: Standard Rust regex (fast, ReDoS-safe) with automatic
+//!   PCRE fallback via `fancy-regex` for advanced patterns (lookahead/lookbehind)
 //!
 //! ## Quick Start
 //!

@@ -1,0 +1,12 @@
+description = "Strip leading 2-space indent, then rejoin soft-wrapped lines"
+
+[[substitute]]
+name = "strip-indent"
+pattern = "^  "
+replacement = ""
+
+[[substitute]]
+name = "rejoin-wrapped"
+mode = "slurp"
+pattern = '([^\r\n\t\f\v:┐┘│|]|,) ?\n *+([^{}A-Z\-\n\d└│|`#])'
+replacement = "$1 $2"

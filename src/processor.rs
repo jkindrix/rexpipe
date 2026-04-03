@@ -83,10 +83,11 @@ use crate::bidirectional::{BidirectionalManager, Direction, generate_reverse_pip
 use crate::error::{PatternError, ValidationError};
 use crate::pipeline::{
     BlockAction, ErrorType, MaxLineAction, OnMismatch, PipelineConfig, PipelineError,
-    PipelineResult, PipelineSettings, RegexFlag, StepAction, StepResult, StepType, TransformAction,
+    PipelineResult, PipelineSettings, ProcessingMode, RegexFlag, StepAction, StepResult, StepType,
+    TransformAction,
 };
 use anyhow::{Context, Result};
-use log::{debug, trace};
+use log::{debug, info, trace};
 use regex::{Regex, RegexBuilder};
 use std::collections::{HashMap, VecDeque};
 use std::io::{BufRead, Write};
@@ -94,7 +95,6 @@ use std::sync::LazyLock;
 use std::time::Instant;
 
 /// Pre-compiled regex for detecting repetition patterns like `{10000}` in ReDoS analysis
-#[cfg(feature = "pcre")]
 static REPETITION_REGEX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\{(\d+)\}").expect("invalid repetition regex"));
 
@@ -118,7 +118,6 @@ fn strip_ansi_codes(s: &str) -> std::borrow::Cow<'_, str> {
     ANSI_ESCAPE_REGEX.replace_all(s, "")
 }
 
-#[cfg(feature = "pcre")]
 use fancy_regex::Regex as FancyRegex;
 
 /// Represents the line ending style detected in input.
@@ -304,6 +303,28 @@ struct SubstitutionContext<'a> {
 /// - **Line Ending Preservation**: Optionally preserves CRLF vs LF line endings
 /// - **Timeout Protection**: Per-line timeout to prevent ReDoS hangs
 ///
+/// A pipeline segment groups consecutive steps that share the same processing mode.
+///
+/// The pipeline is split into segments at mode boundaries so that line-mode steps
+/// can stream efficiently while slurp/paragraph steps buffer as needed.
+#[derive(Debug, Clone)]
+enum PipelineSegment {
+    /// Consecutive line-mode steps. Input is processed one line at a time.
+    Line {
+        step_range: std::ops::Range<usize>,
+    },
+    /// A single slurp-mode step. All input is buffered and the pattern is applied
+    /// to the entire content as one string.
+    Slurp {
+        step_index: usize,
+    },
+    /// A single paragraph-mode step. Input is split on blank lines and each
+    /// paragraph is processed independently.
+    Paragraph {
+        step_index: usize,
+    },
+}
+
 /// # Example
 ///
 /// ```
@@ -323,6 +344,10 @@ struct SubstitutionContext<'a> {
 pub struct StreamProcessor {
     config: PipelineConfig,
     compiled_steps: Vec<CompiledStep>,
+    /// Pipeline segments built from compiled steps' processing modes.
+    /// Consecutive line-mode steps form one segment; each slurp/paragraph step
+    /// is its own segment.
+    segments: Vec<PipelineSegment>,
     stats: ProcessorStats,
     /// Buffer for before-context lines.
     ///
@@ -564,7 +589,6 @@ pub enum CompiledPattern {
     /// Fixed string matching (fastest, no regex interpretation)
     Fixed(String),
     /// PCRE-compatible regex via fancy-regex (supports lookahead/lookbehind)
-    #[cfg(feature = "pcre")]
     Pcre(FancyRegex),
 }
 
@@ -573,7 +597,6 @@ impl std::fmt::Debug for CompiledPattern {
         match self {
             CompiledPattern::Standard(re) => write!(f, "Standard({})", re.as_str()),
             CompiledPattern::Fixed(s) => write!(f, "Fixed({})", s),
-            #[cfg(feature = "pcre")]
             CompiledPattern::Pcre(re) => write!(f, "Pcre({})", re.as_str()),
         }
     }
@@ -597,7 +620,6 @@ impl CompiledPattern {
         match self {
             CompiledPattern::Standard(re) => re.is_match(text),
             CompiledPattern::Fixed(s) => text.contains(s),
-            #[cfg(feature = "pcre")]
             CompiledPattern::Pcre(re) => re.is_match(text).unwrap_or(false),
         }
     }
@@ -629,7 +651,6 @@ impl CompiledPattern {
                     None
                 }
             }
-            #[cfg(feature = "pcre")]
             CompiledPattern::Pcre(re) => {
                 // Check for capture groups - if present, use first group
                 if let Ok(Some(caps)) = re.captures(text) {
@@ -650,7 +671,6 @@ impl CompiledPattern {
         match self {
             CompiledPattern::Standard(re) => re.replace_all(text, replacement).to_string(),
             CompiledPattern::Fixed(s) => text.replace(s, replacement),
-            #[cfg(feature = "pcre")]
             CompiledPattern::Pcre(re) => re.replace_all(text, replacement).to_string(),
         }
     }
@@ -659,7 +679,6 @@ impl CompiledPattern {
         match self {
             CompiledPattern::Standard(re) => re.replace(text, replacement).to_string(),
             CompiledPattern::Fixed(s) => text.replacen(s, replacement, 1),
-            #[cfg(feature = "pcre")]
             CompiledPattern::Pcre(re) => re.replace(text, replacement).to_string(),
         }
     }
@@ -692,7 +711,6 @@ impl CompiledPattern {
                 let result = text.replace(s, replacement);
                 (result, count)
             }
-            #[cfg(feature = "pcre")]
             CompiledPattern::Pcre(re) => {
                 // fancy_regex doesn't support closure-based replace, so count first
                 let count = re.find_iter(text).filter_map(|m| m.ok()).count();
@@ -724,7 +742,6 @@ impl CompiledPattern {
                 let result = text.replacen(s, replacement, 1);
                 (result, had_match)
             }
-            #[cfg(feature = "pcre")]
             CompiledPattern::Pcre(re) => {
                 let had_match = re.is_match(text).unwrap_or(false);
                 let result = re.replace(text, replacement).to_string();
@@ -743,7 +760,6 @@ impl CompiledPattern {
                 .match_indices(s)
                 .map(|(start, matched)| (start, start + matched.len(), matched.to_string()))
                 .collect(),
-            #[cfg(feature = "pcre")]
             CompiledPattern::Pcre(re) => re
                 .find_iter(text)
                 .filter_map(|m| m.ok())
@@ -773,7 +789,6 @@ impl CompiledPattern {
                     full_match: Some((start, start + matched.len(), matched.to_string())),
                 })
                 .collect(),
-            #[cfg(feature = "pcre")]
             CompiledPattern::Pcre(re) => re
                 .captures_iter(text)
                 .filter_map(|caps| caps.ok())
@@ -816,7 +831,6 @@ impl CompiledPattern {
                 // Fixed strings don't have capture groups
                 replacement.to_string()
             }
-            #[cfg(feature = "pcre")]
             CompiledPattern::Pcre(re) => {
                 // fancy_regex has different API for captures
                 if let Ok(Some(caps)) = re.captures(&text[start..]) {
@@ -860,7 +874,6 @@ impl CompiledPattern {
         match self {
             CompiledPattern::Standard(re) => re.as_str(),
             CompiledPattern::Fixed(s) => s,
-            #[cfg(feature = "pcre")]
             CompiledPattern::Pcre(re) => re.as_str(),
         }
     }
@@ -890,6 +903,8 @@ struct CompiledStep {
     action: Option<StepAction>,
     transform_action: Option<TransformAction>,
     step_type: StepType,
+    /// Processing mode for this step (line, slurp, or paragraph)
+    mode: ProcessingMode,
     is_global: bool,
     // Block step fields
     /// End pattern for block steps (previously `until`)
@@ -1186,9 +1201,16 @@ impl StreamProcessor {
             None
         };
 
+        // Build pipeline segments from compiled steps' processing modes.
+        // Consecutive line-mode steps are merged into a single Line segment.
+        // Each slurp/paragraph step becomes its own segment.
+        let segments = Self::build_segments(&compiled_steps);
+        debug!("Built {} pipeline segments", segments.len());
+
         Ok(Self {
             config,
             compiled_steps,
+            segments,
             stats: ProcessorStats::default(),
             context_before_buffer: VecDeque::new(),
             after_context_remaining: 0,
@@ -1234,25 +1256,68 @@ impl StreamProcessor {
                 .map(|f| f.iter().any(|flag| matches!(flag, RegexFlag::Global)))
                 .unwrap_or(true);
 
+            // Resolve processing mode early for flag augmentation
+            let step_mode = step
+                .mode
+                .clone()
+                .unwrap_or_else(|| config.settings.mode.clone());
+
+            // Auto-inject DotAll and Multiline flags for slurp/paragraph mode steps.
+            // These flags make `.` match `\n` and `^`/`$` match line boundaries —
+            // essential for cross-line patterns. User-specified flags take precedence.
+            let effective_flags = if !matches!(step_mode, ProcessingMode::Line) {
+                let mut flags = step.flags.clone().unwrap_or_default();
+                if !flags.iter().any(|f| matches!(f, RegexFlag::DotAll)) {
+                    flags.push(RegexFlag::DotAll);
+                }
+                if !flags.iter().any(|f| matches!(f, RegexFlag::Multiline)) {
+                    flags.push(RegexFlag::Multiline);
+                }
+                Some(flags)
+            } else {
+                // Warn if DotAll or Multiline are explicitly used in line mode
+                // (they have no practical effect since newlines are stripped per-line)
+                if let Some(ref flags) = step.flags {
+                    let has_dotall = flags.iter().any(|f| matches!(f, RegexFlag::DotAll));
+                    let has_multiline = flags.iter().any(|f| matches!(f, RegexFlag::Multiline));
+                    if has_dotall || has_multiline {
+                        let flag_names: Vec<&str> = [
+                            if has_dotall { Some("dot_all") } else { None },
+                            if has_multiline { Some("multiline") } else { None },
+                        ]
+                        .into_iter()
+                        .flatten()
+                        .collect();
+                        log::warn!(
+                            "Step {}: flags [{}] have no effect in line mode (newlines are stripped before matching). \
+                             Use mode = \"slurp\" or mode = \"paragraph\" for cross-line patterns.",
+                            index + 1,
+                            flag_names.join(", ")
+                        );
+                    }
+                }
+                step.flags.clone()
+            };
+
             // For Block steps, use start_pattern; for others, use pattern
             let pattern_str = if matches!(step.step_type, StepType::Block) {
                 step.start_pattern.as_ref().unwrap_or(&step.pattern)
             } else {
                 &step.pattern
             };
-            let pattern = Self::build_pattern(pattern_str, &step.flags, settings)?;
+            let pattern = Self::build_pattern(pattern_str, &effective_flags, settings)?;
             let replacement = step.replacement.clone();
 
             // Compile the not_pattern if specified
             let not_pattern = if let Some(ref not_pattern_str) = step.not_pattern {
-                Some(Self::build_pattern(not_pattern_str, &step.flags, settings)?)
+                Some(Self::build_pattern(not_pattern_str, &effective_flags, settings)?)
             } else {
                 None
             };
 
             // Compile the end pattern for Block steps
             let end_pattern = if let Some(ref end_str) = step.end_pattern {
-                Some(Self::build_pattern(end_str, &step.flags, settings)?)
+                Some(Self::build_pattern(end_str, &effective_flags, settings)?)
             } else {
                 None
             };
@@ -1347,6 +1412,7 @@ impl StreamProcessor {
                 action: step.action.clone(),
                 transform_action,
                 step_type: step.step_type.clone(),
+                mode: step_mode,
                 is_global,
                 end_pattern,
                 content_pattern,
@@ -1366,6 +1432,56 @@ impl StreamProcessor {
         }
 
         Ok(compiled_steps)
+    }
+
+    /// Build pipeline segments from compiled steps' processing modes.
+    ///
+    /// Consecutive line-mode steps are merged into a single `Line` segment.
+    /// Each slurp or paragraph step becomes its own segment. This allows
+    /// the processor to stream line-by-line through line segments (zero overhead
+    /// for pure line-mode pipelines) while buffering only when needed for
+    /// slurp/paragraph steps.
+    fn build_segments(compiled_steps: &[CompiledStep]) -> Vec<PipelineSegment> {
+        let mut segments = Vec::new();
+        let mut line_start: Option<usize> = None;
+
+        for (i, step) in compiled_steps.iter().enumerate() {
+            match step.mode {
+                ProcessingMode::Line => {
+                    if line_start.is_none() {
+                        line_start = Some(i);
+                    }
+                    // Continue accumulating line-mode steps
+                }
+                ProcessingMode::Slurp => {
+                    // Flush any accumulated line-mode steps
+                    if let Some(start) = line_start.take() {
+                        segments.push(PipelineSegment::Line {
+                            step_range: start..i,
+                        });
+                    }
+                    segments.push(PipelineSegment::Slurp { step_index: i });
+                }
+                ProcessingMode::Paragraph => {
+                    // Flush any accumulated line-mode steps
+                    if let Some(start) = line_start.take() {
+                        segments.push(PipelineSegment::Line {
+                            step_range: start..i,
+                        });
+                    }
+                    segments.push(PipelineSegment::Paragraph { step_index: i });
+                }
+            }
+        }
+
+        // Flush remaining line-mode steps
+        if let Some(start) = line_start {
+            segments.push(PipelineSegment::Line {
+                step_range: start..compiled_steps.len(),
+            });
+        }
+
+        segments
     }
 
     /// Resolve transform action, loading keys/seeds from files if specified
@@ -1533,19 +1649,16 @@ impl StreamProcessor {
         }
 
         // Check for per-step PCRE flag in addition to global pcre_mode
-        let use_pcre = settings.pcre_mode
+        let force_pcre = settings.pcre_mode
             || flags
                 .as_ref()
                 .map(|f| f.iter().any(|flag| matches!(flag, RegexFlag::Pcre)))
                 .unwrap_or(false);
 
-        // PCRE mode - use fancy-regex for advanced features (global or per-step)
-        #[cfg(feature = "pcre")]
-        if use_pcre {
-            // Check for ReDoS risks in PCRE mode (which uses backtracking)
+        // Explicit PCRE mode — go directly to fancy-regex
+        if force_pcre {
             if let Some(warning) = Self::check_redos_risk(pattern, true) {
                 if settings.strict_mode {
-                    // In strict mode, reject potentially dangerous patterns
                     return Err(PatternError::potential_redos(
                         pattern,
                         warning.replace("ReDoS Warning:\n", ""),
@@ -1564,18 +1677,55 @@ impl StreamProcessor {
             }
         }
 
-        #[cfg(not(feature = "pcre"))]
-        if use_pcre {
-            return Err(PatternError::PcreNotEnabled).context(
-                "Suggestion: Rebuild with `cargo build --features pcre` or remove the -P flag, or remove 'pcre' from step flags",
-            );
-        }
-
-        // Standard regex mode
+        // Auto-detection: try standard regex first, fall back to PCRE
         match Self::build_regex(pattern, flags, settings.regex_size_limit) {
             Ok(regex) => Ok(CompiledPattern::Standard(regex)),
-            Err(e) => Err(PatternError::invalid_regex(pattern, e.to_string()))
-                .context("Regex pattern compilation failed"),
+            Err(std_err) => {
+                // Standard regex failed — try fancy-regex as fallback
+                debug!(
+                    "Standard regex failed for '{}', trying PCRE fallback: {}",
+                    if pattern.len() > 60 {
+                        format!("{}...", &pattern[..60])
+                    } else {
+                        pattern.to_string()
+                    },
+                    std_err
+                );
+
+                // Run ReDoS check on the PCRE fallback
+                if let Some(warning) = Self::check_redos_risk(pattern, true) {
+                    if settings.strict_mode {
+                        return Err(PatternError::potential_redos(
+                            pattern,
+                            warning.replace("ReDoS Warning:\n", ""),
+                        ))
+                        .context(
+                            "Pattern requires PCRE engine (backtracking). Use --no-strict to allow.",
+                        );
+                    }
+                    eprintln!("{}", warning);
+                }
+
+                match FancyRegex::new(pattern) {
+                    Ok(re) => {
+                        info!(
+                            "Pattern '{}' auto-detected as PCRE (fancy-regex)",
+                            if pattern.len() > 40 {
+                                format!("{}...", &pattern[..40])
+                            } else {
+                                pattern.to_string()
+                            }
+                        );
+                        Ok(CompiledPattern::Pcre(re))
+                    }
+                    Err(_) => {
+                        // Both engines failed — report the standard error
+                        // (more likely to be helpful for common mistakes)
+                        Err(PatternError::invalid_regex(pattern, std_err.to_string()))
+                            .context("Regex pattern compilation failed")
+                    }
+                }
+            }
         }
     }
 
@@ -1701,7 +1851,6 @@ impl StreamProcessor {
     }
 
     /// Maximum pattern length before warning (patterns longer than this may be slow)
-    #[cfg(feature = "pcre")]
     const PATTERN_LENGTH_WARNING: usize = 1000;
 
     fn build_regex(
@@ -1814,7 +1963,6 @@ impl StreamProcessor {
 
     /// Check pattern for potential ReDoS vulnerabilities (primarily for PCRE mode)
     /// Returns a warning message if the pattern looks potentially dangerous
-    #[cfg(feature = "pcre")]
     fn check_redos_risk(pattern: &str, is_pcre: bool) -> Option<String> {
         let mut warnings = Vec::new();
 
@@ -1925,10 +2073,253 @@ impl StreamProcessor {
     /// - Validation step fails (when configured to error on mismatch)
     pub fn process_stream<R: BufRead, W: Write>(
         &mut self,
+        reader: R,
+        writer: W,
+    ) -> Result<PipelineResult> {
+        self.stats.processing_start = Some(Instant::now());
+
+        // Check if pipeline has any non-line segments
+        let has_non_line = self.segments.iter().any(|seg| {
+            matches!(seg, PipelineSegment::Slurp { .. } | PipelineSegment::Paragraph { .. })
+        });
+
+        if has_non_line {
+            self.process_stream_segmented(reader, writer)
+        } else {
+            self.process_stream_line_only(reader, writer)
+        }
+    }
+
+    /// Segmented processing for pipelines with slurp/paragraph steps.
+    ///
+    /// Data flows between segments: line segments produce lines, slurp/paragraph
+    /// segments consume all accumulated lines and produce a new buffer.
+    fn process_stream_segmented<R: BufRead, W: Write>(
+        &mut self,
         mut reader: R,
         mut writer: W,
     ) -> Result<PipelineResult> {
-        self.stats.processing_start = Some(Instant::now());
+        let mut result = PipelineResult::new();
+        let max_slurp_size = self.config.settings.max_slurp_size;
+        let strip_ansi = self.config.settings.strip_ansi;
+
+        // Read all input first (required because segments may need to buffer)
+        let mut input = String::new();
+        reader.read_to_string(&mut input)?;
+
+        if strip_ansi {
+            let stripped = strip_ansi_codes(&input);
+            if let std::borrow::Cow::Owned(s) = stripped {
+                input = s;
+            }
+        }
+
+        result.lines_processed = input.lines().count() as u64;
+        self.stats.lines_read = result.lines_processed;
+        self.stats.bytes_processed = input.len() as u64;
+
+        // Process through segments
+        let segments = self.segments.clone();
+        let mut lines: Vec<String> = input.lines().map(|l| l.to_string()).collect();
+
+        for segment in &segments {
+            match segment {
+                PipelineSegment::Line { step_range } => {
+                    let mut output_lines = Vec::new();
+                    for (i, line) in lines.iter().enumerate() {
+                        let line_with_newline = format!("{}\n", line);
+                        if let Some(processed) = self.process_line_with_range(
+                            &line_with_newline,
+                            (i + 1) as u64,
+                            &mut result,
+                            step_range.clone(),
+                        )? {
+                            output_lines.push(processed);
+                        }
+                    }
+                    lines = output_lines;
+                }
+                PipelineSegment::Slurp { step_index } => {
+                    let content = lines.join("\n");
+
+                    // Memory safety check
+                    if max_slurp_size > 0 && content.len() > max_slurp_size {
+                        return Err(anyhow::anyhow!(
+                            "Input size ({} bytes) exceeds max_slurp_size ({} bytes). \
+                             Use mode = \"line\" for large inputs or increase max_slurp_size in settings.",
+                            content.len(),
+                            max_slurp_size
+                        ));
+                    }
+
+                    let processed = self.apply_step_to_content(&content, *step_index, &mut result)?;
+                    lines = processed.lines().map(|l| l.to_string()).collect();
+                }
+                PipelineSegment::Paragraph { step_index } => {
+                    let content = lines.join("\n");
+
+                    // Memory safety check
+                    if max_slurp_size > 0 && content.len() > max_slurp_size {
+                        return Err(anyhow::anyhow!(
+                            "Input size ({} bytes) exceeds max_slurp_size ({} bytes).",
+                            content.len(),
+                            max_slurp_size
+                        ));
+                    }
+
+                    // Split on blank lines (one or more consecutive empty lines)
+                    let paragraphs: Vec<&str> = content.split("\n\n").collect();
+                    let mut processed_paragraphs = Vec::new();
+
+                    for para in paragraphs {
+                        if para.is_empty() {
+                            processed_paragraphs.push(String::new());
+                            continue;
+                        }
+                        let processed =
+                            self.apply_step_to_content(para, *step_index, &mut result)?;
+                        processed_paragraphs.push(processed);
+                    }
+
+                    let rejoined = processed_paragraphs.join("\n\n");
+                    lines = rejoined.lines().map(|l| l.to_string()).collect();
+                }
+            }
+        }
+
+        // Write final output
+        let suppress_output = self.config.finalize.suppress_output;
+        if !suppress_output {
+            for (i, line) in lines.iter().enumerate() {
+                writer.write_all(line.as_bytes())?;
+                // Add newline between lines (but not after the last if input didn't end with one)
+                if i < lines.len() - 1 || input.ends_with('\n') {
+                    writer.write_all(b"\n")?;
+                }
+            }
+            // Handle edge case: empty output
+            if lines.is_empty() && !input.is_empty() && input.ends_with('\n') {
+                // Input had content but all was filtered — don't output anything
+            }
+        }
+
+        result.lines_output = lines.len() as u64;
+
+        // Finalize output
+        self.write_finalize_output(&mut writer)?;
+
+        // Save bidirectional mappings if enabled
+        if let Some(ref mut manager) = self.bidirectional_manager {
+            if let Err(e) = manager.save_if_modified() {
+                log::warn!("Failed to save bidirectional mappings: {}", e);
+            }
+        }
+
+        debug!(
+            "Segmented processing complete: {} lines in, {} lines out, {} matches",
+            result.lines_processed, result.lines_output, result.matches_found
+        );
+
+        Ok(result)
+    }
+
+    /// Apply a single compiled step to an entire content string (for slurp/paragraph modes).
+    fn apply_step_to_content(
+        &mut self,
+        content: &str,
+        step_index: usize,
+        result: &mut PipelineResult,
+    ) -> Result<String> {
+        let step_type = self.compiled_steps[step_index].step_type.clone();
+        let replacement = self.compiled_steps[step_index].replacement.clone();
+        let is_global = self.compiled_steps[step_index].is_global;
+        let step_idx = self.compiled_steps[step_index].step_index;
+        let step_name = self.compiled_steps[step_index].name.clone();
+        let pattern_debug = format!("{:?}", self.compiled_steps[step_index].pattern);
+
+        let mut step_result =
+            StepResult::new(step_idx, step_type.clone(), pattern_debug, step_name);
+
+        let output = match step_type {
+            StepType::Substitute => {
+                if let Some(replacement_str) = replacement {
+                    let pattern = self.compiled_steps[step_index].pattern.clone();
+                    let (substituted, was_modified) = self.apply_substitution(
+                        &pattern,
+                        content,
+                        &replacement_str,
+                        is_global,
+                        step_idx,
+                        &mut step_result,
+                    )?;
+                    if was_modified {
+                        step_result.add_transformation();
+                        substituted
+                    } else {
+                        content.to_string()
+                    }
+                } else {
+                    content.to_string()
+                }
+            }
+            StepType::Filter => {
+                let pattern = &self.compiled_steps[step_index].pattern;
+                let matches = pattern.is_match(content);
+                let action = self.compiled_steps[step_index].action.clone();
+
+                match action {
+                    Some(StepAction::KeepLine) => {
+                        if matches {
+                            step_result.add_match();
+                            content.to_string()
+                        } else {
+                            String::new()
+                        }
+                    }
+                    Some(StepAction::DropLine) => {
+                        if matches {
+                            step_result.add_match();
+                            String::new()
+                        } else {
+                            content.to_string()
+                        }
+                    }
+                    Some(StepAction::DropMatch) => {
+                        let result_str = pattern.replace_all(content, "");
+                        step_result.add_match();
+                        result_str
+                    }
+                    _ => content.to_string(),
+                }
+            }
+            StepType::Extract => {
+                let pattern = &self.compiled_steps[step_index].pattern;
+                let matches: Vec<String> = pattern
+                    .find_iter(content)
+                    .into_iter()
+                    .map(|(_, _, matched)| {
+                        step_result.add_match();
+                        matched
+                    })
+                    .collect();
+                matches.join("\n")
+            }
+            _ => content.to_string(),
+        };
+
+        result.matches_found += step_result.matches;
+        result.transformations_applied += step_result.transformations;
+
+        Ok(output)
+    }
+
+    /// Original line-by-line processing path for pure line-mode pipelines.
+    /// This is the hot path — zero overhead for pipelines with no slurp/paragraph steps.
+    fn process_stream_line_only<R: BufRead, W: Write>(
+        &mut self,
+        mut reader: R,
+        mut writer: W,
+    ) -> Result<PipelineResult> {
         let mut result = PipelineResult::new();
         let mut line_buffer = String::new();
         let mut line_number = 0u64;
@@ -2203,6 +2594,20 @@ impl StreamProcessor {
         line_number: u64,
         result: &mut PipelineResult,
     ) -> Result<Option<String>> {
+        self.process_line_with_range(line, line_number, result, 0..self.compiled_steps.len())
+    }
+
+    /// Process a single line through a subset of compiled steps (identified by range).
+    ///
+    /// This enables segment-based execution: line-mode segments only run their
+    /// own steps, leaving slurp/paragraph steps to their respective segment handlers.
+    fn process_line_with_range(
+        &mut self,
+        line: &str,
+        line_number: u64,
+        result: &mut PipelineResult,
+        step_range: std::ops::Range<usize>,
+    ) -> Result<Option<String>> {
         trace!("Processing line {}: {:?}", line_number, line);
         // Strip both CRLF and LF line endings
         let mut current_line = line.trim_end_matches(['\r', '\n']).to_string();
@@ -2210,7 +2615,7 @@ impl StreamProcessor {
         let line_start = Instant::now();
         let timeout_ms = self.config.settings.timeout_ms;
 
-        for step_idx in 0..self.compiled_steps.len() {
+        for step_idx in step_range {
             // Check timeout if configured (0 = no timeout)
             if timeout_ms > 0 && line_start.elapsed().as_millis() as u64 > timeout_ms {
                 return Err(anyhow::anyhow!(

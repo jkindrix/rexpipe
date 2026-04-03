@@ -385,7 +385,7 @@ fn build_cli() -> Command {
             Arg::new("pcre")
                 .short('P')
                 .long("pcre")
-                .help("Use PCRE-compatible regex via fancy-regex (supports lookahead/lookbehind)")
+                .help("Force PCRE engine for all patterns (auto-detected when needed for lookahead/lookbehind)")
                 .action(ArgAction::SetTrue),
         )
         // === File Operations ===
@@ -1203,11 +1203,12 @@ fn build_cli() -> Command {
                 .help("Reject patterns with ReDoS risk in PCRE mode")
                 .long_help(
                     "Reject regex patterns that may cause catastrophic backtracking (ReDoS).\n\n\
-                     This flag is only relevant when using --pcre mode or flags = [\"pcre\"], \
-                     which enables the backtracking fancy-regex engine.\n\n\
+                     This applies to patterns using the PCRE engine (fancy-regex), which uses \
+                     backtracking. PCRE is used when explicitly requested via --pcre or \
+                     flags = [\"pcre\"], or when auto-detected for patterns requiring \
+                     lookahead/lookbehind.\n\n\
                      The default Rust regex engine is inherently safe from ReDoS because it \
-                     uses finite automata (no backtracking). This flag has no effect on \
-                     standard regex patterns.\n\n\
+                     uses finite automata (no backtracking).\n\n\
                      Patterns flagged as risky include nested quantifiers like (a+)+ or \
                      complex alternations with overlapping matches."
                 )
@@ -2861,6 +2862,7 @@ fn load_pipeline_config(
 
         let step = PipelineStep {
             step_type,
+            mode: None,
             pattern: pattern.to_string(),
             not_pattern: None,
             replacement,
@@ -4774,7 +4776,7 @@ fn show_feature_tips(matches: &ArgMatches, result: &rexpipe::pipeline::PipelineR
 
     // Tip: If using PCRE, mention per-step PCRE
     if matches.get_flag("pcre") {
-        tips.push("Use flags = [\"pcre\"] per-step instead of global --pcre for finer control");
+        tips.push("PCRE features (lookahead/lookbehind) are auto-detected — --pcre is only needed to force the PCRE engine for all patterns");
     }
 
     // Tip: For config users, suggest shorthand syntax

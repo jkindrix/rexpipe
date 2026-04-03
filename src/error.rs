@@ -187,12 +187,6 @@ pub enum PatternError {
         hint: String,
     },
 
-    /// PCRE mode requested but feature not enabled
-    #[error(
-        "PCRE mode requested but the 'pcre' feature is not enabled.\n\n  Hint: Rebuild with: cargo build --features pcre\n  Or install with: cargo install rexpipe --features pcre\n\n  PCRE mode is needed for lookahead (?=), lookbehind (?<=), and other advanced features."
-    )]
-    PcreNotEnabled,
-
     /// Pattern reference not found in library
     #[error(
         "Unknown pattern reference '${{{name}}}'\n\n  Hint: This pattern was not found in any loaded library.\n  Available patterns: {available}\n\n  To fix:\n  1. Check spelling of the pattern name\n  2. Ensure the library file is loaded with --library or in your config\n  3. Use --list-patterns <library.toml> to see available patterns"
@@ -229,7 +223,6 @@ impl PatternError {
             PatternError::InvalidRegex { .. } => {
                 Some("Check regex syntax at https://regex101.com/")
             }
-            PatternError::PcreNotEnabled => Some("Rebuild with --features pcre"),
             PatternError::UnknownReference { .. } => {
                 Some("Use --list-patterns to see available patterns")
             }
@@ -323,7 +316,7 @@ impl PatternError {
         if msg_lower.contains("look")
             && (msg_lower.contains("ahead") || msg_lower.contains("behind"))
         {
-            return "Lookahead/lookbehind requires PCRE mode. Use -P or --pcre flag.".to_string();
+            return "Lookahead/lookbehind requires the PCRE engine, which is auto-detected. Check your pattern syntax.".to_string();
         }
 
         if msg_lower.contains("empty") {
@@ -348,7 +341,6 @@ impl From<regex::Error> for PatternError {
     }
 }
 
-#[cfg(feature = "pcre")]
 impl From<fancy_regex::Error> for PatternError {
     fn from(err: fancy_regex::Error) -> Self {
         PatternError::invalid_regex("", err.to_string())
@@ -755,14 +747,6 @@ mod tests {
     }
 
     #[test]
-    fn test_pattern_error_pcre_not_enabled() {
-        let err = PatternError::PcreNotEnabled;
-        let msg = err.to_string();
-        assert!(msg.contains("PCRE"));
-        assert!(msg.contains("features pcre"));
-    }
-
-    #[test]
     fn test_pattern_error_empty_pattern() {
         let err = PatternError::EmptyPattern;
         let msg = err.to_string();
@@ -781,7 +765,6 @@ mod tests {
 
     #[test]
     fn test_pattern_error_suggestions() {
-        assert!(PatternError::PcreNotEnabled.suggestion().is_some());
         assert!(PatternError::EmptyPattern.suggestion().is_some());
         assert!(
             PatternError::TooComplex {
