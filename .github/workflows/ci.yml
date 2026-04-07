@@ -32,8 +32,51 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
-      - name: Check compilation
+      - name: Check default (cli) build
+        run: cargo check
+
+      - name: Check all-features build
         run: cargo check --all-features
+
+  # WASM-safe core build: this is the primary acceptance gate for the
+  # core/cli feature split. It ensures rexpipe-playground can depend on
+  # rexpipe as a library without pulling in filesystem/terminal deps.
+  check-core:
+    name: Check (core, native + wasm32)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable with wasm32 target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-core-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-core-
+
+      - name: Check core-only (native)
+        run: cargo check --no-default-features --features core
+
+      - name: Test core-only (native)
+        run: cargo test --lib --no-default-features --features core
+
+      - name: Check core-only (wasm32-unknown-unknown)
+        run: cargo check --lib --no-default-features --features core --target wasm32-unknown-unknown
+
+      - name: Check core + fpe composition
+        run: cargo check --no-default-features --features "core fpe"
+
+      - name: Check core + async composition
+        run: cargo check --no-default-features --features "core async"
 
   # Formatting check
   fmt:
@@ -153,7 +196,7 @@ jobs:
           path: lcov.info
           retention-days: 7
 
-  # Test optional features
+  # Test optional features that compose on top of cli
   test-features:
     name: Test (${{ matrix.feature }})
     runs-on: ubuntu-latest
@@ -161,7 +204,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        feature: [pcre, async, tree-sitter, fpe]
+        # NOTE: `pcre` was removed as a feature when fancy-regex became an
+        # unconditional dependency with auto-detection. Patterns using
+        # lookahead/lookbehind now work without any feature flag.
+        feature: [async, tree-sitter, fpe]
     steps:
       - uses: actions/checkout@v4
 
