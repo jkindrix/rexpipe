@@ -1220,7 +1220,7 @@ impl PipelineConfig {
         Ok(config)
     }
 
-    /// Normalize shorthand sections ([[filter]], [[substitute]], etc.) into the main step vec.
+    /// Normalize shorthand sections (`[[filter]]`, `[[substitute]]`, etc.) into the main step vec.
     /// This enables concise syntax like `[[filter]]` instead of `[[step]]` + `type = "filter"`.
     ///
     /// Also normalizes shorthand action syntax:
@@ -1228,7 +1228,7 @@ impl PipelineConfig {
     /// - `keep = "pattern"` → `pattern = "pattern", action = "keep_line"`
     /// - `drop = ["p1", "p2"]` → `pattern = "(?:p1)|(?:p2)", action = "drop_line"`
     ///
-    /// Order of processing: steps from [[step]] come first, then shorthand sections in order:
+    /// Order of processing: steps from `[[step]]` come first, then shorthand sections in order:
     /// filter, substitute, extract, validate, transform, block.
     pub fn normalize(self) -> Self {
         self.normalize_shorthand_sections()
@@ -1882,7 +1882,7 @@ impl PipelineConfig {
         }
     }
 
-    /// Resolve pattern aliases defined in the [aliases] section.
+    /// Resolve pattern aliases defined in the `[aliases]` section.
     ///
     /// This method modifies the config in place, replacing alias references
     /// (like `${alias_name}`) with their actual patterns from the aliases map.
