@@ -74,8 +74,11 @@
 
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "cli")]
 use std::collections::HashSet;
+#[cfg(feature = "cli")]
 use std::fs;
+#[cfg(feature = "cli")]
 use std::path::Path;
 
 use crate::bidirectional::BidirectionalConfig;
@@ -1157,17 +1160,20 @@ pub enum ErrorType {
 }
 
 impl PipelineConfig {
+    #[cfg(feature = "cli")]
     pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
         Self::from_file_with_base_dir(path.as_ref(), path.as_ref().parent())
     }
 
     /// Load a pipeline config, resolving `extends` relative to the given base directory.
+    #[cfg(feature = "cli")]
     fn from_file_with_base_dir(path: &Path, base_dir: Option<&Path>) -> Result<Self> {
         let mut visited = HashSet::new();
         Self::from_file_with_cycle_detection(path, base_dir, &mut visited)
     }
 
     /// Internal helper that tracks visited paths to detect circular extends.
+    #[cfg(feature = "cli")]
     fn from_file_with_cycle_detection(
         path: &Path,
         base_dir: Option<&Path>,
@@ -2897,6 +2903,7 @@ mod tests {
         assert!(result.is_ok(), "Expected validation to pass: {:?}", result);
     }
 
+    #[cfg(feature = "cli")]
     #[test]
     fn test_circular_extends_detection() {
         // Test Issue #9: Circular config extends should be detected
@@ -2938,6 +2945,7 @@ mod tests {
         std::fs::remove_dir(&temp_dir).ok();
     }
 
+    #[cfg(feature = "cli")]
     #[test]
     fn test_extends_preserves_child_shorthand_steps() {
         // Test Issue #10: Child config's shorthand sections should be preserved during extends
@@ -2985,6 +2993,7 @@ mod tests {
         std::fs::remove_dir(&temp_dir).ok();
     }
 
+    #[cfg(feature = "cli")]
     #[test]
     fn test_extends_child_substitute_shorthand() {
         // Test Issue #10: Child config's [[substitute]] shorthand should be preserved
