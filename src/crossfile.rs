@@ -22,8 +22,10 @@
 //! action = "warn"  # or "fail", "fix"
 //! ```
 
+#[cfg(feature = "cli")]
 use globset::{Glob, GlobMatcher};
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "cli")]
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use thiserror::Error;
@@ -61,6 +63,7 @@ pub type Result<T> = std::result::Result<T, CrossFileError>;
 
 /// Compile a glob pattern into a matcher.
 /// This uses globset which properly handles `**` for recursive directory matching.
+#[cfg(feature = "cli")]
 fn compile_glob(pattern: &str) -> Result<GlobMatcher> {
     Glob::new(pattern)
         .map(|g| g.compile_matcher())
@@ -245,6 +248,10 @@ pub struct CrossFileViolation {
 }
 
 /// Manager for cross-file relationship processing.
+///
+/// Only available with the `cli` feature because it reads file contents
+/// from disk and uses globset for pattern matching.
+#[cfg(feature = "cli")]
 pub struct CrossFileManager {
     rules: Vec<CrossFileRule>,
     file_contents: HashMap<PathBuf, String>,
@@ -262,6 +269,7 @@ pub struct TriggerMatch {
     pub matched_text: String,
 }
 
+#[cfg(feature = "cli")]
 impl CrossFileManager {
     /// Create a new cross-file manager.
     pub fn new() -> Self {
@@ -514,6 +522,7 @@ impl CrossFileManager {
     }
 }
 
+#[cfg(feature = "cli")]
 impl Default for CrossFileManager {
     fn default() -> Self {
         Self::new()
@@ -580,6 +589,7 @@ impl CrossFileConfig {
     /// related_files = "tests/*_test.rs"
     /// action = "warn"
     /// ```
+    #[cfg(feature = "cli")]
     pub fn load_rules_file(path: impl AsRef<Path>) -> Result<Self> {
         let content = std::fs::read_to_string(path.as_ref()).map_err(CrossFileError::Io)?;
 
@@ -602,6 +612,7 @@ impl CrossFileConfig {
 }
 
 /// Format check results as a human-readable report.
+#[cfg(feature = "cli")]
 pub fn format_check_report(results: &[CrossFileCheckResult]) -> String {
     let mut report = String::new();
 
