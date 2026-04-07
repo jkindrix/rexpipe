@@ -33,11 +33,18 @@
 //! ```
 
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "cli")]
 use std::collections::HashMap;
+#[cfg(feature = "cli")]
 use std::fs::{self, File};
+#[cfg(feature = "cli")]
 use std::io::{BufRead, BufReader, Seek, SeekFrom, Write};
-use std::path::{Path, PathBuf};
+#[cfg(feature = "cli")]
+use std::path::Path;
+use std::path::PathBuf;
+#[cfg(feature = "cli")]
 use std::process::Command;
+#[cfg(feature = "cli")]
 use web_time::{SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 
@@ -143,6 +150,10 @@ impl CheckpointConfig {
 }
 
 /// Tracked state for a single file.
+///
+/// Only available with the `cli` feature — checkpoint state is tied to
+/// filesystem-based incremental processing.
+#[cfg(feature = "cli")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileState {
     /// Absolute path to the file
@@ -164,6 +175,7 @@ pub struct FileState {
     pub last_processed: u64,
 }
 
+#[cfg(feature = "cli")]
 impl FileState {
     /// Create a new file state starting from the beginning.
     pub fn new(path: impl Into<PathBuf>) -> Self {
@@ -204,6 +216,7 @@ impl FileState {
 }
 
 /// Complete checkpoint state.
+#[cfg(feature = "cli")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CheckpointState {
     /// Version of checkpoint format
@@ -220,6 +233,7 @@ pub struct CheckpointState {
     pub metadata: HashMap<String, String>,
 }
 
+#[cfg(feature = "cli")]
 impl Default for CheckpointState {
     fn default() -> Self {
         let now = SystemTime::now()
@@ -239,6 +253,7 @@ impl Default for CheckpointState {
 }
 
 /// Checkpoint manager for tracking and resuming processing state.
+#[cfg(feature = "cli")]
 pub struct Checkpoint {
     config: CheckpointConfig,
     state: CheckpointState,
@@ -246,6 +261,7 @@ pub struct Checkpoint {
     last_save: web_time::Instant,
 }
 
+#[cfg(feature = "cli")]
 impl Checkpoint {
     /// Create a new checkpoint with default state.
     pub fn new(config: CheckpointConfig) -> Self {
@@ -471,6 +487,7 @@ impl Checkpoint {
 }
 
 /// Git-based incremental processing support.
+#[cfg(feature = "cli")]
 pub struct GitDiff {
     /// Repository root path
     repo_root: PathBuf,
@@ -478,6 +495,7 @@ pub struct GitDiff {
     base_ref: String,
 }
 
+#[cfg(feature = "cli")]
 impl GitDiff {
     /// Create a new GitDiff for the given repository.
     pub fn new(repo_root: impl Into<PathBuf>, base_ref: impl Into<String>) -> Self {
@@ -590,6 +608,7 @@ impl GitDiff {
 }
 
 /// A range of line numbers.
+#[cfg(feature = "cli")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LineRange {
     /// Starting line number (1-based)
@@ -598,6 +617,7 @@ pub struct LineRange {
     pub end: u64,
 }
 
+#[cfg(feature = "cli")]
 impl LineRange {
     /// Create a new line range.
     pub fn new(start: u64, end: u64) -> Self {
@@ -621,6 +641,7 @@ impl LineRange {
 }
 
 /// Parse git diff output to extract line ranges.
+#[cfg(feature = "cli")]
 fn parse_diff_hunks(diff_output: &str) -> Vec<LineRange> {
     let mut ranges = Vec::new();
 
@@ -637,6 +658,7 @@ fn parse_diff_hunks(diff_output: &str) -> Vec<LineRange> {
 }
 
 /// Parse a single hunk header.
+#[cfg(feature = "cli")]
 fn parse_hunk_header(header: &str) -> Option<LineRange> {
     // Format: @@ -old_start,old_count +new_start,new_count @@
     let parts: Vec<&str> = header.split_whitespace().collect();
@@ -657,6 +679,7 @@ fn parse_hunk_header(header: &str) -> Option<LineRange> {
 }
 
 /// Incremental file reader that resumes from checkpoint.
+#[cfg(feature = "cli")]
 pub struct IncrementalReader {
     file: BufReader<File>,
     path: PathBuf,
@@ -665,6 +688,7 @@ pub struct IncrementalReader {
     line_ranges: Option<Vec<LineRange>>,
 }
 
+#[cfg(feature = "cli")]
 impl IncrementalReader {
     /// Open a file for incremental reading from a checkpoint.
     pub fn open(path: impl AsRef<Path>, checkpoint: &Checkpoint) -> Result<Self> {
@@ -739,7 +763,7 @@ impl IncrementalReader {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "cli"))]
 mod tests {
     use super::*;
     use std::io::Write;
