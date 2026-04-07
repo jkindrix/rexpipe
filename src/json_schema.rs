@@ -156,6 +156,7 @@ pub struct ErrorResult {
 // Conversion helpers
 // ============================================================================
 
+#[cfg(feature = "cli")]
 impl From<&crate::files::MultiFileResult> for MultiFileResultJson {
     fn from(result: &crate::files::MultiFileResult) -> Self {
         Self {
@@ -236,6 +237,7 @@ pub fn output_count_json(
 }
 
 /// Output a standardized JSON response for multi-file results
+#[cfg(feature = "cli")]
 pub fn output_multi_file_json(
     result: &crate::files::MultiFileResult,
 ) -> Result<String, serde_json::Error> {
@@ -262,6 +264,7 @@ pub fn output_file_list_json(paths: &[PathBuf], mode: &str) -> Result<String, se
 /// {"path":"file1.txt","matches_found":5,"lines_processed":100,"modified":true}
 /// {"path":"file2.txt","matches_found":0,"lines_processed":50,"modified":false}
 /// ```
+#[cfg(feature = "cli")]
 pub fn output_file_result_jsonl(
     result: &crate::files::FileResult,
 ) -> Result<String, serde_json::Error> {
@@ -279,6 +282,7 @@ pub fn output_file_result_jsonl(
 /// Output a streaming summary as JSONL footer.
 ///
 /// This is printed after all file results to provide aggregate statistics.
+#[cfg(feature = "cli")]
 pub fn output_streaming_summary_jsonl(
     result: &crate::files::MultiFileResult,
 ) -> Result<String, serde_json::Error> {
