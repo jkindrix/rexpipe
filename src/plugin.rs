@@ -101,6 +101,7 @@
 //! be treated as trusted input.
 
 use std::collections::HashMap;
+#[cfg(feature = "cli")]
 use std::process::{Command, Stdio};
 use std::sync::{Arc, LazyLock, RwLock};
 
@@ -196,6 +197,7 @@ impl PluginRegistry {
     /// let count = PluginRegistry::load_plugins_to_global(Path::new("./plugins")).unwrap();
     /// println!("Loaded {} plugins", count);
     /// ```
+    #[cfg(feature = "cli")]
     pub fn load_plugins_to_global(dir: &std::path::Path) -> Result<usize, String> {
         GLOBAL_REGISTRY
             .write()
@@ -206,6 +208,7 @@ impl PluginRegistry {
     /// Load plugins from all default directories into the global registry.
     ///
     /// Scans default plugin directories and loads any found plugins.
+    #[cfg(feature = "cli")]
     pub fn load_default_plugins_to_global() -> usize {
         if let Ok(mut registry) = GLOBAL_REGISTRY.write() {
             registry.load_default_plugins()
@@ -708,6 +711,25 @@ impl PluginRegistry {
     /// # Returns
     ///
     /// The command's stdout output on success, or an error message on failure.
+    ///
+    /// # Feature gating
+    ///
+    /// This function requires the `cli` feature. Under WASM builds
+    /// (`--no-default-features --features core`), it returns an error
+    /// indicating that shell transforms are not available in the sandbox.
+    #[cfg(not(feature = "cli"))]
+    pub fn execute_shell_with_timeout(
+        _command: &str,
+        _input: &str,
+        _timeout_secs: u64,
+    ) -> Result<String, String> {
+        Err("Shell transforms are not available in this build (requires the 'cli' feature; \
+             shell execution is not possible in the WASM sandbox)"
+            .to_string())
+    }
+
+    /// Execute a shell command with input and configurable timeout.
+    #[cfg(feature = "cli")]
     pub fn execute_shell_with_timeout(
         command: &str,
         input: &str,
@@ -832,6 +854,7 @@ impl PluginRegistry {
     /// let count = registry.load_plugins_from_dir(Path::new("~/.config/rexpipe/plugins")).unwrap();
     /// println!("Loaded {} plugins", count);
     /// ```
+    #[cfg(feature = "cli")]
     pub fn load_plugins_from_dir(&mut self, dir: &std::path::Path) -> Result<usize, String> {
         if !dir.exists() {
             return Ok(0); // Silently skip non-existent directories
@@ -914,6 +937,7 @@ impl PluginRegistry {
     /// 2. `~/.config/rexpipe/plugins/`
     /// 3. `/usr/local/share/rexpipe/plugins/` (Unix)
     /// 4. `$REXPIPE_PLUGIN_DIR` (if set)
+    #[cfg(feature = "cli")]
     pub fn default_plugin_dirs() -> Vec<std::path::PathBuf> {
         let mut dirs = vec![];
 
@@ -945,6 +969,7 @@ impl PluginRegistry {
     /// # Returns
     ///
     /// Total number of plugins loaded
+    #[cfg(feature = "cli")]
     pub fn load_default_plugins(&mut self) -> usize {
         let mut total = 0;
         for dir in Self::default_plugin_dirs() {
