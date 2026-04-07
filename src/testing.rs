@@ -29,8 +29,8 @@
 //! ```
 
 use serde::{Deserialize, Serialize};
-use web_time::{Duration, Instant};
 use thiserror::Error;
+use web_time::{Duration, Instant};
 
 /// Errors that can occur during testing.
 #[derive(Error, Debug)]

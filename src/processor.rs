@@ -88,8 +88,8 @@ use crate::pipeline::{
 };
 use anyhow::{Context, Result};
 use log::{debug, info, trace};
-use serde::{Deserialize, Serialize};
 use regex::{Regex, RegexBuilder};
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::io::{BufRead, Write};
 use std::sync::LazyLock;
@@ -311,19 +311,13 @@ struct SubstitutionContext<'a> {
 #[derive(Debug, Clone)]
 enum PipelineSegment {
     /// Consecutive line-mode steps. Input is processed one line at a time.
-    Line {
-        step_range: std::ops::Range<usize>,
-    },
+    Line { step_range: std::ops::Range<usize> },
     /// A single slurp-mode step. All input is buffered and the pattern is applied
     /// to the entire content as one string.
-    Slurp {
-        step_index: usize,
-    },
+    Slurp { step_index: usize },
     /// A single paragraph-mode step. Input is split on blank lines and each
     /// paragraph is processed independently.
-    Paragraph {
-        step_index: usize,
-    },
+    Paragraph { step_index: usize },
 }
 
 /// # Example
@@ -1378,7 +1372,11 @@ impl StreamProcessor {
                     if has_dotall || has_multiline {
                         let flag_names: Vec<&str> = [
                             if has_dotall { Some("dot_all") } else { None },
-                            if has_multiline { Some("multiline") } else { None },
+                            if has_multiline {
+                                Some("multiline")
+                            } else {
+                                None
+                            },
                         ]
                         .into_iter()
                         .flatten()
@@ -1405,7 +1403,11 @@ impl StreamProcessor {
 
             // Compile the not_pattern if specified
             let not_pattern = if let Some(ref not_pattern_str) = step.not_pattern {
-                Some(Self::build_pattern(not_pattern_str, &effective_flags, settings)?)
+                Some(Self::build_pattern(
+                    not_pattern_str,
+                    &effective_flags,
+                    settings,
+                )?)
             } else {
                 None
             };
@@ -2175,7 +2177,10 @@ impl StreamProcessor {
 
         // Check if pipeline has any non-line segments
         let has_non_line = self.segments.iter().any(|seg| {
-            matches!(seg, PipelineSegment::Slurp { .. } | PipelineSegment::Paragraph { .. })
+            matches!(
+                seg,
+                PipelineSegment::Slurp { .. } | PipelineSegment::Paragraph { .. }
+            )
         });
 
         if has_non_line {
@@ -2247,7 +2252,8 @@ impl StreamProcessor {
                         ));
                     }
 
-                    let processed = self.apply_step_to_content(&content, *step_index, &mut result)?;
+                    let processed =
+                        self.apply_step_to_content(&content, *step_index, &mut result)?;
                     lines = processed.lines().map(|l| l.to_string()).collect();
                 }
                 PipelineSegment::Paragraph { step_index } => {
@@ -2399,8 +2405,10 @@ impl StreamProcessor {
         // Sample limit: truncate input if more than N lines
         let sample_limit = self.config.settings.sample_limit;
         if sample_limit > 0 {
-            let truncated: Vec<&str> =
-                current_content.lines().take(sample_limit as usize).collect();
+            let truncated: Vec<&str> = current_content
+                .lines()
+                .take(sample_limit as usize)
+                .collect();
             current_content = truncated.join("\n");
             if input.ends_with('\n') {
                 current_content.push('\n');
@@ -2547,9 +2555,11 @@ impl StreamProcessor {
             .into_iter()
             .map(|cg| CaptureGroupResult {
                 groups: cg.groups,
-                full_match: cg
-                    .full_match
-                    .map(|(start, end, text)| MatchPosition { start, end, text }),
+                full_match: cg.full_match.map(|(start, end, text)| MatchPosition {
+                    start,
+                    end,
+                    text,
+                }),
             })
             .collect();
 
@@ -4306,10 +4316,7 @@ impl StreamProcessor {
 
                     // Find all scoped matches
                     let scoped_matches = analyzer.scoped_match(&result, &regex, scope);
-                    log::debug!(
-                        "Filter found {} in-scope matches",
-                        scoped_matches.len()
-                    );
+                    log::debug!("Filter found {} in-scope matches", scoped_matches.len());
 
                     // Determine which lines contain scoped matches
                     let mut lines_with_matches = std::collections::HashSet::new();
@@ -4320,7 +4327,10 @@ impl StreamProcessor {
                     for m in &scoped_matches {
                         // Find which line this match is on
                         for (line_idx, &start) in line_starts.iter().enumerate() {
-                            let end = line_starts.get(line_idx + 1).copied().unwrap_or(result.len());
+                            let end = line_starts
+                                .get(line_idx + 1)
+                                .copied()
+                                .unwrap_or(result.len());
                             if m.start >= start && m.start < end {
                                 lines_with_matches.insert(line_idx);
                                 break;

@@ -37,9 +37,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 #[cfg(feature = "cli")]
 use std::fs;
-use std::path::PathBuf;
 #[cfg(feature = "cli")]
 use std::path::Path;
+use std::path::PathBuf;
 use std::sync::LazyLock;
 
 /// Built-in pattern library for common regex patterns.

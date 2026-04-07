@@ -19,8 +19,8 @@ use rexpipe::json_schema;
 use rexpipe::library;
 use rexpipe::library::LibraryResolver;
 use rexpipe::pipeline::{
-    MaxLineAction, PipelineConfig, PipelineSettings, PipelineStep, RegexFlag, StepAction,
-    StepType, TransformAction,
+    MaxLineAction, PipelineConfig, PipelineSettings, PipelineStep, RegexFlag, StepAction, StepType,
+    TransformAction,
 };
 use rexpipe::plugin::PluginRegistry;
 use rexpipe::processor::StreamProcessor;
@@ -4057,7 +4057,10 @@ fn lint_config_file(matches: &clap::ArgMatches) -> Result<()> {
             let has_pcre_flag = step
                 .flags
                 .as_ref()
-                .map(|f| f.iter().any(|flag| matches!(flag, rexpipe::pipeline::RegexFlag::Pcre)))
+                .map(|f| {
+                    f.iter()
+                        .any(|flag| matches!(flag, rexpipe::pipeline::RegexFlag::Pcre))
+                })
                 .unwrap_or(false);
 
             if !has_pcre_flag
@@ -4136,9 +4139,7 @@ fn lint_config_file(matches: &clap::ArgMatches) -> Result<()> {
             println!();
         }
 
-        println!(
-            "Tip: Use --lint --fix to interactively apply suggestions."
-        );
+        println!("Tip: Use --lint --fix to interactively apply suggestions.");
         return Ok(());
     }
 
@@ -4148,8 +4149,7 @@ fn lint_config_file(matches: &clap::ArgMatches) -> Result<()> {
 
     // Create backup
     let backup_path = format!("{}.bak", config_path);
-    std::fs::copy(path, &backup_path)
-        .map_err(|e| anyhow!("Failed to create backup: {}", e))?;
+    std::fs::copy(path, &backup_path).map_err(|e| anyhow!("Failed to create backup: {}", e))?;
     println!("Created backup: {}\n", backup_path);
 
     let mut modified_content = content.clone();
@@ -4157,7 +4157,13 @@ fn lint_config_file(matches: &clap::ArgMatches) -> Result<()> {
     let mut fixes_applied = 0;
 
     for (idx, (category, issue, suggestion)) in suggestions.iter().enumerate() {
-        println!("[{}/{}] {} - {}", idx + 1, suggestions.len(), category, issue);
+        println!(
+            "[{}/{}] {} - {}",
+            idx + 1,
+            suggestions.len(),
+            category,
+            issue
+        );
         println!("      Suggestion: {}", suggestion);
 
         // Determine if this is a fixable suggestion and what the fix is
@@ -4205,7 +4211,10 @@ fn lint_config_file(matches: &clap::ArgMatches) -> Result<()> {
     if fixes_applied > 0 {
         std::fs::write(path, &modified_content)
             .map_err(|e| anyhow!("Failed to write fixed config: {}", e))?;
-        println!("Applied {} fix(es). Original saved to {}", fixes_applied, backup_path);
+        println!(
+            "Applied {} fix(es). Original saved to {}",
+            fixes_applied, backup_path
+        );
     } else {
         // Remove backup if no changes were made
         let _ = std::fs::remove_file(&backup_path);
@@ -4217,7 +4226,12 @@ fn lint_config_file(matches: &clap::ArgMatches) -> Result<()> {
 
 /// Determine if a lint suggestion can be automatically fixed.
 /// Returns Some((old_text, new_text, description)) if fixable, None otherwise.
-fn determine_fix(category: &str, issue: &str, _suggestion: &str, content: &str) -> Option<(String, String, String)> {
+fn determine_fix(
+    category: &str,
+    issue: &str,
+    _suggestion: &str,
+    content: &str,
+) -> Option<(String, String, String)> {
     // Extract step number from issue string like "Step 3: ..." or "'name' (step 3): ..."
     let step_pattern = regex::Regex::new(r"(?:step )?(\d+)").ok()?;
     let step_num: usize = step_pattern
@@ -4253,8 +4267,13 @@ fn determine_fix(category: &str, issue: &str, _suggestion: &str, content: &str) 
 fn find_in_step(content: &str, step_num: usize, pattern: &str) -> Option<String> {
     // Find the nth step section (accounting for shorthand sections too)
     let step_headers = [
-        "[[step]]", "[[filter]]", "[[substitute]]", "[[extract]]",
-        "[[validate]]", "[[transform]]", "[[block]]",
+        "[[step]]",
+        "[[filter]]",
+        "[[substitute]]",
+        "[[extract]]",
+        "[[validate]]",
+        "[[transform]]",
+        "[[block]]",
     ];
 
     let mut current_step = 0;
@@ -4292,7 +4311,8 @@ fn find_in_step(content: &str, step_num: usize, pattern: &str) -> Option<String>
 /// Presets use a single filter with OR'd patterns to keep lines matching ANY pattern.
 fn get_preset(name: &str) -> Option<PipelineConfig> {
     let toml_str = match name.to_lowercase().as_str() {
-        "cargo" | "rust" => r#"
+        "cargo" | "rust" => {
+            r#"
 name = "Cargo/Rust Build Filter"
 description = "Filter Rust/Cargo build output to show errors and warnings"
 
@@ -4306,8 +4326,10 @@ keep = [
     "^\\s+=",
     "^\\s+\\d+\\s*\\|"
 ]
-"#,
-        "pytest" | "python" => r#"
+"#
+        }
+        "pytest" | "python" => {
+            r#"
 name = "Pytest Output Filter"
 description = "Filter pytest output to show failures and errors"
 
@@ -4324,8 +4346,10 @@ keep = [
     "^=+.*(FAILURES|ERRORS|short test summary)",
     "\\d+ (failed|passed|error)"
 ]
-"#,
-        "npm" | "node" => r#"
+"#
+        }
+        "npm" | "node" => {
+            r#"
 name = "NPM/Node Output Filter"
 description = "Filter npm/node output to show errors and warnings"
 
@@ -4340,8 +4364,10 @@ keep = [
     "^\\s+at ",
     "FAILED"
 ]
-"#,
-        "docker" => r#"
+"#
+        }
+        "docker" => {
+            r#"
 name = "Docker Output Filter"
 description = "Filter Docker build/run output for errors"
 
@@ -4359,8 +4385,10 @@ keep = [
     "exit code",
     "exited with"
 ]
-"#,
-        "logs" | "log" => r#"
+"#
+        }
+        "logs" | "log" => {
+            r#"
 name = "Generic Log Filter"
 description = "Filter log output to show errors and warnings"
 
@@ -4377,8 +4405,10 @@ keep = [
     "Traceback",
     "Stack trace"
 ]
-"#,
-        "git" => r#"
+"#
+        }
+        "git" => {
+            r#"
 name = "Git Output Filter"
 description = "Filter git command output for important information"
 
@@ -4399,8 +4429,10 @@ keep = [
     "^new file:",
     "^renamed:"
 ]
-"#,
-        "ci" => r#"
+"#
+        }
+        "ci" => {
+            r#"
 name = "CI/CD Log Filter"
 description = "Filter CI/CD output for failures and important events"
 
@@ -4419,7 +4451,8 @@ keep = [
     "returned \\d+",
     "^(Step|Stage|Job|Pipeline).*:"
 ]
-"#,
+"#
+        }
         "list" => {
             return None; // Special case - list presets
         }
@@ -4428,7 +4461,9 @@ keep = [
         }
     };
 
-    toml::from_str(toml_str).ok().map(|c: PipelineConfig| c.normalize())
+    toml::from_str(toml_str)
+        .ok()
+        .map(|c: PipelineConfig| c.normalize())
 }
 
 /// Run with a pre-built preset pipeline.
@@ -4472,10 +4507,7 @@ fn run_preset_mode(preset_name: &str, matches: &clap::ArgMatches) -> Result<()> 
 
     // Process with the preset config
     let settings = build_pipeline_settings(matches);
-    let config = PipelineConfig {
-        settings,
-        ..config
-    };
+    let config = PipelineConfig { settings, ..config };
 
     run_processing_mode(&config, input, matches)
 }
@@ -4702,9 +4734,11 @@ fn run_processing_mode(
         let mut step_totals: HashMap<usize, (u64, u64, Option<String>)> = HashMap::new();
 
         for step_result in &result.step_results {
-            let entry = step_totals
-                .entry(step_result.step_index)
-                .or_insert((0, 0, step_result.name.clone()));
+            let entry = step_totals.entry(step_result.step_index).or_insert((
+                0,
+                0,
+                step_result.name.clone(),
+            ));
             entry.0 += step_result.matches;
             entry.1 += step_result.transformations;
         }
@@ -6181,7 +6215,11 @@ fn run_why_mode(
                     .iter()
                     .filter(|r| r.step_index == step_idx)
                     .fold((0, 0, 0), |acc, r| {
-                        (acc.0 + r.matches, acc.1 + r.lines_dropped, acc.2 + r.transformations)
+                        (
+                            acc.0 + r.matches,
+                            acc.1 + r.lines_dropped,
+                            acc.2 + r.transformations,
+                        )
                     });
 
                 eprintln!(
@@ -6332,15 +6370,24 @@ fn run_why_dropped_mode(
     if dropped_lines.is_empty() {
         eprintln!("=== Summary ===");
         eprintln!("Lines checked: {}", lines_checked);
-        eprintln!("Lines matching '{}': {}", why_pattern, lines_matched_pattern);
+        eprintln!(
+            "Lines matching '{}': {}",
+            why_pattern, lines_matched_pattern
+        );
         eprintln!("Lines dropped: 0");
-        eprintln!("\nNo matching lines were dropped. All {} matching lines passed through.", lines_matched_pattern);
+        eprintln!(
+            "\nNo matching lines were dropped. All {} matching lines passed through.",
+            lines_matched_pattern
+        );
         return Ok(());
     }
 
     eprintln!("=== Summary ===");
     eprintln!("Lines checked: {}", lines_checked);
-    eprintln!("Lines matching '{}': {}", why_pattern, lines_matched_pattern);
+    eprintln!(
+        "Lines matching '{}': {}",
+        why_pattern, lines_matched_pattern
+    );
     eprintln!("Lines dropped: {}", dropped_lines.len());
     eprintln!();
 
@@ -6391,7 +6438,9 @@ fn run_why_dropped_mode(
                         step_idx + 1,
                         step.pattern
                     );
-                    eprintln!("  → Consider making the pattern more specific or removing this step");
+                    eprintln!(
+                        "  → Consider making the pattern more specific or removing this step"
+                    );
                 } else if step.keep.is_some() {
                     eprintln!(
                         "Step {}: Uses keep=[...] patterns. Lines not matching any pattern are dropped.",
@@ -6499,10 +6548,7 @@ fn diff_configs(config1_path: &str, config2_path: &str) -> Result<()> {
                 let mut step_diffs: Vec<String> = Vec::new();
 
                 if s1.step_type != s2.step_type {
-                    step_diffs.push(format!(
-                        "type: {:?} → {:?}",
-                        s1.step_type, s2.step_type
-                    ));
+                    step_diffs.push(format!("type: {:?} → {:?}", s1.step_type, s2.step_type));
                 }
                 if s1.pattern != s2.pattern {
                     let p1 = if s1.pattern.len() > 30 {
@@ -6524,10 +6570,7 @@ fn diff_configs(config1_path: &str, config2_path: &str) -> Result<()> {
                     ));
                 }
                 if s1.action != s2.action {
-                    step_diffs.push(format!(
-                        "action: {:?} → {:?}",
-                        s1.action, s2.action
-                    ));
+                    step_diffs.push(format!("action: {:?} → {:?}", s1.action, s2.action));
                 }
                 if s1.keep != s2.keep {
                     step_diffs.push(format!("keep: {:?} → {:?}", s1.keep, s2.keep));
@@ -6578,16 +6621,8 @@ fn diff_configs(config1_path: &str, config2_path: &str) -> Result<()> {
     }
 
     // Compare included patterns
-    let includes1: HashSet<String> = config1
-        .patterns_include
-        .iter()
-        .cloned()
-        .collect();
-    let includes2: HashSet<String> = config2
-        .patterns_include
-        .iter()
-        .cloned()
-        .collect();
+    let includes1: HashSet<String> = config1.patterns_include.iter().cloned().collect();
+    let includes2: HashSet<String> = config2.patterns_include.iter().cloned().collect();
 
     let only_in_1: Vec<_> = includes1.difference(&includes2).collect();
     let only_in_2: Vec<_> = includes2.difference(&includes1).collect();
@@ -6608,7 +6643,10 @@ fn diff_configs(config1_path: &str, config2_path: &str) -> Result<()> {
     if differences == 0 {
         println!("✅ Configurations are functionally equivalent.");
     } else {
-        println!("📋 Found {} difference(s) between configurations.", differences);
+        println!(
+            "📋 Found {} difference(s) between configurations.",
+            differences
+        );
 
         // Behavioral impact analysis
         println!();
@@ -6685,8 +6723,7 @@ fn run_library_command(command: &str, arg: Option<&String>) -> Result<()> {
             println!();
 
             // Check for user libraries in ~/.rexpipe/patterns/
-            let global_dir = dirs::home_dir()
-                .map(|h| h.join(".rexpipe").join("patterns"));
+            let global_dir = dirs::home_dir().map(|h| h.join(".rexpipe").join("patterns"));
 
             if let Some(ref dir) = global_dir {
                 if dir.exists() {
@@ -6902,12 +6939,10 @@ password_field = 'password\s*[:=]\s*\S+'
             Ok(())
         }
 
-        _ => {
-            Err(anyhow!(
-                "Unknown library command: '{}'. Available: list, search, info, install, init, registry",
-                command
-            ))
-        }
+        _ => Err(anyhow!(
+            "Unknown library command: '{}'. Available: list, search, info, install, init, registry",
+            command
+        )),
     }
 }
 

@@ -1349,7 +1349,6 @@ enabled = true
     }
 }
 
-
 // =====================================================
 // Multi-File Processing & In-Place Editing Tests
 // =====================================================
@@ -2723,10 +2722,7 @@ fn test_multi_step_ordering() {
         output_str.contains("baz"),
         "foo should be transformed to baz through both steps"
     );
-    assert!(
-        !output_str.contains("foo"),
-        "foo should not remain"
-    );
+    assert!(!output_str.contains("foo"), "foo should not remain");
 }
 
 /// Test filter then substitute ordering
@@ -3047,11 +3043,7 @@ fn test_embedded_test_runner() {
             ..Default::default()
         }],
         tests: vec![
-            rexpipe::testing::TestCase::new(
-                "ssn-redaction",
-                "SSN: 123-45-6789",
-                "SSN: [REDACTED]",
-            ),
+            rexpipe::testing::TestCase::new("ssn-redaction", "SSN: 123-45-6789", "SSN: [REDACTED]"),
             rexpipe::testing::TestCase::new(
                 "no-false-positive",
                 "Phone: 555-1234",
@@ -3106,7 +3098,10 @@ fn test_embedded_negative_tests() {
 
     let summary = runner.run_all(processor);
 
-    assert!(summary.all_passed(), "Negative test should pass when no matches");
+    assert!(
+        summary.all_passed(),
+        "Negative test should pass when no matches"
+    );
 }
 
 /// Test test filtering by name

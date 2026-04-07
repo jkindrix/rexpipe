@@ -464,10 +464,7 @@ impl SyntaxAnalyzer {
                         }
                         _ => {
                             // Treat as raw node type name for advanced users
-                            log::debug!(
-                                "Unknown scope name '{}', treating as raw node type",
-                                name
-                            );
+                            log::debug!("Unknown scope name '{}', treating as raw node type", name);
                         }
                     }
                 }
