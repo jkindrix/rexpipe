@@ -72,7 +72,9 @@
 //! | `transform` | Transform matched text | `pattern`, `transform` |
 //! | `block` | Multi-line processing | `pattern`, `end_pattern`, `action` |
 
-use anyhow::{anyhow, Result};
+#[cfg(feature = "cli")]
+use anyhow::anyhow;
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "cli")]
 use std::collections::HashSet;
@@ -1331,6 +1333,7 @@ impl PipelineConfig {
     }
 
     /// Merge this config with a base config (for extends support)
+    #[cfg(feature = "cli")]
     fn merge_with_base(self, base: PipelineConfig) -> PipelineConfig {
         // Steps from base are prepended to this config's steps
         let mut merged_steps = base.step;

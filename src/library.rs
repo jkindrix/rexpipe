@@ -27,6 +27,7 @@
 //! pattern = '${category.nested_pattern}'
 //! ```
 
+#[cfg(feature = "cli")]
 use crate::error::LibraryError;
 #[cfg(feature = "cli")]
 use anyhow::Context;
@@ -875,6 +876,7 @@ pub fn has_pattern_references(input: &str) -> bool {
 }
 
 /// Recursively flatten patterns to dot notation
+#[cfg(feature = "cli")]
 fn flatten_patterns_recursive(
     patterns: &HashMap<String, PatternValue>,
     prefix: &str,
