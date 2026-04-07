@@ -44,9 +44,9 @@ use std::path::Path;
 use std::path::PathBuf;
 #[cfg(feature = "cli")]
 use std::process::Command;
+use thiserror::Error;
 #[cfg(feature = "cli")]
 use web_time::{SystemTime, UNIX_EPOCH};
-use thiserror::Error;
 
 /// Errors that can occur during checkpoint operations.
 #[derive(Error, Debug)]

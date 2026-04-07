@@ -93,11 +93,7 @@ describe('Helper', () => {
 "#;
 
 /// Helper to create a syntax-aware pipeline step
-fn create_scoped_filter_step(
-    pattern: &str,
-    language: &str,
-    scope: &str,
-) -> PipelineStep {
+fn create_scoped_filter_step(pattern: &str, language: &str, scope: &str) -> PipelineStep {
     PipelineStep {
         step_type: StepType::Filter,
         pattern: pattern.to_string(),
@@ -117,13 +113,8 @@ fn process_with_pipeline(content: &str, config: PipelineConfig) -> Vec<String> {
     // Use process_file_content for syntax-aware processing
     // This is required for tree-sitter scoping to work (needs full AST)
     if processor.has_syntax_aware_steps() {
-        let (output, _result) = processor
-            .process_file_content(content, None)
-            .unwrap();
-        output
-            .lines()
-            .map(|s| s.to_string())
-            .collect()
+        let (output, _result) = processor.process_file_content(content, None).unwrap();
+        output.lines().map(|s| s.to_string()).collect()
     } else {
         // Fall back to stream processing for non-syntax-aware pipelines
         let reader = Cursor::new(content);
@@ -168,7 +159,9 @@ fn test_rust_code_scope_filters_correctly() {
         "Should include helper_function definition"
     );
     assert!(
-        output.iter().any(|l| l.contains("use crate::utils::helper")),
+        output
+            .iter()
+            .any(|l| l.contains("use crate::utils::helper")),
         "Should include helper import"
     );
     assert!(
@@ -260,7 +253,9 @@ fn test_rust_tests_scope_filters_correctly() {
 
     // Should match test-related code containing "helper"
     assert!(
-        output.iter().any(|l| l.contains("test_helper") || l.contains("helper_function(2)")),
+        output
+            .iter()
+            .any(|l| l.contains("test_helper") || l.contains("helper_function(2)")),
         "Should include test code with helper"
     );
 }
@@ -308,7 +303,9 @@ fn test_python_tests_scope_filters_correctly() {
 
     // Should match test functions containing "helper"
     assert!(
-        output.iter().any(|l| l.contains("def test_helper") || l.contains("class TestHelper")),
+        output
+            .iter()
+            .any(|l| l.contains("def test_helper") || l.contains("class TestHelper")),
         "Should include test code with helper"
     );
 }
@@ -374,7 +371,9 @@ fn test_javascript_tests_scope_filters_correctly() {
 
     // Should match test blocks (describe/it/test) containing "helper"
     assert!(
-        output.iter().any(|l| l.contains("describe('Helper')") || l.contains("helperFunction")),
+        output
+            .iter()
+            .any(|l| l.contains("describe('Helper')") || l.contains("helperFunction")),
         "Should include test code with helper"
     );
 }
@@ -441,7 +440,9 @@ fn test_exclude_scopes_comments() {
 
     // Should match code and strings, but not comments
     assert!(
-        output.iter().any(|l| l.contains("fn helper_function") || l.contains("helper_function(42)")),
+        output
+            .iter()
+            .any(|l| l.contains("fn helper_function") || l.contains("helper_function(42)")),
         "Should include matches in code"
     );
     assert!(
@@ -475,9 +476,7 @@ fn test_scoped_substitution_in_code_only() {
 
     // Use process_file_content for syntax-aware substitution (needs full AST)
     let mut processor = StreamProcessor::new(config).unwrap();
-    let (output_str, _result) = processor
-        .process_file_content(RUST_FIXTURE, None)
-        .unwrap();
+    let (output_str, _result) = processor.process_file_content(RUST_FIXTURE, None).unwrap();
 
     // "helper" in code should become "utility"
     assert!(
@@ -548,18 +547,45 @@ fn test_language_detection_from_extension() {
 #[test]
 fn test_scope_filter_parsing() {
     assert_eq!("code".parse::<ScopeFilter>().unwrap(), ScopeFilter::Code);
-    assert_eq!("strings".parse::<ScopeFilter>().unwrap(), ScopeFilter::Strings);
-    assert_eq!("string".parse::<ScopeFilter>().unwrap(), ScopeFilter::Strings);
-    assert_eq!("comments".parse::<ScopeFilter>().unwrap(), ScopeFilter::Comments);
-    assert_eq!("comment".parse::<ScopeFilter>().unwrap(), ScopeFilter::Comments);
-    assert_eq!("functions".parse::<ScopeFilter>().unwrap(), ScopeFilter::Functions);
+    assert_eq!(
+        "strings".parse::<ScopeFilter>().unwrap(),
+        ScopeFilter::Strings
+    );
+    assert_eq!(
+        "string".parse::<ScopeFilter>().unwrap(),
+        ScopeFilter::Strings
+    );
+    assert_eq!(
+        "comments".parse::<ScopeFilter>().unwrap(),
+        ScopeFilter::Comments
+    );
+    assert_eq!(
+        "comment".parse::<ScopeFilter>().unwrap(),
+        ScopeFilter::Comments
+    );
+    assert_eq!(
+        "functions".parse::<ScopeFilter>().unwrap(),
+        ScopeFilter::Functions
+    );
     assert_eq!("fn".parse::<ScopeFilter>().unwrap(), ScopeFilter::Functions);
-    assert_eq!("imports".parse::<ScopeFilter>().unwrap(), ScopeFilter::Imports);
+    assert_eq!(
+        "imports".parse::<ScopeFilter>().unwrap(),
+        ScopeFilter::Imports
+    );
     assert_eq!("tests".parse::<ScopeFilter>().unwrap(), ScopeFilter::Tests);
     assert_eq!("types".parse::<ScopeFilter>().unwrap(), ScopeFilter::Types);
-    assert_eq!("identifiers".parse::<ScopeFilter>().unwrap(), ScopeFilter::Identifiers);
-    assert_eq!("macros".parse::<ScopeFilter>().unwrap(), ScopeFilter::Macros);
-    assert_eq!("control_flow".parse::<ScopeFilter>().unwrap(), ScopeFilter::ControlFlow);
+    assert_eq!(
+        "identifiers".parse::<ScopeFilter>().unwrap(),
+        ScopeFilter::Identifiers
+    );
+    assert_eq!(
+        "macros".parse::<ScopeFilter>().unwrap(),
+        ScopeFilter::Macros
+    );
+    assert_eq!(
+        "control_flow".parse::<ScopeFilter>().unwrap(),
+        ScopeFilter::ControlFlow
+    );
     assert_eq!("all".parse::<ScopeFilter>().unwrap(), ScopeFilter::All);
     assert_eq!("*".parse::<ScopeFilter>().unwrap(), ScopeFilter::All);
 
@@ -589,7 +615,11 @@ fn test_no_matches_in_scope() {
     let config = PipelineConfig {
         name: Some("No Matches Test".to_string()),
         settings: PipelineSettings::default(),
-        step: vec![create_scoped_filter_step("nonexistent_pattern_xyz", "rust", "code")],
+        step: vec![create_scoped_filter_step(
+            "nonexistent_pattern_xyz",
+            "rust",
+            "code",
+        )],
         ..Default::default()
     };
 

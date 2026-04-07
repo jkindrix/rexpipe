@@ -72,9 +72,9 @@
 //! | `transform` | Transform matched text | `pattern`, `transform` |
 //! | `block` | Multi-line processing | `pattern`, `end_pattern`, `action` |
 
+use anyhow::Result;
 #[cfg(feature = "cli")]
 use anyhow::anyhow;
-use anyhow::Result;
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "cli")]
 use std::collections::HashSet;
@@ -2600,7 +2600,7 @@ mod tests {
             version: None,     // Should inherit from base
             settings: PipelineSettings {
                 mode: ProcessingMode::Slurp, // Explicitly set (differs from default Line)
-                timeout_ms: 5000, // Explicitly set (differs from default 0)
+                timeout_ms: 5000,            // Explicitly set (differs from default 0)
                 ..Default::default()
             },
             step: vec![PipelineStep {

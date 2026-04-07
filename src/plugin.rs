@@ -723,9 +723,11 @@ impl PluginRegistry {
         _input: &str,
         _timeout_secs: u64,
     ) -> Result<String, String> {
-        Err("Shell transforms are not available in this build (requires the 'cli' feature; \
+        Err(
+            "Shell transforms are not available in this build (requires the 'cli' feature; \
              shell execution is not possible in the WASM sandbox)"
-            .to_string())
+                .to_string(),
+        )
     }
 
     /// Execute a shell command with input and configurable timeout.

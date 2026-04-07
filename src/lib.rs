@@ -94,15 +94,15 @@
 //! - `syntax`: Syntax-aware pattern matching
 
 // === Always-available modules (WASM-safe core) ===
+pub mod bidirectional;
+pub mod checkpoint;
+pub mod crossfile;
 pub mod error;
 pub mod json_schema;
 pub mod library;
 pub mod pipeline;
 pub mod plugin;
 pub mod processor;
-pub mod bidirectional;
-pub mod checkpoint;
-pub mod crossfile;
 pub mod testing;
 
 // === CLI-only modules (filesystem / terminal / parallelism) ===
