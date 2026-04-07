@@ -29,7 +29,7 @@
 //! ```
 
 use serde::{Deserialize, Serialize};
-use std::time::{Duration, Instant};
+use web_time::{Duration, Instant};
 use thiserror::Error;
 
 /// Errors that can occur during testing.

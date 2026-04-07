@@ -1415,6 +1415,7 @@ dependencies = [
  "tree-sitter-typescript",
  "tree-sitter-yaml",
  "ureq",
+ "web-time",
 ]
 
 [[package]]

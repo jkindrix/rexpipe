@@ -92,7 +92,7 @@ use regex::{Regex, RegexBuilder};
 use std::collections::{HashMap, VecDeque};
 use std::io::{BufRead, Write};
 use std::sync::LazyLock;
-use std::time::Instant;
+use web_time::Instant;
 
 /// Pre-compiled regex for detecting repetition patterns like `{10000}` in ReDoS analysis
 static REPETITION_REGEX: LazyLock<Regex> =

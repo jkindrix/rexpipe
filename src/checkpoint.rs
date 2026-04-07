@@ -38,7 +38,7 @@ use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::{SystemTime, UNIX_EPOCH};
+use web_time::{SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 
 /// Errors that can occur during checkpoint operations.
@@ -243,7 +243,7 @@ pub struct Checkpoint {
     config: CheckpointConfig,
     state: CheckpointState,
     modified: bool,
-    last_save: std::time::Instant,
+    last_save: web_time::Instant,
 }
 
 impl Checkpoint {
@@ -253,7 +253,7 @@ impl Checkpoint {
             config,
             state: CheckpointState::default(),
             modified: false,
-            last_save: std::time::Instant::now(),
+            last_save: web_time::Instant::now(),
         }
     }
 
@@ -280,7 +280,7 @@ impl Checkpoint {
             config,
             state,
             modified: false,
-            last_save: std::time::Instant::now(),
+            last_save: web_time::Instant::now(),
         })
     }
 
@@ -303,7 +303,7 @@ impl Checkpoint {
             file.write_all(json.as_bytes())?;
 
             self.modified = false;
-            self.last_save = std::time::Instant::now();
+            self.last_save = web_time::Instant::now();
         }
         Ok(())
     }
