@@ -418,8 +418,8 @@ impl PluginRegistry {
 
         // Date/time (simple formats)
         self.register("timestamp", |_, _| {
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
+            web_time::SystemTime::now()
+                .duration_since(web_time::UNIX_EPOCH)
                 .map(|d| d.as_secs().to_string())
                 .unwrap_or_else(|_| "0".to_string())
         });
@@ -714,7 +714,7 @@ impl PluginRegistry {
         timeout_secs: u64,
     ) -> Result<String, String> {
         use std::io::Write;
-        use std::time::Duration;
+        use web_time::Duration;
 
         // SECURITY: Platform-specific shell selection
         // Why sh -c on Unix: Provides consistent POSIX shell behavior
@@ -763,7 +763,7 @@ impl PluginRegistry {
         } else {
             None
         };
-        let start = std::time::Instant::now();
+        let start = web_time::Instant::now();
 
         loop {
             match child.try_wait() {
