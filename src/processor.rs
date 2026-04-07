@@ -2336,8 +2336,7 @@ impl StreamProcessor {
     ///
     /// # Phase 0 scope
     ///
-    /// The following [`PipelineSettings`](crate::pipeline::PipelineSettings)
-    /// fields are honored on day one:
+    /// The following [`PipelineSettings`] fields are honored on day one:
     /// - `mode` (line / slurp / paragraph)
     /// - `pcre_mode`, `fixed_strings`
     /// - `max_slurp_size`, `regex_size_limit`, `strict_mode`
