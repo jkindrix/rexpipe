@@ -88,6 +88,7 @@ use crate::pipeline::{
 };
 use anyhow::{Context, Result};
 use log::{debug, info, trace};
+use serde::{Deserialize, Serialize};
 use regex::{Regex, RegexBuilder};
 use std::collections::{HashMap, VecDeque};
 use std::io::{BufRead, Write};
@@ -891,6 +892,100 @@ pub struct CaptureGroup {
     /// The full match as (start_offset, end_offset, matched_text).
     /// `None` if there was no match.
     pub full_match: Option<(usize, usize, String)>,
+}
+
+// ============================================================================
+// Intermediate processing result types
+// ============================================================================
+//
+// These types are returned by `StreamProcessor::process_with_intermediates`.
+// They carry full serde derives so they can round-trip through `serde_json`
+// or `serde-wasm-bindgen`, which is how the rexpipe-playground bridge crate
+// exposes them to JavaScript. Keeping the types in the library crate (rather
+// than in a separate bridge-only module) lets native consumers use them too.
+
+/// A single match location within a step's input, with the matched text.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MatchPosition {
+    /// Byte offset where the match starts (inclusive)
+    pub start: usize,
+    /// Byte offset where the match ends (exclusive)
+    pub end: usize,
+    /// The matched text, for frontend convenience
+    pub text: String,
+}
+
+/// A full capture group result for one match, suitable for rendering
+/// capture-group visualizations in a UI.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CaptureGroupResult {
+    /// Captured group values (index 0 is the full match, 1+ are capture groups).
+    /// `None` indicates an optional group that didn't participate in the match.
+    pub groups: Vec<Option<String>>,
+    /// The full match position, or `None` if this capture had no full match.
+    pub full_match: Option<MatchPosition>,
+}
+
+/// Structured error from a single pipeline step.
+///
+/// Preserves the category and field-level context of rexpipe's error types
+/// rather than flattening to a plain string. Used by UIs to highlight the
+/// exact field that failed and surface actionable hints.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StepError {
+    /// Error category (e.g., "PatternError", "ValidationError", "ConfigError",
+    /// "MemoryLimit", "TransformError")
+    pub kind: String,
+    /// Index of the step that produced the error
+    pub step_index: usize,
+    /// Name of the config field that caused the error, if applicable
+    /// (e.g., "pattern", "replacement")
+    pub field: Option<String>,
+    /// Human-readable error message
+    pub message: String,
+    /// Actionable hint for fixing the error, if available
+    pub hint: Option<String>,
+}
+
+/// Per-step intermediate result captured during `process_with_intermediates`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StepIntermediateResult {
+    /// The step's output (what was produced after applying this step)
+    pub output: String,
+    /// Number of matches found by this step's pattern
+    ///
+    /// Uses `u32` (not `u64`) to avoid silent precision loss when crossing
+    /// the JavaScript boundary — JS numbers are f64 and lose precision above 2^53.
+    pub matches: u32,
+    /// Match positions in the step's INPUT (before applying the step's action).
+    /// Enables match highlighting in the frontend.
+    pub match_positions: Vec<MatchPosition>,
+    /// Full capture groups for each match, for richer UI visualization.
+    pub captures: Vec<CaptureGroupResult>,
+    /// Number of lines in the step's input
+    pub lines_in: u32,
+    /// Number of lines in the step's output
+    pub lines_out: u32,
+    /// Structured error if this step failed
+    pub error: Option<StepError>,
+}
+
+/// Complete result from `StreamProcessor::process_with_intermediates`.
+///
+/// This is the shape consumed by the rexpipe-playground bridge crate.
+/// Each entry in `steps` corresponds to one step in the pipeline (in order);
+/// when a step fails, that step has `error` set and subsequent steps are
+/// not included in the vector.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PipelineIntermediateResult {
+    /// The final output after all steps have been applied successfully.
+    /// Empty string if the pipeline failed before producing output.
+    pub final_output: String,
+    /// Per-step intermediate results, in pipeline order
+    pub steps: Vec<StepIntermediateResult>,
+    /// Warnings about deferred features (e.g., "finalize counters deferred to Phase 4")
+    /// that were silently ignored during processing
+    pub warnings: Vec<String>,
 }
 
 struct CompiledStep {
@@ -2221,6 +2316,293 @@ impl StreamProcessor {
         );
 
         Ok(result)
+    }
+
+    /// Process an input string through the pipeline, capturing per-step
+    /// intermediate results for interactive/playground use.
+    ///
+    /// This is a separate execution path from [`Self::process_stream`] — rather
+    /// than streaming output as each line is processed, it buffers the entire
+    /// input and all intermediate outputs in memory, then returns them as a
+    /// structured result. It is suitable for small-to-medium inputs (bounded
+    /// by `settings.max_slurp_size`, default 256MB) where the UI needs to
+    /// visualize what each step did.
+    ///
+    /// # Phase 0 scope
+    ///
+    /// The following [`PipelineSettings`](crate::pipeline::PipelineSettings)
+    /// fields are honored on day one:
+    /// - `mode` (line / slurp / paragraph)
+    /// - `pcre_mode`, `fixed_strings`
+    /// - `max_slurp_size`, `regex_size_limit`, `strict_mode`
+    /// - `max_line_length`, `max_line_action`
+    /// - `strip_ansi`, `invert_match`, `sample_limit`
+    /// - `timeout_ms`, `preserve_line_endings`
+    ///
+    /// The following are deferred and emit entries in
+    /// [`PipelineIntermediateResult::warnings`] if configured:
+    /// - `context_before` / `context_after` (context tracking)
+    /// - `BidirectionalManager` recording (in-memory, non-persistent only)
+    /// - `finalize.counters` / `finalize.template` (aggregation)
+    ///
+    /// The following are physically unsupported:
+    /// - Shell transforms (`TransformAction::Shell`) — WASM sandbox has no subprocess
+    /// - Plugin transforms loaded from disk (`TransformAction::Plugin`)
+    /// - `allow_shell` / `shell_timeout_secs` settings (no shell to configure)
+    ///
+    /// # Errors
+    ///
+    /// Returns `Ok(PipelineIntermediateResult)` even when a step fails — the
+    /// failing step has its `error` field set and subsequent steps are omitted.
+    /// An `Err` is returned only for unrecoverable errors (e.g., input exceeds
+    /// `max_slurp_size`).
+    pub fn process_with_intermediates(
+        &mut self,
+        input: &str,
+    ) -> Result<PipelineIntermediateResult> {
+        let max_slurp_size = self.config.settings.max_slurp_size;
+        let strip_ansi = self.config.settings.strip_ansi;
+
+        // Collect any Phase 0 "deferred feature" warnings up front
+        let mut warnings = Vec::new();
+        if self.config.settings.context_before > 0 || self.config.settings.context_after > 0 {
+            warnings.push(
+                "context_before/context_after are deferred in process_with_intermediates (Phase 0); \
+                 context tracking will be added in a later phase"
+                    .to_string(),
+            );
+        }
+        if self.config.finalize.is_configured() {
+            warnings.push(
+                "finalize.template/counters are deferred in process_with_intermediates (Phase 0); \
+                 aggregation will be added in a later phase"
+                    .to_string(),
+            );
+        }
+        if self.config.bidirectional.enabled {
+            warnings.push(
+                "Bidirectional mapping recording is deferred in process_with_intermediates (Phase 0); \
+                 mappings are not recorded during intermediate processing"
+                    .to_string(),
+            );
+        }
+
+        // Pre-process the input
+        let mut current_content = input.to_string();
+        if strip_ansi {
+            let stripped = strip_ansi_codes(&current_content);
+            if let std::borrow::Cow::Owned(s) = stripped {
+                current_content = s;
+            }
+        }
+
+        // Sample limit: truncate input if more than N lines
+        let sample_limit = self.config.settings.sample_limit;
+        if sample_limit > 0 {
+            let truncated: Vec<&str> =
+                current_content.lines().take(sample_limit as usize).collect();
+            current_content = truncated.join("\n");
+            if input.ends_with('\n') {
+                current_content.push('\n');
+            }
+        }
+
+        let mut step_results = Vec::new();
+
+        // Iterate steps individually (not by segment), capturing intermediate state
+        // after each step. This gives the frontend per-step visibility.
+        for step_idx in 0..self.compiled_steps.len() {
+            let step_mode = self.compiled_steps[step_idx].mode.clone();
+            let lines_in = current_content.lines().count() as u32;
+
+            // Capture match positions and capture groups against the step's INPUT.
+            // For substitute/extract/filter steps, this tells the UI what this
+            // step matched in the text it received.
+            let (match_positions, captures) =
+                self.collect_step_match_info(step_idx, &current_content);
+
+            // Memory safety: non-line-mode steps buffer the entire input.
+            if !matches!(step_mode, ProcessingMode::Line)
+                && max_slurp_size > 0
+                && current_content.len() > max_slurp_size
+            {
+                let message = format!(
+                    "Input size ({} bytes) exceeds max_slurp_size ({} bytes). \
+                     Use mode = \"line\" for large inputs or increase max_slurp_size in settings.",
+                    current_content.len(),
+                    max_slurp_size
+                );
+                step_results.push(StepIntermediateResult {
+                    output: String::new(),
+                    matches: 0,
+                    match_positions,
+                    captures,
+                    lines_in,
+                    lines_out: 0,
+                    error: Some(StepError {
+                        kind: "MemoryLimit".to_string(),
+                        step_index: step_idx,
+                        field: None,
+                        message,
+                        hint: Some(
+                            "Increase settings.max_slurp_size or switch this step to mode = \"line\""
+                                .to_string(),
+                        ),
+                    }),
+                });
+                return Ok(PipelineIntermediateResult {
+                    final_output: String::new(),
+                    steps: step_results,
+                    warnings,
+                });
+            }
+
+            // Use a per-step PipelineResult so we can compute match/transformation deltas
+            let mut step_tracker = PipelineResult::new();
+            let step_output_result = match step_mode {
+                ProcessingMode::Line => {
+                    self.apply_single_step_line_mode(step_idx, &current_content, &mut step_tracker)
+                }
+                ProcessingMode::Slurp => {
+                    self.apply_step_to_content(&current_content, step_idx, &mut step_tracker)
+                }
+                ProcessingMode::Paragraph => self.apply_single_step_paragraph_mode(
+                    step_idx,
+                    &current_content,
+                    &mut step_tracker,
+                ),
+            };
+
+            match step_output_result {
+                Ok(output) => {
+                    let lines_out = output.lines().count() as u32;
+                    // Prefer match count from the tracker (captures transformations
+                    // with variable expansion etc.), fall back to position count.
+                    let matches = step_tracker
+                        .matches_found
+                        .try_into()
+                        .unwrap_or(match_positions.len() as u32);
+
+                    step_results.push(StepIntermediateResult {
+                        output: output.clone(),
+                        matches,
+                        match_positions,
+                        captures,
+                        lines_in,
+                        lines_out,
+                        error: None,
+                    });
+                    current_content = output;
+                }
+                Err(e) => {
+                    step_results.push(StepIntermediateResult {
+                        output: String::new(),
+                        matches: 0,
+                        match_positions,
+                        captures,
+                        lines_in,
+                        lines_out: 0,
+                        error: Some(StepError {
+                            kind: "StepError".to_string(),
+                            step_index: step_idx,
+                            field: None,
+                            message: format!("{:#}", e),
+                            hint: None,
+                        }),
+                    });
+                    return Ok(PipelineIntermediateResult {
+                        final_output: String::new(),
+                        steps: step_results,
+                        warnings,
+                    });
+                }
+            }
+        }
+
+        Ok(PipelineIntermediateResult {
+            final_output: current_content,
+            steps: step_results,
+            warnings,
+        })
+    }
+
+    /// Collect match positions and capture groups for a single step against
+    /// the given input content. Used by `process_with_intermediates` to
+    /// capture "what this step saw" before applying its action.
+    fn collect_step_match_info(
+        &self,
+        step_idx: usize,
+        content: &str,
+    ) -> (Vec<MatchPosition>, Vec<CaptureGroupResult>) {
+        let pattern = &self.compiled_steps[step_idx].pattern;
+
+        let positions: Vec<MatchPosition> = pattern
+            .find_iter(content)
+            .into_iter()
+            .map(|(start, end, text)| MatchPosition { start, end, text })
+            .collect();
+
+        let captures: Vec<CaptureGroupResult> = pattern
+            .captures_iter(content)
+            .into_iter()
+            .map(|cg| CaptureGroupResult {
+                groups: cg.groups,
+                full_match: cg
+                    .full_match
+                    .map(|(start, end, text)| MatchPosition { start, end, text }),
+            })
+            .collect();
+
+        (positions, captures)
+    }
+
+    /// Apply a single step in line mode to content (split into lines, process,
+    /// rejoin). Used by `process_with_intermediates`.
+    fn apply_single_step_line_mode(
+        &mut self,
+        step_idx: usize,
+        content: &str,
+        result: &mut PipelineResult,
+    ) -> Result<String> {
+        let mut output_lines = Vec::new();
+        for (i, line) in content.lines().enumerate() {
+            let line_with_newline = format!("{}\n", line);
+            if let Some(processed) = self.process_line_with_range(
+                &line_with_newline,
+                (i + 1) as u64,
+                result,
+                step_idx..step_idx + 1,
+            )? {
+                output_lines.push(processed);
+            }
+        }
+        let mut joined = output_lines.join("\n");
+        // Preserve trailing newline if the input had one
+        if content.ends_with('\n') && !joined.is_empty() {
+            joined.push('\n');
+        }
+        Ok(joined)
+    }
+
+    /// Apply a single step in paragraph mode to content. Used by
+    /// `process_with_intermediates`.
+    fn apply_single_step_paragraph_mode(
+        &mut self,
+        step_idx: usize,
+        content: &str,
+        result: &mut PipelineResult,
+    ) -> Result<String> {
+        let paragraphs: Vec<&str> = content.split("\n\n").collect();
+        let mut processed_paragraphs = Vec::new();
+        for para in paragraphs {
+            if para.is_empty() {
+                processed_paragraphs.push(String::new());
+                continue;
+            }
+            let processed = self.apply_step_to_content(para, step_idx, result)?;
+            processed_paragraphs.push(processed);
+        }
+        Ok(processed_paragraphs.join("\n\n"))
     }
 
     /// Apply a single compiled step to an entire content string (for slurp/paragraph modes).
@@ -5343,5 +5725,288 @@ mod on_mismatch_behavior_tests {
             "Should NOT contain bad line (skip mode)"
         );
         assert!(output_str.contains("ok again"), "Should contain ok again");
+    }
+}
+
+#[cfg(test)]
+mod process_with_intermediates_tests {
+    use crate::pipeline::{
+        PipelineConfig, PipelineSettings, PipelineStep, ProcessingMode, StepAction, StepType,
+    };
+    use crate::processor::StreamProcessor;
+
+    fn make_substitute_step(pattern: &str, replacement: &str) -> PipelineStep {
+        PipelineStep {
+            step_type: StepType::Substitute,
+            pattern: pattern.to_string(),
+            replacement: Some(replacement.to_string()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn test_intermediates_empty_pipeline_returns_input_unchanged() {
+        // A pipeline with one no-op substitution should return the input
+        // unchanged and record one step result.
+        let config = PipelineConfig {
+            step: vec![make_substitute_step("xyz-unlikely-match", "REPLACED")],
+            ..Default::default()
+        };
+
+        let mut processor = StreamProcessor::new(config).unwrap();
+        let result = processor
+            .process_with_intermediates("hello world\n")
+            .unwrap();
+
+        assert_eq!(result.final_output, "hello world\n");
+        assert_eq!(result.steps.len(), 1);
+        assert_eq!(result.steps[0].matches, 0);
+        assert_eq!(result.steps[0].output, "hello world\n");
+        assert!(result.steps[0].error.is_none());
+    }
+
+    #[test]
+    fn test_intermediates_substitute_captures_matches() {
+        let config = PipelineConfig {
+            step: vec![make_substitute_step(r"\d+", "NUM")],
+            ..Default::default()
+        };
+
+        let mut processor = StreamProcessor::new(config).unwrap();
+        let result = processor
+            .process_with_intermediates("order 42 and 17 items\n")
+            .unwrap();
+
+        assert_eq!(result.final_output, "order NUM and NUM items\n");
+        assert_eq!(result.steps.len(), 1);
+        let step = &result.steps[0];
+        assert_eq!(step.matches, 2);
+        assert_eq!(step.match_positions.len(), 2);
+        assert_eq!(step.match_positions[0].text, "42");
+        assert_eq!(step.match_positions[1].text, "17");
+        assert_eq!(step.lines_in, 1);
+        assert_eq!(step.lines_out, 1);
+    }
+
+    #[test]
+    fn test_intermediates_captures_capture_groups() {
+        let config = PipelineConfig {
+            step: vec![make_substitute_step(r"(\w+)@(\w+\.com)", "$1 at $2")],
+            ..Default::default()
+        };
+
+        let mut processor = StreamProcessor::new(config).unwrap();
+        let result = processor
+            .process_with_intermediates("email: alice@example.com\n")
+            .unwrap();
+
+        assert_eq!(result.final_output, "email: alice at example.com\n");
+        let step = &result.steps[0];
+        assert_eq!(step.captures.len(), 1);
+        let capture = &step.captures[0];
+        // groups[0] = full match, groups[1] = first capture, groups[2] = second capture
+        assert_eq!(capture.groups[0].as_deref(), Some("alice@example.com"));
+        assert_eq!(capture.groups[1].as_deref(), Some("alice"));
+        assert_eq!(capture.groups[2].as_deref(), Some("example.com"));
+    }
+
+    #[test]
+    fn test_intermediates_multi_step_pipeline_records_each_step() {
+        let config = PipelineConfig {
+            step: vec![
+                make_substitute_step(r"\d+", "NUM"),
+                make_substitute_step("hello", "HI"),
+                PipelineStep {
+                    step_type: StepType::Filter,
+                    pattern: "HI".to_string(),
+                    action: Some(StepAction::KeepLine),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+
+        let mut processor = StreamProcessor::new(config).unwrap();
+        let result = processor
+            .process_with_intermediates("hello 42 world\nbye 99\n")
+            .unwrap();
+
+        assert_eq!(result.steps.len(), 3);
+        // Step 1: numbers replaced
+        assert_eq!(result.steps[0].matches, 2);
+        assert!(result.steps[0].output.contains("hello NUM world"));
+        assert!(result.steps[0].output.contains("bye NUM"));
+        // Step 2: hello → HI
+        assert!(result.steps[1].output.contains("HI NUM world"));
+        // Step 3: filter keeps only lines with HI
+        assert!(result.steps[2].output.contains("HI NUM world"));
+        assert!(!result.steps[2].output.contains("bye"));
+
+        assert_eq!(result.final_output, result.steps[2].output);
+    }
+
+    #[test]
+    fn test_intermediates_slurp_mode_cross_line_substitution() {
+        // Exercises the playground's killer use case: rejoin soft-wrapped lines.
+        let config = PipelineConfig {
+            step: vec![PipelineStep {
+                step_type: StepType::Substitute,
+                mode: Some(ProcessingMode::Slurp),
+                pattern: r"(\w)\n(\w)".to_string(),
+                replacement: Some("$1 $2".to_string()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let mut processor = StreamProcessor::new(config).unwrap();
+        let result = processor
+            .process_with_intermediates("wrapped\nline\nhere\n")
+            .unwrap();
+
+        // The trailing newline after "here" is preserved by slurp mode.
+        assert_eq!(result.final_output.trim_end(), "wrapped line here");
+        assert_eq!(result.steps.len(), 1);
+        assert!(result.steps[0].error.is_none());
+    }
+
+    #[test]
+    fn test_intermediates_paragraph_mode_processes_each_paragraph() {
+        let config = PipelineConfig {
+            step: vec![PipelineStep {
+                step_type: StepType::Substitute,
+                mode: Some(ProcessingMode::Paragraph),
+                pattern: r"(\w)\n(\w)".to_string(),
+                replacement: Some("$1 $2".to_string()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let mut processor = StreamProcessor::new(config).unwrap();
+        let result = processor
+            .process_with_intermediates("one\ntwo\n\nthree\nfour\n")
+            .unwrap();
+
+        assert!(result.final_output.contains("one two"));
+        assert!(result.final_output.contains("three four"));
+        // Paragraph boundary preserved
+        assert!(result.final_output.contains("\n\n"));
+    }
+
+    #[test]
+    fn test_intermediates_slurp_exceeds_max_size_returns_structured_error() {
+        let config = PipelineConfig {
+            settings: PipelineSettings {
+                max_slurp_size: 10,
+                ..Default::default()
+            },
+            step: vec![PipelineStep {
+                step_type: StepType::Substitute,
+                mode: Some(ProcessingMode::Slurp),
+                pattern: "x".to_string(),
+                replacement: Some("y".to_string()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let mut processor = StreamProcessor::new(config).unwrap();
+        let result = processor
+            .process_with_intermediates("this input is much longer than 10 bytes\n")
+            .unwrap();
+
+        // The result is returned successfully, but the step has a structured error
+        assert_eq!(result.steps.len(), 1);
+        let err = result.steps[0].error.as_ref().expect("expected step error");
+        assert_eq!(err.kind, "MemoryLimit");
+        assert_eq!(err.step_index, 0);
+        assert!(err.message.contains("max_slurp_size"));
+        assert!(err.hint.is_some());
+        assert_eq!(result.final_output, "");
+    }
+
+    #[test]
+    fn test_intermediates_warnings_emitted_for_deferred_features() {
+        let config = PipelineConfig {
+            settings: PipelineSettings {
+                context_before: 2,
+                context_after: 2,
+                ..Default::default()
+            },
+            step: vec![make_substitute_step("foo", "bar")],
+            ..Default::default()
+        };
+
+        let mut processor = StreamProcessor::new(config).unwrap();
+        let result = processor.process_with_intermediates("foo\n").unwrap();
+
+        assert!(
+            result
+                .warnings
+                .iter()
+                .any(|w| w.contains("context_before") || w.contains("context_after")),
+            "Expected a warning about deferred context tracking, got: {:?}",
+            result.warnings
+        );
+    }
+
+    #[test]
+    fn test_intermediates_partial_failure_stops_pipeline() {
+        // Step 1 succeeds, step 2 hits the memory limit with slurp mode
+        let config = PipelineConfig {
+            settings: PipelineSettings {
+                max_slurp_size: 5,
+                ..Default::default()
+            },
+            step: vec![
+                make_substitute_step("foo", "bar"),
+                PipelineStep {
+                    step_type: StepType::Substitute,
+                    mode: Some(ProcessingMode::Slurp),
+                    pattern: "x".to_string(),
+                    replacement: Some("y".to_string()),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+
+        let mut processor = StreamProcessor::new(config).unwrap();
+        let result = processor
+            .process_with_intermediates("foo something long\n")
+            .unwrap();
+
+        // Both steps should be recorded: step 0 succeeded, step 1 has error
+        assert_eq!(result.steps.len(), 2);
+        assert!(result.steps[0].error.is_none());
+        assert!(result.steps[0].output.contains("bar"));
+        assert!(result.steps[1].error.is_some());
+        assert_eq!(result.final_output, "");
+    }
+
+    #[test]
+    fn test_intermediates_result_types_are_serializable() {
+        // Validates that the result types can be serialized to JSON, which is
+        // the primary consumption path for the rexpipe-playground bridge crate.
+        let config = PipelineConfig {
+            step: vec![make_substitute_step(r"(\d+)", "NUM($1)")],
+            ..Default::default()
+        };
+
+        let mut processor = StreamProcessor::new(config).unwrap();
+        let result = processor.process_with_intermediates("count: 42\n").unwrap();
+
+        let json = serde_json::to_string(&result).expect("should serialize");
+        assert!(json.contains("final_output"));
+        assert!(json.contains("steps"));
+        assert!(json.contains("match_positions"));
+        assert!(json.contains("captures"));
+
+        // And deserialize back
+        let round_trip: crate::processor::PipelineIntermediateResult =
+            serde_json::from_str(&json).expect("should deserialize");
+        assert_eq!(round_trip.final_output, result.final_output);
+        assert_eq!(round_trip.steps.len(), result.steps.len());
     }
 }

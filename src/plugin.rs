@@ -1539,6 +1539,7 @@ mod tests {
         assert_eq!(registry.list_plugins().len(), cloned.list_plugins().len());
     }
 
+    #[cfg(feature = "cli")]
     #[test]
     fn test_shell_command() {
         // Only run on Unix-like systems
@@ -1552,21 +1553,21 @@ mod tests {
         }
     }
 
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(all(feature = "cli", not(target_os = "windows")))]
     #[test]
     fn test_shell_command_with_newlines() {
         let result = PluginRegistry::execute_shell("cat", "line1\nline2");
         assert_eq!(result.unwrap(), "line1\nline2");
     }
 
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(all(feature = "cli", not(target_os = "windows")))]
     #[test]
     fn test_shell_command_failure() {
         let result = PluginRegistry::execute_shell("exit 1", "input");
         assert!(result.is_err());
     }
 
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(all(feature = "cli", not(target_os = "windows")))]
     #[test]
     fn test_shell_command_invalid() {
         let result = PluginRegistry::execute_shell("nonexistent_command_xyz", "input");

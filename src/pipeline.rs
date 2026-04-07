@@ -2572,6 +2572,7 @@ mod tests {
         ));
     }
 
+    #[cfg(feature = "cli")]
     #[test]
     fn test_config_merge_with_base() {
         // Create a base config with settings

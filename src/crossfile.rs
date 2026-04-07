@@ -728,6 +728,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "cli")]
     #[test]
     fn test_cross_file_manager() {
         let mut manager = CrossFileManager::new();
