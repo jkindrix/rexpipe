@@ -28,12 +28,17 @@
 //! ```
 
 use crate::error::LibraryError;
-use anyhow::{Context, Result};
+#[cfg(feature = "cli")]
+use anyhow::Context;
+use anyhow::Result;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+#[cfg(feature = "cli")]
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
+#[cfg(feature = "cli")]
+use std::path::Path;
 use std::sync::LazyLock;
 
 /// Built-in pattern library for common regex patterns.
@@ -271,9 +276,16 @@ impl ResolvedLibrary {
 }
 
 /// Maximum depth for library includes to prevent excessive recursion
+#[cfg(feature = "cli")]
 const MAX_INCLUDE_DEPTH: usize = 32;
 
-/// Library resolver handles loading pattern libraries with circular reference detection
+/// Library resolver handles loading pattern libraries with circular reference detection.
+///
+/// Only available with the `cli` feature because it reads pattern library files
+/// from the filesystem and uses `dirs::home_dir()` to locate the global library
+/// directory. WASM consumers should use inline `[aliases]` in the pipeline config
+/// instead.
+#[cfg(feature = "cli")]
 pub struct LibraryResolver {
     /// Paths to search for libraries
     search_paths: Vec<PathBuf>,
@@ -287,6 +299,7 @@ pub struct LibraryResolver {
     remote_resolution_stack: Vec<String>,
 }
 
+#[cfg(feature = "cli")]
 impl LibraryResolver {
     /// Create a new resolver with search paths
     ///
@@ -886,6 +899,7 @@ fn flatten_patterns_recursive(
 }
 
 /// List all patterns in a library file
+#[cfg(feature = "cli")]
 pub fn list_patterns(path: &Path) -> Result<Vec<(String, String)>> {
     let library = LibraryResolver::validate_library(path)?;
     let mut patterns = Vec::new();
