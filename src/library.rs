@@ -965,6 +965,7 @@ mod tests {
         ));
     }
 
+    #[cfg(feature = "cli")]
     #[test]
     fn test_flatten_patterns() {
         let mut patterns = HashMap::new();
