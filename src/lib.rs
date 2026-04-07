@@ -56,78 +56,94 @@
 //! assert_eq!(config.step.len(), 2);
 //! ```
 //!
-//! ## Match Inspection
+//! ## Feature Flags
 //!
-//! Use the inspector module to analyze pattern matches:
+//! rexpipe supports two top-level feature sets that partition the library into
+//! a WASM-safe core and a full-featured CLI build:
 //!
-//! ```
-//! use rexpipe::pipeline::PipelineConfig;
-//! use rexpipe::inspector::Inspector;
+//! - **`core`** (WASM-compatible): Pipeline processing, pattern compilation,
+//!   regex engines, step execution. Suitable for `wasm32-unknown-unknown`.
+//! - **`cli`** (default): Everything in `core` plus filesystem traversal,
+//!   terminal inspection, progress bars, shell plugins, pattern libraries
+//!   loaded from disk, bidirectional mapping persistence, checkpointing,
+//!   cross-file rules, and the `rexpipe` binary.
 //!
-//! let config = PipelineConfig::from_inline_pattern(r"(\w+)@(\w+\.com)", None);
-//! let inspector = Inspector::new(config).unwrap();
-//!
-//! let matches = inspector.inspect_single_line("Contact: user@example.com").unwrap();
-//! assert_eq!(matches.len(), 1);
-//! assert_eq!(matches[0].captures[1], Some("user".to_string()));
-//! ```
+//! Consumers targeting WASM should depend on rexpipe with
+//! `default-features = false, features = ["core"]`.
 //!
 //! ## Modules
 //!
+//! **Always available (in `core`):**
 //! - [`pipeline`]: Configuration structures for pipeline definitions
 //! - [`processor`]: Core streaming text processing engine
-//! - [`files`]: Multi-file processing with directory recursion
-//! - [`library`]: Pattern library loading and resolution
-//! - [`inspector`]: Interactive debugging and pattern inspection
-//! - [`plugin`]: Extensible plugin system for custom transformations
-//! - [`bidirectional`]: Reversible pipeline transformations
-//! - [`checkpoint`]: Incremental processing with checkpoint/resume
-//! - [`crossfile`]: Cross-file semantic relationship processing
-//! - [`learn`]: Pattern learning and inference from examples
+//! - [`library`]: Pattern library data types and resolution (file loading is `cli`-gated)
+//! - [`plugin`]: Built-in transforms (shell execution is `cli`-gated)
+//! - [`bidirectional`]: Reversible pipeline data types (file I/O is `cli`-gated)
+//! - [`checkpoint`]: Checkpoint config data type (runtime is `cli`-gated)
+//! - [`crossfile`]: Cross-file rule data types (runtime is `cli`-gated)
 //! - [`testing`]: First-class pipeline testing support
-//! - `syntax` (requires `tree-sitter` feature): Syntax-aware pattern matching
+//! - [`error`]: Error types
+//! - [`json_schema`]: JSON schema generation for configs
+//!
+//! **Requires `cli` feature:**
+//! - `files`: Multi-file processing with directory recursion
+//! - `inspector`: Interactive debugging and pattern inspection
+//! - `learn`: Pattern learning and inference from examples
+//!
+//! **Requires `tree-sitter` feature:**
+//! - `syntax`: Syntax-aware pattern matching
 
-// Core modules
+// === Always-available modules (WASM-safe core) ===
 pub mod error;
-pub mod files;
-pub mod inspector;
 pub mod json_schema;
 pub mod library;
 pub mod pipeline;
 pub mod plugin;
 pub mod processor;
-
-// Advanced feature modules
 pub mod bidirectional;
 pub mod checkpoint;
 pub mod crossfile;
-pub mod learn;
 pub mod testing;
+
+// === CLI-only modules (filesystem / terminal / parallelism) ===
+#[cfg(feature = "cli")]
+pub mod files;
+#[cfg(feature = "cli")]
+pub mod inspector;
+#[cfg(feature = "cli")]
+pub mod learn;
 
 #[cfg(feature = "tree-sitter")]
 pub mod syntax;
 
-// Re-export error types for convenience
+// === Always-available re-exports ===
 pub use error::{ConfigError, LibraryError, PatternError, RexpipeError, ValidationError};
 
-// Re-export shutdown signal types for graceful termination
-pub use files::{BinaryMode, ShutdownInterrupted, ShutdownSignal, is_binary_file};
-
-// Re-export bidirectional types for reversible pipelines
+// Bidirectional: data types + (possibly stubbed) manager are always available
 pub use bidirectional::{BidirectionalConfig, Direction, MappingStore};
 
-// Re-export checkpoint types for incremental processing
-pub use checkpoint::{Checkpoint, CheckpointConfig, GitDiff};
-
-// Re-export cross-file types for semantic relationships
-pub use crossfile::{CrossFileConfig, CrossFileManager, CrossFileRule};
-
-// Re-export learning types for pattern inference
-pub use learn::{LearnConfig, LearnedPattern, PatternLearner};
-
-// Re-export testing types for pipeline validation
+// Testing: always in core (uses web-time, no filesystem)
 pub use testing::{TestCase, TestConfig, TestRunner, TestSummary};
 
-// Re-export finalize types for aggregation
+// Finalize: pure data types and processor-internal state
 pub use pipeline::{CounterConfig, FinalizeConfig, FinalizeOutputFormat};
 pub use processor::{CompiledCounter, FinalizeState};
+
+// Checkpoint: only the Config data type is in core; runtime types are cli-gated
+pub use checkpoint::CheckpointConfig;
+
+// Cross-file: config and rule data types are in core; the manager is cli-gated
+pub use crossfile::{CrossFileConfig, CrossFileRule};
+
+// === CLI-only re-exports ===
+#[cfg(feature = "cli")]
+pub use files::{BinaryMode, ShutdownInterrupted, ShutdownSignal, is_binary_file};
+
+#[cfg(feature = "cli")]
+pub use checkpoint::{Checkpoint, GitDiff};
+
+#[cfg(feature = "cli")]
+pub use crossfile::CrossFileManager;
+
+#[cfg(feature = "cli")]
+pub use learn::{LearnConfig, LearnedPattern, PatternLearner};
