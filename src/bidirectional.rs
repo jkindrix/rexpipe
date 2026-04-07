@@ -29,7 +29,9 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+#[cfg(feature = "cli")]
 use std::fs::{self, File};
+#[cfg(feature = "cli")]
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
@@ -246,6 +248,7 @@ impl MappingStore {
     }
 
     /// Load mappings from a file.
+    #[cfg(feature = "cli")]
     pub fn load(path: impl AsRef<Path>) -> Result<Self> {
         let content = fs::read_to_string(path.as_ref()).map_err(|e| {
             BidirectionalError::MappingLoadError(format!("{}: {}", path.as_ref().display(), e))
@@ -255,7 +258,16 @@ impl MappingStore {
             .map_err(|e| BidirectionalError::MappingLoadError(format!("Invalid JSON: {}", e)))
     }
 
+    /// Load mappings from a file (WASM stub — file I/O is unavailable).
+    #[cfg(not(feature = "cli"))]
+    pub fn load(_path: impl AsRef<Path>) -> Result<Self> {
+        Err(BidirectionalError::MappingLoadError(
+            "Loading mappings from files is not supported in WASM builds".to_string(),
+        ))
+    }
+
     /// Save mappings to a file.
+    #[cfg(feature = "cli")]
     pub fn save(&self, path: impl AsRef<Path>) -> Result<()> {
         let json = serde_json::to_string_pretty(self)?;
 
@@ -266,6 +278,16 @@ impl MappingStore {
 
         let mut file = File::create(path.as_ref())?;
         file.write_all(json.as_bytes())?;
+        Ok(())
+    }
+
+    /// Save mappings to a file (WASM stub — silently succeeds as a no-op).
+    ///
+    /// The playground holds mappings only in memory; there is no persistent
+    /// storage for them. This is a harmless no-op so that code paths that
+    /// call `save()` unconditionally still work.
+    #[cfg(not(feature = "cli"))]
+    pub fn save(&self, _path: impl AsRef<Path>) -> Result<()> {
         Ok(())
     }
 
@@ -425,6 +447,7 @@ pub struct BidirectionalManager {
 impl BidirectionalManager {
     /// Create a new bidirectional manager.
     pub fn new(config: BidirectionalConfig) -> Result<Self> {
+        #[cfg(feature = "cli")]
         let mappings = if let Some(ref path) = config.mapping_file {
             if path.exists() {
                 MappingStore::load(path)?
@@ -434,6 +457,12 @@ impl BidirectionalManager {
         } else {
             MappingStore::new()
         };
+
+        // Under WASM builds, mappings are held only in memory — the configured
+        // mapping_file (if any) is silently ignored on construction. Recording
+        // still works within a single session; it just doesn't persist.
+        #[cfg(not(feature = "cli"))]
+        let mappings = MappingStore::new();
 
         Ok(Self {
             config,
@@ -518,6 +547,10 @@ impl BidirectionalManager {
     }
 
     /// Save mappings if modified.
+    ///
+    /// Under WASM builds (`!cli`), this is a no-op — the playground holds
+    /// mappings only in memory and has no persistent storage for them.
+    #[cfg(feature = "cli")]
     pub fn save_if_modified(&mut self) -> Result<()> {
         if !self.modified || !self.config.auto_save {
             return Ok(());
@@ -531,11 +564,27 @@ impl BidirectionalManager {
         Ok(())
     }
 
+    /// Save mappings if modified (WASM stub — no-op).
+    #[cfg(not(feature = "cli"))]
+    pub fn save_if_modified(&mut self) -> Result<()> {
+        Ok(())
+    }
+
     /// Force save mappings.
+    ///
+    /// Under WASM builds (`!cli`), this is a no-op — the playground holds
+    /// mappings only in memory and has no persistent storage for them.
+    #[cfg(feature = "cli")]
     pub fn save(&self) -> Result<()> {
         if let Some(ref path) = self.config.mapping_file {
             self.mappings.save(path)?;
         }
+        Ok(())
+    }
+
+    /// Force save mappings (WASM stub — no-op).
+    #[cfg(not(feature = "cli"))]
+    pub fn save(&self) -> Result<()> {
         Ok(())
     }
 
