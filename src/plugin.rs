@@ -884,6 +884,7 @@ impl PluginRegistry {
     /// Register a script file as a plugin.
     ///
     /// Returns the plugin name if successful, None otherwise.
+    #[cfg(feature = "cli")]
     fn register_script_plugin(&mut self, path: &std::path::Path) -> Option<String> {
         let file_name = path.file_stem()?.to_str()?.to_string();
         let extension = path
