@@ -304,16 +304,25 @@ rexpipe has several optional features that must be tested before release.
 
 ### Feature Matrix
 
+Starting in 2.1.0, rexpipe has a two-tier feature split: `core` (WASM-safe
+library only) and `cli` (everything in `core` plus the binary and its
+filesystem/terminal-only dependencies). `default = ["cli"]`, so existing
+`cargo build` and `cargo install` users see identical behavior.
+
 | Feature | Description | Test Command | Dependencies | Notes |
 |---------|-------------|--------------|--------------|-------|
-| `default` | Base functionality (regex engine only) | `cargo test` | regex | Core transforms |
+| `default` (`cli`) | Full CLI binary + library | `cargo test` | All below | Behaves like pre-2.1.0 default |
+| `core` | WASM-safe library entry point | `cargo test --lib --no-default-features --features core` | regex, fancy-regex, serde, toml, web-time | Consumed by rexpipe-playground via WASM |
 | `async` | Async I/O via Tokio | `cargo test --features async` | tokio | For streaming |
-| `pcre` | PCRE regex engine | `cargo test --features pcre` | fancy-regex | Advanced patterns |
 | `fpe` | Format-preserving encryption | `cargo test --features fpe` | fpe, aes | Data masking |
 | `tree-sitter` | Syntax-aware scoping | `cargo test --features tree-sitter` | tree-sitter-* | Multi-language |
 | `remote` | Remote file fetching | `cargo test --features remote` | ureq | HTTP/HTTPS |
 | `watch` | File watching | `cargo test --features watch` | notify | Live reload |
 | `all` | All features combined | `cargo test --all-features` | All above | Comprehensive |
+
+> **Note on PCRE:** `fancy-regex` is now an unconditional dependency and
+> rexpipe auto-detects which engine to use per pattern. There is no
+> separate `pcre` feature — it was removed in 2.1.0.
 
 ### Tree-sitter Language Support
 

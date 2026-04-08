@@ -336,10 +336,17 @@ rexpipe has optional features that should be tested:
 
 | Feature | Description | Test Command |
 |---------|-------------|--------------|
-| `default` | No optional features | `cargo test` |
-| `pcre` | PCRE regex via fancy-regex | `cargo test --features pcre` |
+| `default` (`cli`) | Full CLI build | `cargo test` |
+| `core` | WASM-safe library only | `cargo test --lib --no-default-features --features core` |
+| `core` + wasm32 | Library compiles for WASM | `cargo check --no-default-features --features core --target wasm32-unknown-unknown` |
 | `async` | Async file processing | `cargo test --features async` |
+| `fpe` | Format-preserving encryption | `cargo test --features fpe` |
+| `tree-sitter` | Syntax-aware processing | `cargo test --features tree-sitter` |
 | `all` | All features | `cargo test --all-features` |
+
+> **Note on PCRE:** There is no `pcre` feature in 2.1.0+. The `fancy-regex`
+> engine is always compiled in and rexpipe auto-detects whether to use it
+> based on the pattern. See the README's "Regex Engine Options" section.
 
 ---
 
