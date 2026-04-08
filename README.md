@@ -37,7 +37,9 @@ rexpipe -c pipelines/normalize-logs.toml < log.txt
 
 ## Try it in your browser
 
-**[rexpipe-playground](https://github.com/jkindrix/rexpipe-playground)** is a
+**Live demo: https://jkindrix.github.io/rexpipe-playground/**
+
+The [rexpipe-playground](https://github.com/jkindrix/rexpipe-playground) is a
 companion project that runs the rexpipe engine as WebAssembly in the browser.
 Paste input text, build a pipeline step-by-step, and watch the output update
 live. Click any step to see its intermediate input and output — the "killer
