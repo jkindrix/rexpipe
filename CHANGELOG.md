@@ -5,6 +5,143 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] - 2.1.0
+
+### Added
+
+**Multi-line processing modes.** Steps can now declare a `mode` of
+`line` (default), `slurp`, or `paragraph`. This fills a long-standing gap in
+rexpipe's streaming architecture: cross-line substitutions like joining
+soft-wrapped lines were previously impossible because the line-by-line
+executor never saw two lines in the same regex match.
+
+- `mode = "slurp"` buffers the entire input and applies the pattern to it
+  as a single string, enabling cross-line matches like `(\w)\n(\w)` to
+  rejoin wrapped text
+- `mode = "paragraph"` splits on blank lines and processes each paragraph
+  independently, useful for structured text
+- Mixed-mode pipelines (line steps feeding slurp steps feeding line steps)
+  work correctly — the segment executor buffers at mode boundaries
+- `settings.max_slurp_size` caps non-line-mode memory usage (default 256 MB)
+- Auto-injects `dot_all` + `multiline` flags for slurp/paragraph steps so
+  `.` matches `\n` and `^`/`$` respect line boundaries within the buffer
+- Warns when `dot_all`/`multiline` flags are used on line-mode steps (inert
+  because newlines are stripped before per-line matching)
+- Block steps + non-line mode is rejected at pipeline construction with
+  a clear error (block steps have their own multi-line state machine)
+
+**PCRE always available with auto-detection.** The `fancy-regex` engine is
+now compiled in unconditionally and rexpipe auto-selects the right engine
+for each pattern: standard regex (linear-time, ReDoS-safe) is tried first,
+and PCRE (backtracking, supports lookahead/lookbehind/backreferences) is
+used as a fallback only when the standard engine can't compile the pattern.
+
+- Patterns like `(?<=foo)bar` now "just work" without any flag or feature
+  flag — previously they required building with `--features pcre`
+- Auto-fallback logs at `info!` level so `-v` shows which engine was used
+- `--pcre` / `-P` / `flags = ["pcre"]` still work as an explicit override
+  to force the PCRE engine for all patterns in the pipeline
+- Removes the `PcreNotEnabled` error variant and all `#[cfg(feature = "pcre")]`
+  gates throughout the codebase (17 blocks deleted)
+- Standard regex remains the default for simple patterns, preserving the
+  linear-time guarantee and ReDoS safety on the hot path
+
+**`process_with_intermediates` public API.** A new method on `StreamProcessor`
+that returns per-step intermediate results suitable for interactive use:
+
+```rust
+pub fn process_with_intermediates(&mut self, input: &str)
+    -> Result<PipelineIntermediateResult>
+```
+
+Each `StepIntermediateResult` includes the step's output, match count,
+match positions (with matched text), full capture groups, line counts,
+and a structured `StepError` on failure. Used by the
+[rexpipe-playground](https://github.com/jkindrix/rexpipe-playground) WASM
+bridge to implement click-a-step intermediate state visibility. All result
+types derive `Serialize`/`Deserialize` for serde round-tripping.
+
+**`core` and `cli` feature split.** rexpipe now has a two-tier Cargo
+feature split so it can be consumed as a library from WASM contexts:
+
+- `core` — the WASM-safe library entry point (regex, fancy-regex, serde,
+  toml, web-time, and a small set of unconditional dependencies)
+- `cli` — everything in `core` plus the CLI binary and all its
+  filesystem/terminal/parallelism dependencies (clap, ctrlc, indicatif,
+  rayon, ignore, dirs, glob, globset, chrono, rand, diffy, env_logger,
+  termcolor, clap_complete, clap_mangen)
+- `default = ["cli"]`, so existing users see **no behavior change**
+
+The library now compiles cleanly for `wasm32-unknown-unknown` with
+`--no-default-features --features core`. The `rexpipe-playground` bridge
+crate consumes rexpipe via this path.
+
+**`web-time` crate** replaces `std::time::{Instant, SystemTime}` in
+processor.rs, testing.rs, and plugin.rs. On native targets it transparently
+falls through to `std::time`; on wasm32 it uses `performance.now()` and
+`Date.now()`. Required because `std::time` panics on wasm32.
+
+### Changed
+
+- `default = ["cli"]` in Cargo.toml (was `default = []`). This preserves
+  existing behavior for `cargo build` / `cargo install` / `crates.io`
+  consumers, but makes `cargo check --no-default-features` fail loudly
+  rather than silently building a surprise configuration.
+- 15 previously-hard dependencies are now marked `optional = true` and
+  pulled in via the `cli` feature: chrono, clap, clap_complete, clap_mangen,
+  ctrlc, diffy, dirs, env_logger, glob, globset, ignore, indicatif, rand,
+  rayon, termcolor.
+- `files`, `inspector`, and `learn` modules are now whole-module-gated
+  behind `cli`. Their re-exports in `lib.rs` follow the same gate.
+- Modules with mixed WASM-safe and WASM-unsafe code (`pipeline`, `processor`,
+  `plugin`, `library`, `bidirectional`, `checkpoint`, `crossfile`) use
+  internal gating: data types stay in `core`, filesystem/subprocess
+  methods move to `cli`.
+- `BidirectionalManager`'s file I/O methods (`save`, `save_if_modified`,
+  `load`) become no-op stubs under `!cli`, so the 11 reference sites in
+  `processor.rs` continue to compile unchanged. Recording still works
+  in-memory; only persistence is stubbed.
+- `dot_all` / `multiline` flags on line-mode steps now emit a warning —
+  they had no effect under the line-by-line architecture and users were
+  occasionally setting them expecting cross-line behavior.
+
+### Removed
+
+- The `pcre` Cargo feature is **removed**. `fancy-regex` is now an
+  unconditional dependency and PCRE features are auto-detected. Users who
+  were building with `--features pcre` should simply drop the flag — the
+  resulting binary is identical.
+- The `PatternError::PcreNotEnabled` error variant is removed along with
+  the feature gate.
+- The unused `settings.block_mode` bool (defined but never read) is
+  removed. Use the per-step `mode` field instead.
+- The CI `test-features` matrix no longer lists `pcre` (it would have
+  failed after the feature removal).
+
+### Fixed
+
+- Documentation build: rustdoc was treating TOML table syntax like
+  `[[filter]]`, `[[substitute]]`, `[[step]]` as intra-doc link candidates
+  and failing under `-D warnings`. Wrapped in backticks.
+- Security advisories: updated `bytes` to 1.11.1 (RUSTSEC-2026-0007
+  integer overflow) and `rustls-webpki` to 0.103.10 (RUSTSEC-2026-0049 CRL
+  matching flaw), both transitive via `async`/`remote` features.
+
+### Migration from 2.0.0
+
+For almost all users, the upgrade requires no code or config changes.
+Default `cargo build` and `cargo install` behave identically.
+
+If you were **building with `--features pcre`**: drop the flag. PCRE is
+always available now.
+
+If you were **depending on rexpipe as a library with `default-features = false`**:
+you now need `features = ["core"]` (or `features = ["cli"]` if you want
+the old behavior). The empty default-features set no longer builds.
+
+If you were **reading the dead `block_mode` setting**: remove it. Use the
+per-step `mode` field for multi-line processing.
+
 ## [2.0.0] - 2025-12-25
 
 ### Changed

@@ -35,6 +35,18 @@ rexpipe -c pipelines/normalize-logs.toml < log.txt
 # - Testable (dry-run, explain modes)
 ```
 
+## Try it in your browser
+
+**[rexpipe-playground](https://github.com/jkindrix/rexpipe-playground)** is a
+companion project that runs the rexpipe engine as WebAssembly in the browser.
+Paste input text, build a pipeline step-by-step, and watch the output update
+live. Click any step to see its intermediate input and output — the "killer
+feature" that regex101.com can't do for multi-step pipelines.
+
+All processing runs client-side in a Web Worker. No server, no uploads,
+no latency. Export the pipeline as a TOML config and drop it straight into
+the CLI.
+
 ## When to Use rexpipe
 
 ✅ **Use rexpipe for:**
@@ -660,6 +672,51 @@ description = "Apply ROT13 cipher to words"
 - **transform**: Apply text transformations to matched content
 - **block**: Cross-line state machine for multi-line pattern processing
 
+## Processing Modes
+
+Every non-block step can operate in one of three processing modes, controlled
+by the optional `mode` field. This is the mechanism for cross-line
+substitutions that would otherwise be impossible in a line-oriented pipeline.
+
+| Mode | Description | Memory | Use case |
+|------|-------------|--------|----------|
+| `line` (default) | Process one line at a time | O(1) | Filtering, simple substitutions — the streaming hot path |
+| `slurp` | Buffer all input, apply pattern to the whole content as one string | O(n) | Cross-line substitutions, joining soft-wrapped lines, paragraph reflow |
+| `paragraph` | Split on blank lines, process each paragraph independently | O(paragraph) | Structured text with paragraph boundaries |
+
+The pipeline can mix modes freely. Consecutive line-mode steps stream
+through the input together; slurp or paragraph steps act as barriers that
+buffer the accumulated output before applying their pattern.
+
+```toml
+# Strip leading indent line-by-line, then rejoin soft-wrapped lines
+# across line boundaries. This is the motivating use case for `slurp`:
+# a pure line-by-line processor cannot match the `\n` between the two
+# halves of a wrapped sentence.
+
+[[substitute]]
+pattern = "^  "
+replacement = ""
+
+[[substitute]]
+mode = "slurp"
+pattern = '([^\n:]) ?\n *+([^{A-Z\n])'
+replacement = "$1 $2"
+```
+
+**Automatic flag injection.** For slurp and paragraph modes, rexpipe auto-enables
+`dot_all` (`.` matches `\n`) and `multiline` (`^`/`$` match line boundaries within
+the buffer) because those flags are only meaningful when the pattern sees
+multiple lines at once. You can override by specifying `flags = [...]` explicitly.
+
+**Memory safety.** Slurp and paragraph modes buffer the entire input (or a
+paragraph chunk). The `settings.max_slurp_size` option caps this at 256 MB
+by default to prevent OOM. Line mode has no such limit because it streams.
+
+**Block steps are always line-mode.** The `block` step type has its own
+multi-line state machine and cannot be combined with `slurp` or `paragraph`.
+This is validated at pipeline construction time.
+
 ### Transform Actions
 
 The transform step type supports the following actions:
@@ -721,18 +778,21 @@ timeout_ms = 5000
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `pcre_mode` | bool | `false` | Use PCRE-compatible regex (lookahead/lookbehind) |
+| `mode` | string | `"line"` | Default processing mode for all steps: `"line"`, `"slurp"`, or `"paragraph"`. Per-step `mode` overrides this. See [Processing Modes](#processing-modes). |
+| `max_slurp_size` | int | `268435456` (256 MB) | Maximum bytes buffered in slurp/paragraph mode. `0` disables the limit. |
+| `pcre_mode` | bool | `false` | Force the PCRE engine for all patterns. Normally unnecessary — rexpipe auto-detects when PCRE features are needed. |
 | `fixed_strings` | bool | `false` | Treat patterns as literal strings |
 | `context_before` | int | `0` | Lines of context before matches |
 | `context_after` | int | `0` | Lines of context after matches |
-| `timeout_ms` | int | `0` | Shell command timeout in milliseconds (0 = no timeout) |
-| `allow_shell` | bool | `true` | Allow shell transform execution |
+| `timeout_ms` | int | `0` | Per-line regex timeout in milliseconds (0 = no timeout) |
+| `allow_shell` | bool | `false` | Allow shell transform execution (disabled by default for security) |
 | `strict_mode` | bool | `false` | Reject potentially dangerous ReDoS patterns |
 
 **Example:**
 ```toml
 [settings]
-pcre_mode = true
+mode = "slurp"       # All steps buffer the whole input by default
+max_slurp_size = 10485760  # Cap at 10 MB instead of the 256 MB default
 timeout_ms = 5000
 strict_mode = true
 ```
@@ -1694,16 +1754,26 @@ Built with:
 
 ### Regex Engine Options
 
-rexpipe supports multiple regex modes:
+rexpipe automatically chooses the best regex engine for each pattern:
 
-1. **Standard mode** (default): Uses the fast Rust `regex` crate
-2. **PCRE mode** (`-P/--pcre`): Uses `fancy-regex` for PCRE-compatible patterns with lookahead/lookbehind support
-3. **Fixed string mode** (`-F/--fixed`): Treats patterns as literal strings (fastest)
+1. **Standard mode** (default): Uses the fast Rust `regex` crate — linear-time
+   matching, ReDoS-safe, no backtracking. Chosen automatically whenever the
+   pattern is compatible.
+2. **PCRE mode** (auto-detected): If a pattern uses features the standard
+   engine does not support (lookahead `(?=...)`, lookbehind `(?<=...)`,
+   backreferences), rexpipe transparently falls back to `fancy-regex`. No
+   flag required — patterns just work.
+3. **Fixed string mode** (`-F/--fixed`): Treats patterns as literal strings
+   (fastest, no regex interpretation).
 
-To enable PCRE mode features, build with:
-```bash
-cargo build --release --features pcre
-```
+You can force the PCRE engine with `-P/--pcre` or per-step `flags = ["pcre"]`
+when you want guaranteed backtracking behavior (e.g., to match the ReDoS
+safety checks in `--strict` mode). This is rarely needed for normal use —
+auto-detection handles the common cases.
+
+PCRE support is built in unconditionally; there is no separate feature flag
+to enable. (Previous versions gated PCRE behind `--features pcre` at build
+time — this was removed in 2.1.0.)
 
 ### ReDoS Protection
 
